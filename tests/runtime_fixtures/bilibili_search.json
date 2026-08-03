@@ -1,0 +1,1 @@
+{"pages":[{"records":[{"native_id":"synthetic-a","author":{"name":"Synthetic Author"},"media":{"kind":"video"}},{"native_id":"synthetic-b","metric_zero":0,"nullable":null,"author":{"name":"Synthetic Other"},"media":{"kind":"image"}}]},{"records":[{"native_id":"synthetic-a","author":{"name":"Synthetic Author"},"media":{"kind":"video"}}]}]}
