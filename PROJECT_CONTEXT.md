@@ -68,11 +68,13 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-Task11 verified 13 normalized compatibility cases and 90 focused packaging, CLI, output, and validation tests. Record the final full-suite count only after all parallel installer hardening is committed and rerun.
+The current source baseline passes 528 standard tests with one environment-dependent skip and 529 tests with Playwright installed. Packaging, security, active-residual, and OpenClaw-focused checks pass 44 tests. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, and the Codex skill validator accepts the package.
 
 ## Live acceptance
 
-Live acceptance is a separate authorized stage. It has not run against the new shared runtime during Task12 documentation work.
+Live acceptance is a separate authorized stage. A pre-fix count-`1` sequential run completed Bilibili, Douyin, and Weibo. Xiaohongshu reached its creator card and produced a fresh official detail response, but the response observer rejected that exact API host and reported `detail-capture-timeout`. The observer now accepts that one exact detail-response host without expanding browser navigation permissions; expected note ID and `current_time` freshness validation remain unchanged.
+
+The fix passes focused and full offline suites and is installed in the isolated acceptance packages. Staged live preflight passes all 14 Codex checks and all 19 OpenClaw checks. A post-fix four-platform live run is still required before active-skill cutover or recovery of replaced directories.
 
 Before cutover, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. Then run one sequential count-`1` creator collection across all four platforms. The runtime controller checks selected pages and visible login state before creating output.
 
@@ -106,9 +108,9 @@ Keep runtime outputs and historical evidence during rollback.
 
 ## Current limitations
 
-- Live acceptance and destructive cutover are pending
+- Post-fix four-platform live acceptance and active cutover are pending
 - Platform response schemas, login markers, and challenge behavior can change without notice
 - Creator collection needs a non-empty UID for every selected platform; search does not
 - Navigation is disabled unless the current run has explicit authorization
 - A failed non-risk prerequisite permits one retry only after correction and fresh preflight
-- Task12 performs no live installation, browser navigation, collection, or Trash move
+- Do not recover replaced directories until the post-fix live run, full installation, permission checks, and active residual scans all pass
