@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely orchestrate one external Media@Missher collection process."""
+"""Safely orchestrate one shared Media@Missher collection process."""
 
 from __future__ import annotations
 
@@ -17,16 +17,15 @@ from media_missher_adapter import (
     parse_platforms,
     read_profile,
     resolve_data_root,
-    resolve_engine_root,
+    resolve_runtime_layout,
     run_collection_request,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect through an external Media@Missher engine with private JSON staging."
+        description="Collect through the shared Media@Missher runtime with private JSON staging."
     )
-    parser.add_argument("--engine-root", type=Path, help="External Media@Missher skill root")
     parser.add_argument("--profile", type=Path, help="Private mode-0600 JSON profile")
     parser.add_argument("--data-root", "--output", dest="data_root", type=Path)
     parser.add_argument("--platform", help="Comma-separated platform list")
@@ -78,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         profile = read_profile(_profile_path(args.profile))
-        engine_root = resolve_engine_root(args.engine_root, environ=os.environ, profile=profile)
+        layout = resolve_runtime_layout(environ=os.environ)
         data_root = resolve_data_root(args.data_root, environ=os.environ, profile=profile)
         platforms = parse_platforms(args.platform)
         platform_counts = {
@@ -122,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         summary = run_collection_request(
             request,
-            engine_root=engine_root,
+            layout=layout,
             data_root=data_root,
             cdp_url=str(cdp_url),
             execution_timeout=args.execution_timeout,

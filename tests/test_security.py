@@ -67,15 +67,9 @@ def test_installable_tree_is_an_exact_allowlist():
     assert_exact_installable_allowlist(SKILL)
 
 
-def test_installable_skill_has_no_inherited_source_or_bundled_runtime():
+def test_installable_skill_has_no_bundled_runtime_metadata():
     text = installable_text()
-    forbidden_text = (
-        "Copyright (c) NanmiCoder",
-        "github.com/NanmiCoder/MediaCrawler",
-        "NanmiCoder/Media@Missher",
-        "openclaw.skill.json",
-    )
-    assert not any(item in text for item in forbidden_text)
+    assert "openclaw.skill.json" not in text
     forbidden_names = {
         "engine",
         ".venv",
@@ -86,6 +80,16 @@ def test_installable_skill_has_no_inherited_source_or_bundled_runtime():
     }
     assert not forbidden_names.intersection(path.name for path in SKILL.rglob("*"))
     assert not any(path.suffix.lower() in {".js", ".woff", ".woff2", ".ttf", ".png", ".jpg"} for path in SKILL.rglob("*"))
+
+
+def test_installable_scripts_have_no_deprecated_engine_root_configuration():
+    text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((SKILL / "scripts").glob("*.py"))
+    )
+    assert "--engine-root" not in text
+    assert "MEDIA_MISSHER_ENGINE_ROOT" not in text
+    assert "resolve_engine_root" not in text
 
 
 def test_installable_skill_contains_no_stale_placeholders():

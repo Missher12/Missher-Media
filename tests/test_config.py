@@ -1,17 +1,17 @@
 import json
-import os
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
 from media_missher_adapter import (
     ConfigurationError,
-    engine_python,
+    RuntimeLayout,
     parse_non_negative_int,
     parse_platforms,
     read_profile,
     resolve_data_root,
-    resolve_engine_root,
+    resolve_runtime_layout,
 )
 
 
@@ -24,30 +24,61 @@ def write_profile(path: Path, payload: dict, mode: int = 0o600):
     return path
 
 
-def test_resolve_engine_root_prefers_cli_over_environment_and_profile(tmp_path, monkeypatch):
-    cli_root = tmp_path / "cli"
-    env_root = tmp_path / "env"
-    profile_root = tmp_path / "profile"
-    monkeypatch.setenv("MEDIA_MISSHER_ENGINE_ROOT", str(env_root))
-    assert resolve_engine_root(
-        cli_root,
-        environ=os.environ,
-        profile={"engine_root": str(profile_root)},
-    ) == cli_root.resolve()
+def test_runtime_layout_defaults_to_local_share_home(tmp_path, monkeypatch):
+    private_home = tmp_path / "private-home"
+    monkeypatch.setenv("HOME", str(private_home))
+    runtime_home = private_home / ".local" / "share" / "media-missher"
+
+    assert resolve_runtime_layout(environ={}) == RuntimeLayout(
+        home=runtime_home.resolve(),
+        current=(runtime_home / "current").resolve(),
+        python=(runtime_home / "venv" / "bin" / "python").resolve(),
+        state=(runtime_home / "state").resolve(),
+    )
 
 
-def test_resolvers_fall_back_to_environment_then_profile(tmp_path):
-    env_root = tmp_path / "env"
-    profile_root = tmp_path / "profile"
-    environment = {"MEDIA_MISSHER_ENGINE_ROOT": str(env_root)}
-    assert resolve_engine_root(None, environ=environment, profile={"engine_root": str(profile_root)}) == env_root.resolve()
-    assert resolve_engine_root(None, environ={}, profile={"engine_root": str(profile_root)}) == profile_root.resolve()
+def test_runtime_layout_uses_media_missher_home(tmp_path):
+    runtime_home = tmp_path / "Media @ Missher Home"
+
+    layout = resolve_runtime_layout(
+        environ={"MEDIA_MISSHER_HOME": str(runtime_home)}
+    )
+
+    assert layout.home == runtime_home.resolve()
+    assert layout.current == (runtime_home / "current").resolve()
+    assert layout.python == (runtime_home / "venv" / "bin" / "python").resolve()
+    assert layout.state == (runtime_home / "state").resolve()
+
+
+def test_runtime_layout_preserves_lexical_home_for_symlink_checks(tmp_path):
+    actual_home = tmp_path / "actual-runtime"
+    actual_home.mkdir()
+    linked_home = tmp_path / "linked-runtime"
+    linked_home.symlink_to(actual_home, target_is_directory=True)
+
+    layout = resolve_runtime_layout(
+        environ={"MEDIA_MISSHER_HOME": str(linked_home)}
+    )
+
+    assert layout.home == linked_home.absolute()
+    assert layout.home != actual_home.resolve()
+
+
+def test_runtime_layout_is_frozen(tmp_path):
+    layout = resolve_runtime_layout(
+        environ={"MEDIA_MISSHER_HOME": str(tmp_path / "runtime-home")}
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        layout.home = tmp_path / "replacement"
 
 
 def test_data_root_has_private_home_default(tmp_path, monkeypatch):
     home = tmp_path / "private-home"
     monkeypatch.setenv("HOME", str(home))
-    assert resolve_data_root(None, environ={}, profile={}) == (home / ".media-missher" / "runs").resolve()
+    assert resolve_data_root(None, environ={}, profile={}) == (
+        home / ".local" / "share" / "media-missher" / "state" / "runs"
+    ).resolve()
 
 
 @pytest.mark.parametrize("value, expected", [("0", 0), (7, 7), ("12", 12)])
@@ -97,10 +128,14 @@ def test_profile_must_be_json_object(tmp_path):
         read_profile(profile)
 
 
-def test_engine_python_uses_external_engine_venv(fake_engine_root):
-    assert engine_python(fake_engine_root) == fake_engine_root / "engine" / ".venv" / "bin" / "python"
+def test_deprecated_engine_configuration_does_not_change_runtime_home(tmp_path, monkeypatch):
+    private_home = tmp_path / "private-home"
+    monkeypatch.setenv("HOME", str(private_home))
 
+    layout = resolve_runtime_layout(
+        environ={"MEDIA_MISSHER_ENGINE_ROOT": str(tmp_path / "obsolete")}
+    )
 
-def test_missing_engine_configuration_fails_closed():
-    with pytest.raises(ConfigurationError, match="engine root"):
-        resolve_engine_root(None, environ={}, profile={})
+    assert layout.home == (
+        private_home / ".local" / "share" / "media-missher"
+    ).resolve()

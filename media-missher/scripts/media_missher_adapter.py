@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standard-library adapter primitives for the external Media@Missher engine."""
+"""Standard-library adapter primitives for the shared Media@Missher runtime."""
 
 from __future__ import annotations
 
@@ -25,12 +25,27 @@ from typing import Callable, Mapping
 
 
 PLATFORMS = ("bilibili", "xhs", "douyin", "weibo")
+RUNTIME_ENTRYPOINTS = (
+    "scrape_all.py",
+    "scrape_bilibili.py",
+    "scrape_xhs.py",
+    "scrape_douyin.py",
+    "scrape_weibo.py",
+)
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ConfigurationError(ValueError):
     """Raised when a request cannot be validated before engine execution."""
+
+
+@dataclass(frozen=True)
+class RuntimeLayout:
+    home: Path
+    current: Path
+    python: Path
+    state: Path
 
 
 @dataclass(frozen=True)
@@ -208,24 +223,18 @@ def _configured_path(
     return Path(raw).expanduser().resolve()
 
 
-def resolve_engine_root(
-    cli_value: Path | None,
-    *,
-    environ: Mapping[str, str],
-    profile: Mapping | None = None,
-) -> Path:
-    resolved = _configured_path(
-        cli_value,
-        environment_name="MEDIA_MISSHER_ENGINE_ROOT",
-        profile_name="engine_root",
-        environ=environ,
-        profile=profile,
+def resolve_runtime_layout(*, environ: Mapping[str, str]) -> RuntimeLayout:
+    configured_home = environ.get("MEDIA_MISSHER_HOME")
+    if configured_home is not None and configured_home.strip():
+        home = Path(configured_home).expanduser().absolute()
+    else:
+        home = (Path.home() / ".local" / "share" / "media-missher").absolute()
+    return RuntimeLayout(
+        home=home,
+        current=(home / "current").absolute(),
+        python=(home / "venv" / "bin" / "python").absolute(),
+        state=(home / "state").absolute(),
     )
-    if resolved is None:
-        raise ConfigurationError(
-            "engine root is required via --engine-root, MEDIA_MISSHER_ENGINE_ROOT, or profile"
-        )
-    return resolved
 
 
 def resolve_data_root(
@@ -243,14 +252,7 @@ def resolve_data_root(
     )
     if resolved is not None:
         return resolved
-    return (Path.home() / ".media-missher" / "runs").resolve()
-
-
-def engine_python(engine_root: Path) -> Path:
-    candidate = Path(engine_root).expanduser().absolute() / "engine" / ".venv" / "bin" / "python"
-    if not candidate.is_file() or not os.access(candidate, os.X_OK):
-        raise ConfigurationError(f"engine interpreter is missing or not executable: {candidate}")
-    return candidate
+    return (resolve_runtime_layout(environ=environ).state / "runs").resolve()
 
 
 def _number_text(value: float | int) -> str:
@@ -261,17 +263,19 @@ def build_engine_command(
     request: CollectionRequest,
     staging_dir: Path,
     *,
-    engine_root: Path,
+    layout: RuntimeLayout,
 ) -> EngineCommand:
-    root = Path(engine_root).expanduser().resolve()
-    interpreter = engine_python(root)
     staging = Path(staging_dir).expanduser().resolve()
     if request.search:
-        script = root / "scripts" / f"scrape_{request.platforms[0]}.py"
+        script = layout.current / "scripts" / f"scrape_{request.platforms[0]}.py"
     else:
-        script = root / "scripts" / "scrape_all.py"
+        script = layout.current / "scripts" / "scrape_all.py"
+    script = script.resolve()
+    interpreter = layout.python.resolve()
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        raise ConfigurationError(f"runtime python is missing or not executable: {interpreter}")
     if not script.is_file():
-        raise ConfigurationError(f"engine entrypoint is missing: {script}")
+        raise ConfigurationError(f"runtime entrypoint is missing: {script}")
 
     argv = [str(interpreter), str(script)]
     if request.search:
@@ -301,6 +305,7 @@ def build_engine_command(
         argv.append("--no-feishu")
     argv.extend(("--format", "json", "--output", str(staging)))
     environment = {
+        "MEDIA_MISSHER_HOME": str(layout.home),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
     }
@@ -409,15 +414,121 @@ def execute_engine(
 
 def discover_current_json(run_dir: Path, *, started_ns: int) -> tuple[Path, ...]:
     root = Path(run_dir).expanduser().resolve()
-    discovered = []
-    for path in root.glob("*.json"):
-        if path.is_symlink() or not path.is_file():
+    candidates: list[tuple[Path, Path]] = []
+    for inner in root.glob("run-*"):
+        if inner.is_symlink() or not inner.is_dir():
             continue
+        resolved_inner = inner.resolve()
+        if resolved_inner.parent != root or inner.stat().st_mtime_ns < started_ns:
+            continue
+        manifest = inner / "manifest.json"
+        if manifest.is_symlink() or not manifest.is_file():
+            continue
+        resolved_manifest = manifest.resolve()
+        if (
+            resolved_manifest.parent != resolved_inner
+            or manifest.stat().st_mtime_ns < started_ns
+        ):
+            continue
+        candidates.append((resolved_inner, resolved_manifest))
+    if len(candidates) != 1:
+        raise ConfigurationError(
+            f"expected exactly one fresh runtime run, found {len(candidates)}"
+        )
+
+    inner, manifest_path = candidates[0]
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ConfigurationError(
+                    f"invalid runtime manifest: duplicate key: {key}"
+                )
+            value[key] = item
+        return value
+
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(f"invalid runtime manifest: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ConfigurationError("invalid runtime manifest: expected a JSON object")
+    paths = manifest.get("paths")
+    if not isinstance(paths, dict):
+        raise ConfigurationError("invalid runtime manifest: paths must be a JSON object")
+    platforms = manifest.get("platforms")
+    if (
+        not isinstance(platforms, dict)
+        or any(platform not in PLATFORMS for platform in platforms)
+    ):
+        raise ConfigurationError("invalid runtime manifest: unexpected platform")
+    allowed_artifacts = set(platforms)
+    if "xhs" in platforms:
+        allowed_artifacts.update(("xhs_report", "xhs_checkpoint"))
+    unexpected_keys = set(paths) - allowed_artifacts
+    if unexpected_keys:
+        raise ConfigurationError(
+            f"unexpected manifest path key: {', '.join(sorted(unexpected_keys))}"
+        )
+    for key, raw_name in paths.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ConfigurationError(f"invalid runtime manifest path for {key}")
+        name = Path(raw_name)
+        if name.is_absolute() or name.name != raw_name:
+            raise ConfigurationError(f"unsafe runtime manifest path for {key}")
+        if raw_name != f"{key}.json":
+            raise ConfigurationError(
+                f"unexpected runtime artifact name for {key}: {raw_name}"
+            )
+    if len(set(paths.values())) != len(paths):
+        raise ConfigurationError("invalid runtime manifest: duplicate artifact path")
+    for platform, status in platforms.items():
+        if status == "complete" and platform not in paths:
+            raise ConfigurationError(
+                f"runtime manifest is missing a completed platform path: {platform}"
+            )
+
+    discovered = [manifest_path]
+    for key, raw_name in paths.items():
+        name = Path(raw_name)
+        path = inner / name
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"runtime artifact is missing or unsafe: {key}")
         resolved = path.resolve()
-        if resolved.parent != root or path.stat().st_mtime_ns < started_ns:
+        if resolved.parent != inner or path.stat().st_mtime_ns < started_ns:
+            raise ConfigurationError(f"runtime artifact is stale or unsafe: {key}")
+        if key == "xhs_checkpoint":
+            try:
+                checkpoint = json.loads(
+                    path.read_text(encoding="utf-8"),
+                    object_pairs_hook=unique_object,
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ConfigurationError(
+                    f"invalid XHS checkpoint: {type(exc).__name__}: {exc}"
+                ) from exc
+            if not isinstance(checkpoint, dict) or set(checkpoint) != {"items"}:
+                raise ConfigurationError("invalid XHS checkpoint schema")
+            checkpoint_items = checkpoint.get("items")
+            if not isinstance(checkpoint_items, list) or any(
+                not isinstance(item, dict)
+                or set(item) != {"note_id", "observed_at"}
+                or not isinstance(item.get("note_id"), str)
+                or not item["note_id"].strip()
+                or not (
+                    item.get("observed_at") is None
+                    or isinstance(item.get("observed_at"), str)
+                )
+                for item in checkpoint_items
+            ):
+                raise ConfigurationError("invalid XHS checkpoint items")
             continue
         discovered.append(resolved)
-    return tuple(sorted(discovered))
+    return tuple(discovered)
 
 
 def _normalize_value(value):
@@ -790,13 +901,71 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
             continue
         if isinstance(payload, dict):
             status = str(payload.get("status", "")).lower().replace("_", "-")
+            if path.name == "manifest.json":
+                diagnostics.append({"path": str(path), "status": status or "unknown"})
+                required_keys = {"counts", "paths", "platforms", "status"}
+                if set(payload) != required_keys:
+                    errors.append(f"runtime manifest has an invalid schema: {path}")
+                counts_payload = payload.get("counts")
+                paths_payload = payload.get("paths")
+                platforms_payload = payload.get("platforms")
+                selected = set(request.platforms)
+                if not isinstance(counts_payload, dict) or set(counts_payload) != selected:
+                    errors.append(f"runtime manifest has invalid counts: {path}")
+                elif any(
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                    for value in counts_payload.values()
+                ):
+                    errors.append(f"runtime manifest has invalid counts: {path}")
+                if not isinstance(paths_payload, dict) or any(
+                    not isinstance(key, str)
+                    or not isinstance(value, str)
+                    or not value
+                    or Path(value).is_absolute()
+                    or Path(value).name != value
+                    for key, value in (
+                        paths_payload.items() if isinstance(paths_payload, dict) else ()
+                    )
+                ):
+                    errors.append(f"runtime manifest has invalid paths: {path}")
+                allowed_platform_statuses = {
+                    "complete",
+                    "shortfall",
+                    "incomplete",
+                    "failed",
+                    "risk-stopped",
+                    "not-run",
+                }
+                if (
+                    not isinstance(platforms_payload, dict)
+                    or set(platforms_payload) != selected
+                    or any(
+                        value not in allowed_platform_statuses
+                        for value in platforms_payload.values()
+                    )
+                ):
+                    errors.append(f"runtime manifest has invalid platform statuses: {path}")
+                elif any(value == "risk-stopped" for value in platforms_payload.values()):
+                    risk_stopped = True
+                elif any(
+                    value in {"shortfall", "incomplete", "failed", "not-run"}
+                    for value in platforms_payload.values()
+                ):
+                    errors.append(f"runtime manifest reports incomplete collection: {path}")
+                if status == "risk-stopped":
+                    risk_stopped = True
+                elif status not in {"complete", "failed"}:
+                    errors.append(f"runtime manifest has invalid status: {path}: {status}")
+                elif status == "failed":
+                    errors.append(f"runtime manifest reports failure: {path}")
+                continue
             if status in {"risk", "risk-stopped", "locked", "blocked", "cooldown"}:
                 risk_stopped = True
                 diagnostics.append({"path": str(path), "status": status})
                 continue
             if {"status", "started_at", "finished_at", "final_items"}.issubset(payload):
                 diagnostics.append({"path": str(path), "status": status or "unknown"})
-                if status not in {"completed", "success", "ok"}:
+                if status not in {"complete", "completed", "success", "ok"}:
                     errors.append(f"diagnostic report has non-success status: {path}: {status}")
                 continue
             errors.append(f"unexpected top-level JSON object: {path}")
@@ -884,7 +1053,7 @@ _RISK_PATTERN = re.compile(
 def run_collection_request(
     request: CollectionRequest,
     *,
-    engine_root: Path,
+    layout: RuntimeLayout,
     data_root: Path,
     cdp_url: str = DEFAULT_CDP_URL,
     preflight_runner: Callable = None,
@@ -892,15 +1061,11 @@ def run_collection_request(
     command_environment: Mapping[str, str] | None = None,
 ) -> dict:
     runner = preflight_runner or run_preflight
-    entrypoint_name = (
-        f"scrape_{request.platforms[0]}.py" if request.search else "scrape_all.py"
-    )
     preflight_report = runner(
-        engine_root,
+        layout,
         live=True,
         cdp_url=cdp_url,
         timeout=10.0,
-        entrypoint_names=(entrypoint_name,),
     )
     if preflight_report.get("status") != "ok":
         return {
@@ -914,7 +1079,7 @@ def run_collection_request(
     run_dir = create_run_directory(data_root)
     started_ns = time.time_ns()
     try:
-        command = build_engine_command(request, run_dir, engine_root=engine_root)
+        command = build_engine_command(request, run_dir, layout=layout)
         if command_environment:
             command = command.with_environment(command_environment)
         if execution_timeout is None:
@@ -929,13 +1094,18 @@ def run_collection_request(
             "errors": [str(exc)],
             "preflight": preflight_report,
         }
-    evidence = discover_current_json(run_dir, started_ns=started_ns)
-    validation = validate_run(evidence, request, started_ns)
     feishu_artifacts = tuple(run_dir.glob("feishu_*"))
     stdout = completed.stdout_path.read_text(encoding="utf-8", errors="replace")
     stderr = completed.stderr_path.read_text(encoding="utf-8", errors="replace")
     combined_log = f"{stdout}\n{stderr}"
-    errors = []
+    discovery_errors: list[str] = []
+    try:
+        evidence = discover_current_json(run_dir, started_ns=started_ns)
+    except (ConfigurationError, OSError) as exc:
+        evidence = ()
+        discovery_errors.append(str(exc))
+    validation = validate_run(evidence, request, started_ns)
+    errors = list(discovery_errors)
     if feishu_artifacts:
         errors.append("unexpected Feishu artifact was generated")
     if completed.timed_out:
@@ -1000,52 +1170,165 @@ def _cdp_version_url(cdp_url: str) -> str:
     return f"{normalized}/json/version"
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _probe_state_writable(state: Path) -> tuple[bool, str | None]:
+    descriptor: int | None = None
+    probe: Path | None = None
+    error: str | None = None
+    try:
+        descriptor, raw_probe = tempfile.mkstemp(prefix=".preflight-", dir=state)
+        probe = Path(raw_probe)
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, b"media-missher-preflight\n")
+        os.fsync(descriptor)
+    except OSError as exc:
+        error = f"runtime state write probe failed: {type(exc).__name__}: {exc}"
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                error = f"runtime state write probe close failed: {type(exc).__name__}: {exc}"
+        if probe is not None:
+            try:
+                probe.unlink()
+            except OSError as exc:
+                error = f"runtime state write probe cleanup failed: {type(exc).__name__}: {exc}"
+    return error is None, error
+
+
 def run_preflight(
-    engine_root: Path,
+    layout: RuntimeLayout,
     *,
     live: bool,
     cdp_url: str = DEFAULT_CDP_URL,
     timeout: float = 10.0,
     urlopen: Callable | None = None,
-    entrypoint_names: tuple[str, ...] | None = None,
 ) -> dict:
     if timeout <= 0:
         raise ConfigurationError("timeout must be greater than zero")
-    root = Path(engine_root).expanduser().resolve()
-    allowed_entrypoints = {"scrape_all.py", *(f"scrape_{name}.py" for name in PLATFORMS)}
-    requested_entrypoints = entrypoint_names or ("scrape_all.py",)
-    if not requested_entrypoints or any(
-        name not in allowed_entrypoints for name in requested_entrypoints
-    ):
-        raise ConfigurationError("unknown preflight entrypoint")
-    entrypoints = tuple(root / "scripts" / name for name in requested_entrypoints)
+    if not isinstance(layout, RuntimeLayout):
+        raise ConfigurationError("runtime layout is required")
+    home = layout.home.expanduser().absolute()
+    current = layout.current.expanduser().absolute()
+    python = layout.python.expanduser().absolute()
+    state = layout.state.expanduser().absolute()
+    entrypoints = tuple(current / "scripts" / name for name in RUNTIME_ENTRYPOINTS)
+    exact_layout = (
+        current == (home / "current").absolute()
+        and python == (home / "venv" / "bin" / "python").absolute()
+        and state == (home / "state").absolute()
+    )
+    safe_boundaries = (
+        not home.is_symlink()
+        and _path_within(current, home)
+        and _path_within(home / "venv", home)
+        and _path_within(state, home)
+    )
+    state_private = False
+    if state.is_dir() and not state.is_symlink():
+        try:
+            state_stat = state.stat()
+            state_private = stat.S_IMODE(state_stat.st_mode) == 0o700
+            if hasattr(os, "getuid"):
+                state_private = state_private and state_stat.st_uid == os.getuid()
+        except OSError:
+            state_private = False
+    entrypoints_present = all(
+        entrypoint.is_file() and _path_within(entrypoint, current)
+        for entrypoint in entrypoints
+    )
+    state_writable = False
+    state_probe_error: str | None = None
+    if state_private and safe_boundaries:
+        state_writable, state_probe_error = _probe_state_writable(state)
     checks = {
-        "engine_root": root.is_dir(),
-        "interpreter": False,
-        "entrypoint": all(entrypoint.is_file() for entrypoint in entrypoints),
+        "layout": exact_layout and safe_boundaries,
+        "runtime_home": home.is_dir(),
+        "current": current.is_dir(),
+        "python": python.is_file() and os.access(python, os.X_OK),
+        "state": state.is_dir(),
+        "state_private": state_private,
+        "state_writable": state_writable,
+        "entrypoints": entrypoints_present,
+        "python_version": False,
+        "playwright": False,
         "entrypoint_help": False,
     }
     errors: list[str] = []
-    interpreter: Path | None = None
-
-    if not checks["engine_root"]:
-        errors.append(f"engine root is not a directory: {root}")
-    try:
-        interpreter = engine_python(root)
-        checks["interpreter"] = True
-    except ConfigurationError as exc:
-        errors.append(str(exc))
+    if not checks["layout"]:
+        errors.append("runtime layout paths do not match the shared-home contract")
+    if not checks["runtime_home"]:
+        errors.append(f"runtime home is not a directory: {home}")
+    if not checks["current"]:
+        errors.append(f"current runtime is not a directory: {current}")
+    if not checks["python"]:
+        errors.append(f"runtime python is missing or not executable: {python}")
+    if not checks["state"]:
+        errors.append(f"runtime state is not a directory: {state}")
+    if checks["state"] and not checks["state_private"]:
+        errors.append(f"runtime state must be owned by the current user with mode 0700: {state}")
+    if checks["state"] and not checks["state_writable"]:
+        errors.append(state_probe_error or f"runtime state is not safely writable: {state}")
     for entrypoint in entrypoints:
-        if not entrypoint.is_file():
-            errors.append(f"entrypoint is missing: {entrypoint}")
+        if not entrypoint.is_file() or not _path_within(entrypoint, current):
+            errors.append(f"runtime entrypoint is missing: {entrypoint}")
 
-    if checks["interpreter"] and checks["entrypoint"] and interpreter is not None:
+    if checks["python"]:
+        try:
+            version_result = subprocess.run(
+                [
+                    str(python),
+                    "-c",
+                    "import sys; print('.'.join(str(part) for part in sys.version_info[:3]))",
+                ],
+                cwd=current if current.is_dir() else home,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            version_parts = tuple(
+                int(part) for part in version_result.stdout.strip().split(".")
+            )
+            checks["python_version"] = (
+                version_result.returncode == 0
+                and len(version_parts) >= 2
+                and version_parts[:2] >= (3, 11)
+            )
+            if not checks["python_version"]:
+                errors.append("runtime Python 3.11 or newer is required")
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"runtime Python version probe failed: {type(exc).__name__}: {exc}")
+        try:
+            playwright_result = subprocess.run(
+                [str(python), "-c", "import playwright"],
+                cwd=current if current.is_dir() else home,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            checks["playwright"] = playwright_result.returncode == 0
+            if not checks["playwright"]:
+                errors.append("runtime Python cannot import Playwright")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"Playwright import probe failed: {type(exc).__name__}: {exc}")
+
+    if checks["python"] and checks["entrypoints"] and checks["current"]:
         help_checks = []
         for entrypoint in entrypoints:
             try:
                 completed = subprocess.run(
-                    [str(interpreter), str(entrypoint), "--help"],
-                    cwd=root,
+                    [str(python), str(entrypoint), "--help"],
+                    cwd=current,
                     check=False,
                     capture_output=True,
                     text=True,
@@ -1090,7 +1373,7 @@ def run_preflight(
 
     report = {
         "status": "ok" if all(checks.values()) else "failed",
-        "engine_root": str(root),
+        "runtime_home": str(home),
         "checks": checks,
         "errors": errors,
     }

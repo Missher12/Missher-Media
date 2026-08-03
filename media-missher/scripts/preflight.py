@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only preflight for an external Media@Missher runtime."""
+"""Read-only preflight for the shared Media@Missher runtime."""
 
 from __future__ import annotations
 
@@ -13,16 +13,15 @@ from media_missher_adapter import (
     DEFAULT_CDP_URL,
     ConfigurationError,
     read_profile,
-    resolve_engine_root,
+    resolve_runtime_layout,
     run_preflight,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate the external Media@Missher runtime without collecting data."
+        description="Validate the shared Media@Missher runtime without collecting data."
     )
-    parser.add_argument("--engine-root", type=Path, help="External Media@Missher skill root")
     parser.add_argument("--profile", type=Path, help="Private mode-0600 JSON profile")
     parser.add_argument("--live", action="store_true", help="Also probe the existing CDP endpoint")
     parser.add_argument(
@@ -46,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         profile = read_profile(_profile_path(args.profile))
-        engine_root = resolve_engine_root(args.engine_root, environ=os.environ, profile=profile)
+        layout = resolve_runtime_layout(environ=os.environ)
         cdp_url = (
             args.cdp_url
             or os.environ.get("MEDIA_MISSHER_CDP_URL")
@@ -54,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             or DEFAULT_CDP_URL
         )
         report = run_preflight(
-            engine_root,
+            layout,
             live=args.live,
             cdp_url=str(cdp_url),
             timeout=args.timeout,
