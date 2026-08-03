@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import os
+import pwd
 import shlex
 import shutil
 import stat
@@ -33,7 +35,10 @@ class FakeExecutor:
                 encoding="utf-8",
             )
             interpreter.chmod(0o700)
-        if self.failure is not None and self.failure in " ".join(values):
+        pip_install = values[1:3] == ("-m", "pip") and "install" in values
+        if self.failure is not None and (
+            self.failure in " ".join(values) or (self.failure == "pip install" and pip_install)
+        ):
             raise RuntimeError("synthetic executor failure")
 
 
@@ -66,13 +71,48 @@ def test_install_stages_runtime_and_both_compact_skills_with_private_state(tmp_p
     assert not list(tmp_path.rglob("*.staging-*"))
 
     commands = [command for command, _ in executor.calls]
-    pip_calls = [command for command in commands if command[1:4] == ("-m", "pip", "install")]
+    pip_calls = [command for command in commands if command[1:3] == ("-m", "pip") and "install" in command]
     assert len(pip_calls) == 1
     assert "--requirement" in pip_calls[0]
     assert Path(pip_calls[0][pip_calls[0].index("--requirement") + 1]).name == "requirements.lock"
     assert any(command[1:3] == ("-c", "import playwright; import media_missher_runtime") for command in commands)
     help_scripts = {Path(command[1]).name for command in commands if len(command) >= 3 and command[-1] == "--help"}
     assert help_scripts == {"scrape_all.py", "scrape_bilibili.py", "scrape_xhs.py", "scrape_douyin.py", "scrape_weibo.py"}
+
+
+def test_install_writes_one_release_id_to_all_four_components(tmp_path: Path) -> None:
+    result = _install(tmp_path)
+    marker_name = ".media-missher-release"
+    components = (result.current, result.venv, result.codex_current, result.openclaw_current)
+
+    release_ids = {component.joinpath(marker_name).read_text(encoding="utf-8").strip() for component in components}
+
+    assert len(release_ids) == 1
+    assert all(stat.S_IMODE(component.joinpath(marker_name).stat().st_mode) == 0o600 for component in components)
+
+
+def test_installer_holds_an_exclusive_lock_through_rotation(tmp_path: Path) -> None:
+    first = _install(tmp_path)
+    lock_path = first.current.parent / ".media-missher-install.lock"
+    real_replace = os.replace
+    shared_lock_was_blocked = False
+
+    def observe_runtime_cutover(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+        nonlocal shared_lock_was_blocked
+        source_path, target_path = Path(source), Path(target)
+        real_replace(source, target)
+        if ".current.staging-" in source_path.name and target_path == first.current:
+            descriptor = os.open(lock_path, os.O_RDONLY)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                shared_lock_was_blocked = True
+            finally:
+                os.close(descriptor)
+
+    _install(tmp_path, renamer=observe_runtime_cutover)
+
+    assert shared_lock_was_blocked is True
 
 
 def test_upgrade_keeps_unique_previous_releases_for_all_three_targets(tmp_path: Path) -> None:
@@ -118,7 +158,7 @@ def test_failed_dependency_upgrade_cannot_mutate_the_active_venv(tmp_path: Path)
         def __call__(self, command: list[str], *, env: dict[str, str] | None = None) -> None:
             super().__call__(command, env=env)
             values = tuple(str(item) for item in command)
-            if values[1:4] == ("-m", "pip", "install"):
+            if values[1:3] == ("-m", "pip") and "install" in values:
                 Path(values[0]).parent.parent.joinpath("partial-mutation").write_text("bad", encoding="utf-8")
                 raise RuntimeError("synthetic partial dependency failure")
 
@@ -142,7 +182,8 @@ def test_injected_executor_nonzero_result_is_a_hard_failure(tmp_path: Path) -> N
     class ReturningFailure(FakeExecutor):
         def __call__(self, command: list[str], *, env: dict[str, str] | None = None):
             super().__call__(command, env=env)
-            if tuple(str(item) for item in command)[1:4] == ("-m", "pip", "install"):
+            values = tuple(str(item) for item in command)
+            if values[1:3] == ("-m", "pip") and "install" in values:
                 return subprocess.CompletedProcess(command, 9)
             return subprocess.CompletedProcess(command, 0)
 
@@ -168,6 +209,41 @@ def test_rotation_failure_restores_every_prior_current(tmp_path: Path) -> None:
     with pytest.raises(OSError, match="synthetic rotation"):
         _install(tmp_path, renamer=fail_openclaw_stage)
 
+    for target in targets:
+        assert target.joinpath("old-marker").is_file()
+
+
+def test_rollback_restores_every_old_target_before_collecting_cleanup_failures(tmp_path: Path) -> None:
+    import tools.install_media_missher as installer
+
+    first = _install(tmp_path)
+    targets = (first.current, first.current.parent / "venv", first.codex_current, first.openclaw_current)
+    for target in targets:
+        target.joinpath("old-marker").write_text(target.name, encoding="utf-8")
+    real_replace = os.replace
+    cleanup_attempts: list[Path] = []
+
+    def fail_openclaw_stage(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+        source_path, target_path = Path(source), Path(target)
+        if ".staging-" in source_path.name and target_path == first.openclaw_current:
+            raise OSError("synthetic forward failure")
+        real_replace(source, target)
+
+    def fail_failed_release_cleanup(path: Path) -> None:
+        if ".failed-" in path.name:
+            cleanup_attempts.append(path)
+            raise OSError(f"cleanup failure {len(cleanup_attempts)}")
+        installer._clean_owned(path)
+
+    with pytest.raises(installer.InstallationRollbackError) as caught:
+        _install(
+            tmp_path,
+            renamer=fail_openclaw_stage,
+            cleaner=fail_failed_release_cleanup,
+        )
+
+    assert len(cleanup_attempts) == 3
+    assert len(caught.value.rollback_errors) == 3
     for target in targets:
         assert target.joinpath("old-marker").is_file()
 
@@ -201,6 +277,34 @@ def test_installer_rejects_broad_and_overlapping_roots(tmp_path: Path) -> None:
         )
 
 
+def test_installer_rejects_an_unowned_nonempty_runtime_home_without_mutating_it(tmp_path: Path) -> None:
+    home = tmp_path / "Documents"
+    unrelated = home / "current" / "owner-file"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("unrelated", encoding="utf-8")
+    home.chmod(0o755)
+    executor = FakeExecutor()
+
+    with pytest.raises(ValueError, match="ownership"):
+        _install(tmp_path, home=home, executor=executor)
+
+    assert unrelated.read_text(encoding="utf-8") == "unrelated"
+    assert stat.S_IMODE(home.stat().st_mode) == 0o755
+    assert executor.calls == []
+
+
+def test_installer_marks_a_dedicated_home_and_requires_the_marker_on_upgrade(tmp_path: Path) -> None:
+    first = _install(tmp_path)
+    marker = first.current.parent / ".media-missher-owner.json"
+
+    assert marker.is_file() and not marker.is_symlink()
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    marker.unlink()
+
+    with pytest.raises(ValueError, match="ownership"):
+        _install(tmp_path)
+
+
 def test_install_reuses_existing_venv_without_recreating_it(tmp_path: Path) -> None:
     first = _install(tmp_path)
     executor = FakeExecutor()
@@ -209,6 +313,27 @@ def test_install_reuses_existing_venv_without_recreating_it(tmp_path: Path) -> N
 
     assert first.current.parent.joinpath("venv", "bin", "python").is_file()
     assert not any(command[1:3] == ("-m", "venv") for command, _ in executor.calls)
+
+
+def test_venv_and_pip_use_isolated_sanitized_subprocesses(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PIP_TARGET", str(tmp_path / "outside-target"))
+    monkeypatch.setenv("PIP_CONFIG_FILE", str(tmp_path / "pip.conf"))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "outside-pythonpath"))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "outside-pythonhome"))
+    executor = FakeExecutor()
+
+    _install(tmp_path, executor=executor)
+
+    venv_call = next(item for item in executor.calls if item[0][1:3] == ("-m", "venv"))
+    pip_call = next(item for item in executor.calls if item[0][1:3] == ("-m", "pip"))
+    assert "--isolated" in pip_call[0]
+    assert "--require-virtualenv" in pip_call[0]
+    for _, environment in (venv_call, pip_call):
+        assert environment is not None
+        assert "PYTHONPATH" not in environment
+        assert "PYTHONHOME" not in environment
+        assert not any(name.startswith("PIP_") for name in environment)
+    assert not (tmp_path / "outside-target").exists()
 
 
 def test_runtime_only_never_inspects_or_touches_skill_sources_or_destinations(tmp_path: Path) -> None:
@@ -244,12 +369,148 @@ def test_runtime_only_never_inspects_or_touches_skill_sources_or_destinations(tm
     assert not list(real_openclaw.glob("*.previous-*"))
 
 
+def test_installer_rejects_a_symlinked_source_package_root(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "runtime").symlink_to(PROJECT_ROOT / "runtime", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="source.*symlink|symlink"):
+        _install(tmp_path, source=source, runtime_only=True)
+
+
+def test_installer_rechecks_source_symlinks_immediately_before_copy(tmp_path: Path, monkeypatch) -> None:
+    import tools.install_media_missher as installer
+
+    source = tmp_path / "source"
+    shutil.copytree(PROJECT_ROOT / "runtime", source / "runtime")
+    runtime_source = source / "runtime"
+    saved_runtime = source / "runtime-real"
+    real_reject = installer._reject_source_symlinks
+    swapped = False
+
+    def swap_after_initial_validation(root: Path) -> None:
+        nonlocal swapped
+        real_reject(root)
+        if Path(root) == runtime_source and not swapped:
+            runtime_source.rename(saved_runtime)
+            runtime_source.symlink_to(saved_runtime, target_is_directory=True)
+            swapped = True
+
+    monkeypatch.setattr(installer, "_reject_source_symlinks", swap_after_initial_validation)
+
+    with pytest.raises(ValueError, match="symlink"):
+        installer.install(
+            source=source,
+            home=tmp_path / "runtime-home",
+            runtime_only=True,
+            executor=FakeExecutor(),
+        )
+
+
 def test_installer_cli_exposes_runtime_only_safety_gate() -> None:
     script = PROJECT_ROOT / "tools" / "install_media_missher.py"
     completed = subprocess.run([sys.executable, str(script), "--help"], check=False, capture_output=True, text=True)
 
     assert completed.returncode == 0
     assert "--runtime-only" in completed.stdout
+    assert "--python" in completed.stdout
+
+
+def test_system_python_bootstrap_discovers_a_python311_runtime() -> None:
+    system_python = Path("/usr/bin/python3")
+    if not system_python.is_file():
+        pytest.skip("macOS system Python is unavailable")
+    user_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    completed = subprocess.run(
+        [
+            str(system_python),
+            "-c",
+            (
+                "from tools.install_media_missher import select_runtime_python; "
+                "print(select_runtime_python(None))"
+            ),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(user_home), "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    selected = Path(completed.stdout.strip())
+    local_python = user_home / ".local" / "bin" / "python3.11"
+    if local_python.is_file():
+        assert selected == local_python
+    version = subprocess.run(
+        [str(selected), "-c", "import sys; print(sys.version_info[:2] >= (3, 11))"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert version.returncode == 0
+    assert version.stdout.strip() == "True"
+
+
+def test_system_python_driven_install_uses_the_discovered_python311(tmp_path: Path) -> None:
+    system_python = Path("/usr/bin/python3")
+    user_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    local_python = user_home / ".local" / "bin" / "python3.11"
+    if not system_python.is_file() or not local_python.is_file():
+        pytest.skip("system Python or the managed Python 3.11 runtime is unavailable")
+    program = "\n".join(
+        (
+            "import subprocess",
+            "from pathlib import Path",
+            "from tools.install_media_missher import install",
+            "calls = []",
+            "def execute(command, *, env=None):",
+            "    values = [str(item) for item in command]",
+            "    calls.append(values)",
+            "    if values[1:3] == ['-m', 'venv']:",
+            "        interpreter = Path(values[3]) / 'bin' / 'python'",
+            "        interpreter.parent.mkdir(parents=True)",
+            "        interpreter.write_text('#!/bin/sh\\nexit 0\\n', encoding='utf-8')",
+            "        interpreter.chmod(0o700)",
+            "    return subprocess.CompletedProcess(values, 0)",
+            f"install(source=Path({str(PROJECT_ROOT)!r}), home=Path({str(tmp_path / 'runtime-home')!r}), runtime_only=True, executor=execute)",
+            "print(calls[0][0])",
+        )
+    )
+
+    completed = subprocess.run(
+        [str(system_python), "-c", program],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(user_home), "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert Path(completed.stdout.strip()) == local_python
+
+
+def test_explicit_old_python_fails_before_creating_the_runtime_home(tmp_path: Path) -> None:
+    system_python = Path("/usr/bin/python3")
+    if not system_python.is_file():
+        pytest.skip("macOS system Python is unavailable")
+    version = subprocess.run(
+        [str(system_python), "-c", "import sys; print(sys.version_info[:2] < (3, 11))"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if version.stdout.strip() != "True":
+        pytest.skip("system Python is already 3.11+")
+    executor = FakeExecutor()
+    home = tmp_path / "runtime-home"
+
+    with pytest.raises(ValueError, match="3.11"):
+        _install(tmp_path, home=home, python=system_python, executor=executor)
+
+    assert not home.exists()
+    assert executor.calls == []
 
 
 def test_installer_and_residual_scanner_bootstrap_with_system_python3(tmp_path: Path) -> None:

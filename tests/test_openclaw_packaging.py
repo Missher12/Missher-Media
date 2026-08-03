@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import fcntl
 import os
 import re
 import shlex
@@ -11,9 +12,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = PROJECT_ROOT / "openclaw-media-missher"
+RELEASE_MARKER = ".media-missher-release"
+OWNER_MARKER = ".media-missher-owner.json"
+INSTALL_LOCK = ".media-missher-install.lock"
 
 
 def test_openclaw_skill_is_compact_and_has_valid_frontmatter() -> None:
@@ -59,7 +65,24 @@ def _make_runtime_home(tmp_path: Path, *, version: str = "3.12.0") -> Path:
     interpreter.chmod(0o700)
     state = home / "state"
     state.mkdir(mode=0o700)
+    (home / "current" / RELEASE_MARKER).write_text("synthetic-release\n", encoding="utf-8")
+    (home / "venv" / RELEASE_MARKER).write_text("synthetic-release\n", encoding="utf-8")
+    (home / OWNER_MARKER).write_text(
+        '{"name": "media-missher-runtime-home", "schema": 1}\n',
+        encoding="utf-8",
+    )
+    (home / OWNER_MARKER).chmod(0o600)
+    (home / INSTALL_LOCK).touch(mode=0o600)
     return home
+
+
+def _make_installed_package(tmp_path: Path, *, release: str = "synthetic-release") -> Path:
+    portable = tmp_path / "OpenClaw @ Skill"
+    shutil.copytree(PACKAGE, portable)
+    marker = portable / RELEASE_MARKER
+    marker.write_text(release + "\n", encoding="utf-8")
+    marker.chmod(0o600)
+    return portable
 
 
 def _run(script: Path, *args: str, home: Path) -> subprocess.CompletedProcess[str]:
@@ -76,8 +99,7 @@ def _run(script: Path, *args: str, home: Path) -> subprocess.CompletedProcess[st
 
 def test_wrappers_use_shared_runtime_from_a_special_package_path(tmp_path: Path) -> None:
     home = _make_runtime_home(tmp_path)
-    portable = tmp_path / "OpenClaw @ Skill"
-    shutil.copytree(PACKAGE, portable)
+    portable = _make_installed_package(tmp_path)
 
     preflight = _run(portable / "scripts" / "preflight.py", "--json", home=home)
     collection_help = _run(portable / "scripts" / "run_collection.py", "--help", home=home)
@@ -99,6 +121,25 @@ def test_preflight_fails_closed_when_runtime_is_missing(tmp_path: Path) -> None:
     assert report["checks"]["current"] is False
 
 
+def test_preflight_does_not_create_a_lock_in_an_unowned_home(tmp_path: Path) -> None:
+    home = tmp_path / "unowned-home"
+    home.mkdir(mode=0o755)
+    owner_file = home / "owner-file"
+    owner_file.write_text("unrelated", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in home.iterdir() if path.is_file()}
+    before_mode = stat.S_IMODE(home.stat().st_mode)
+    module = _load_preflight_module()
+
+    report = module.inspect_runtime(home)
+
+    after = {path.name: path.read_bytes() for path in home.iterdir() if path.is_file()}
+    assert report["status"] == "failed"
+    assert report["checks"]["home_owned"] is False
+    assert before == after
+    assert stat.S_IMODE(home.stat().st_mode) == before_mode
+    assert not (home / INSTALL_LOCK).exists()
+
+
 def test_preflight_rejects_old_python_and_boundary_symlinks(tmp_path: Path) -> None:
     old_home = _make_runtime_home(tmp_path / "old", version="3.10.9")
     old = _run(PACKAGE / "scripts" / "preflight.py", "--json", home=old_home)
@@ -109,6 +150,12 @@ def test_preflight_rejects_old_python_and_boundary_symlinks(tmp_path: Path) -> N
     linked_home.mkdir()
     (linked_home / "state").mkdir(mode=0o700)
     (linked_home / "venv" / "bin").mkdir(parents=True)
+    (linked_home / OWNER_MARKER).write_text(
+        '{"name": "media-missher-runtime-home", "schema": 1}\n',
+        encoding="utf-8",
+    )
+    (linked_home / OWNER_MARKER).chmod(0o600)
+    (linked_home / INSTALL_LOCK).touch(mode=0o600)
     (linked_home / "current").symlink_to(PROJECT_ROOT / "runtime", target_is_directory=True)
     linked = _run(PACKAGE / "scripts" / "preflight.py", "--json", home=linked_home)
     assert linked.returncode == 1
@@ -174,3 +221,82 @@ def test_collection_wrapper_rejects_current_and_venv_boundary_symlinks(tmp_path:
 
     assert completed.returncode == 1
     assert "symlink" in completed.stderr.casefold()
+
+
+def test_preflight_probes_state_with_create_fsync_and_unlink(tmp_path: Path, monkeypatch) -> None:
+    module = _load_preflight_module()
+    home = _make_runtime_home(tmp_path)
+    real_mkstemp = module.tempfile.mkstemp
+
+    def deny_state_create(*args, **kwargs):
+        if Path(kwargs["dir"]) == home / "state":
+            raise PermissionError("synthetic state denial")
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(module.tempfile, "mkstemp", deny_state_create)
+
+    report = module.inspect_runtime(home)
+
+    assert report["status"] == "failed"
+    assert report["checks"]["state_writable"] is False
+    assert any("synthetic state denial" in error for error in report["errors"])
+
+
+def test_preflight_and_launcher_reject_an_ancestor_symlink(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    home = _make_runtime_home(real_parent)
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(real_parent, target_is_directory=True)
+    lexical_home = alias_parent / home.relative_to(real_parent)
+    portable = _make_installed_package(tmp_path)
+
+    module = _load_preflight_module()
+    report = module.inspect_runtime(lexical_home)
+    launched = _run(portable / "scripts" / "run_collection.py", "--help", home=lexical_home)
+
+    assert report["status"] == "failed"
+    assert any("symlink" in error.casefold() for error in report["errors"])
+    assert launched.returncode == 1
+    assert "symlink" in launched.stderr.casefold()
+
+
+def test_preflight_and_launcher_reject_mixed_release_ids(tmp_path: Path) -> None:
+    home = _make_runtime_home(tmp_path)
+    (home / "venv" / RELEASE_MARKER).write_text("different-release\n", encoding="utf-8")
+    portable = _make_installed_package(tmp_path)
+
+    preflight = _run(portable / "scripts" / "preflight.py", "--json", home=home)
+    launched = _run(portable / "scripts" / "run_collection.py", "--help", home=home)
+
+    assert preflight.returncode == 1
+    assert json.loads(preflight.stdout)["checks"]["release_consistent"] is False
+    assert launched.returncode == 1
+    assert "release" in launched.stderr.casefold()
+
+
+def test_collection_wrapper_waits_for_the_installer_exclusive_lock(tmp_path: Path) -> None:
+    home = _make_runtime_home(tmp_path)
+    portable = _make_installed_package(tmp_path)
+    interpreter = home / "venv" / "bin" / "python"
+    interpreter.write_text("#!/bin/sh\nprintf 'immediate-launch\\n'\n", encoding="utf-8")
+    interpreter.chmod(0o700)
+    descriptor = os.open(home / INSTALL_LOCK, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    environment = dict(os.environ, MEDIA_MISSHER_HOME=str(home), PYTHONDONTWRITEBYTECODE="1")
+    process = subprocess.Popen(
+        [sys.executable, str(portable / "scripts" / "run_collection.py"), "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(timeout=2.0)
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == 0, stderr
+    assert "immediate-launch" in stdout

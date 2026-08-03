@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -20,7 +22,12 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
 
 Executor = Callable[..., None]
 Renamer = Callable[[Union[str, os.PathLike[str]], Union[str, os.PathLike[str]]], None]
+Cleaner = Callable[[Path], None]
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".DS_Store")
+_OWNER_MARKER = ".media-missher-owner.json"
+_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
+_RELEASE_MARKER = ".media-missher-release"
+_INSTALL_LOCK = ".media-missher-install.lock"
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,14 @@ class InstallResult:
     codex_previous: Path | None
     openclaw_current: Path | None
     openclaw_previous: Path | None
+
+
+class InstallationRollbackError(RuntimeError):
+    def __init__(self, original_error: BaseException, rollback_errors: Sequence[BaseException]) -> None:
+        self.original_error = original_error
+        self.rollback_errors = tuple(rollback_errors)
+        details = "; ".join(f"{type(error).__name__}: {error}" for error in self.rollback_errors)
+        super().__init__(f"installation failed and rollback reported errors: {details}")
 
 
 @dataclass
@@ -54,6 +69,50 @@ def _invoke(executor: Executor, command: Sequence[str], *, env: Mapping[str, str
     returncode = getattr(result, "returncode", 0)
     if isinstance(returncode, int) and returncode != 0:
         raise subprocess.CalledProcessError(returncode, list(command))
+
+
+def _clean_subprocess_environment() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("PIP_") and key.upper() not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+
+
+def _runtime_python_version(executable: Path) -> tuple[int, int] | None:
+    try:
+        completed = subprocess.run(
+            [str(executable), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=_clean_subprocess_environment(),
+        )
+        major, minor = (int(part) for part in completed.stdout.strip().split(".", 1))
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError):
+        return None
+    return (major, minor) if completed.returncode == 0 else None
+
+
+def select_runtime_python(explicit: Path | str | None) -> Path:
+    if explicit is not None:
+        candidates = [_absolute(explicit)]
+    else:
+        names = ("python3.13", "python3.12", "python3.11")
+        candidates = [Path(sys.executable).absolute(), Path.home() / ".local" / "bin" / "python3.11"]
+        candidates.extend(Path(found).absolute() for name in names if (found := shutil.which(name)))
+    seen: set[str] = set()
+    for candidate in candidates:
+        identity = str(candidate)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        version = _runtime_python_version(candidate)
+        if version is not None and version >= (3, 11):
+            return candidate
+    qualifier = f": {explicit}" if explicit is not None else ""
+    raise ValueError(f"Python 3.11 or newer is required{qualifier}")
 
 
 def _absolute(path: Path | str) -> Path:
@@ -107,6 +166,8 @@ def _validate_roots(
 
 
 def _reject_source_symlinks(root: Path) -> None:
+    if root.is_symlink():
+        raise ValueError(f"installation source is a symlink: {root.name}")
     if not root.is_dir():
         raise ValueError(f"installation source is missing: {root.name}")
     for path in root.rglob("*"):
@@ -123,13 +184,98 @@ def _prepare_directory(path: Path, mode: int = 0o700) -> None:
         path.chmod(mode)
 
 
+def _valid_owner_marker(path: Path) -> bool:
+    marker = path / _OWNER_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        if (marker.stat().st_mode & 0o777) != 0o600:
+            return False
+        return json.loads(marker.read_text(encoding="utf-8")) == _OWNER_PAYLOAD
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _write_owner_marker(path: Path) -> None:
+    marker = path / _OWNER_MARKER
+    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, (json.dumps(_OWNER_PAYLOAD, sort_keys=True) + "\n").encode("utf-8"))
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        marker.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(descriptor)
+
+
+def _prepare_owned_runtime_home(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError("runtime home contains a symlink")
+    if path.exists() and not path.is_dir():
+        raise ValueError("runtime home is not a directory")
+    if path.exists():
+        entries = list(path.iterdir())
+        if entries and not _valid_owner_marker(path):
+            raise ValueError("runtime home ownership marker is missing or invalid")
+        if not entries:
+            path.chmod(0o700)
+            _write_owner_marker(path)
+    else:
+        path.mkdir(parents=True, mode=0o700)
+        path.chmod(0o700)
+        _write_owner_marker(path)
+    if not _valid_owner_marker(path):
+        raise ValueError("runtime home ownership marker is missing or invalid")
+
+
 def _copy_source(source: Path, target: Path) -> None:
+    _reject_source_symlinks(source)
     shutil.copytree(source, target, ignore=_IGNORE)
+
+
+def _write_release_marker(root: Path, release: str) -> None:
+    marker = root / _RELEASE_MARKER
+    if marker.is_symlink():
+        raise ValueError(f"release marker is a symlink: {root.name}")
+    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, (release + "\n").encode("ascii"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _clean_owned(path: Path) -> None:
     if path.exists() and not path.is_symlink():
         shutil.rmtree(path)
+
+
+def _acquire_install_lock(home: Path) -> int:
+    lock = home / _INSTALL_LOCK
+    if lock.is_symlink():
+        raise ValueError("installation lock is a symlink")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(lock, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("installation lock is not a regular file")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _release_install_lock(descriptor: int) -> None:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 def _validate_staging(runtime_stage: Path, interpreter: Path, executor: Executor) -> None:
@@ -147,7 +293,12 @@ def _validate_staging(runtime_stage: Path, interpreter: Path, executor: Executor
         _invoke(executor, [str(interpreter), str(runtime_stage / "scripts" / name), "--help"], env=environment)
 
 
-def _rotate(components: Sequence[_Component], renamer: Renamer, release: str) -> None:
+def _rotate(
+    components: Sequence[_Component],
+    renamer: Renamer,
+    cleaner: Cleaner,
+    release: str,
+) -> None:
     try:
         for component in components:
             if component.current.is_symlink():
@@ -155,24 +306,35 @@ def _rotate(components: Sequence[_Component], renamer: Renamer, release: str) ->
             if component.current.exists():
                 renamer(component.current, component.previous)
                 component.prior_moved = True
-            try:
-                renamer(component.stage, component.current)
-                component.installed = True
-            except BaseException:
-                if component.prior_moved and component.previous.exists() and not component.current.exists():
-                    renamer(component.previous, component.current)
-                    component.prior_moved = False
-                raise
-    except BaseException:
+            renamer(component.stage, component.current)
+            component.installed = True
+    except BaseException as original_error:
+        rollback_errors: list[BaseException] = []
+        failed_releases: list[Path] = []
         for component in reversed(components):
             if component.installed and component.current.exists():
                 failed = component.current.parent / f".{component.current.name}.failed-{release}"
-                renamer(component.current, failed)
-                _clean_owned(failed)
-                component.installed = False
+                try:
+                    renamer(component.current, failed)
+                    failed_releases.append(failed)
+                    component.installed = False
+                except BaseException as exc:
+                    rollback_errors.append(exc)
             if component.prior_moved and component.previous.exists() and not component.current.exists():
-                renamer(component.previous, component.current)
-                component.prior_moved = False
+                try:
+                    renamer(component.previous, component.current)
+                    component.prior_moved = False
+                except BaseException as exc:
+                    rollback_errors.append(exc)
+            elif component.prior_moved and component.current.exists():
+                rollback_errors.append(RuntimeError(f"rollback target remains occupied: {component.current}"))
+        for failed in failed_releases:
+            try:
+                cleaner(failed)
+            except BaseException as exc:
+                rollback_errors.append(exc)
+        if rollback_errors:
+            raise InstallationRollbackError(original_error, rollback_errors) from original_error
         raise
 
 
@@ -184,7 +346,9 @@ def install(
     openclaw_root: Path | str | None = None,
     executor: Executor = _default_executor,
     renamer: Renamer = os.replace,
+    cleaner: Cleaner = _clean_owned,
     runtime_only: bool = False,
+    python: Path | str | None = None,
 ) -> InstallResult:
     source_path = _absolute(source)
     runtime_home = _absolute(home)
@@ -196,8 +360,10 @@ def install(
     package_sources = [] if runtime_only else [source_path / "media-missher", source_path / "openclaw-media-missher"]
     for item in (runtime_source, *package_sources):
         _reject_source_symlinks(item)
+    runtime_python = select_runtime_python(python)
 
-    install_parents = [runtime_home]
+    _prepare_owned_runtime_home(runtime_home)
+    install_parents: list[Path] = []
     if not runtime_only:
         assert codex_parent is not None and openclaw_parent is not None
         install_parents.extend((codex_parent, openclaw_parent))
@@ -218,6 +384,7 @@ def install(
             openclaw_parent / f".media-missher.staging-{release}",
         ]
     stages = (runtime_stage, venv_stage, *package_stages)
+    lock_descriptor = _acquire_install_lock(runtime_home)
     try:
         _copy_source(runtime_source, runtime_stage)
         for package_source, package_stage in zip(package_sources, package_stages):
@@ -227,6 +394,7 @@ def install(
             raise ValueError("staged installation contains forbidden residuals")
 
         venv = runtime_home / "venv"
+        subprocess_environment = _clean_subprocess_environment()
         if venv.is_symlink():
             raise ValueError("runtime venv is a symlink")
         if venv.exists():
@@ -234,16 +402,32 @@ def install(
                 raise ValueError("runtime venv is not a directory")
             shutil.copytree(venv, venv_stage, symlinks=True, ignore=_IGNORE)
         else:
-            _invoke(executor, [sys.executable, "-m", "venv", str(venv_stage)], env=None)
+            _invoke(
+                executor,
+                [str(runtime_python), "-m", "venv", str(venv_stage)],
+                env=subprocess_environment,
+            )
         interpreter = venv_stage / "bin" / "python"
         if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
             raise ValueError("runtime interpreter is missing or not executable")
         _invoke(
             executor,
-            [str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", "--requirement", str(runtime_stage / "requirements.lock")],
-            env=None,
+            [
+                str(interpreter),
+                "-m",
+                "pip",
+                "--isolated",
+                "--require-virtualenv",
+                "install",
+                "--disable-pip-version-check",
+                "--requirement",
+                str(runtime_stage / "requirements.lock"),
+            ],
+            env=subprocess_environment,
         )
         _validate_staging(runtime_stage, interpreter, executor)
+        for stage in stages:
+            _write_release_marker(stage, release)
         if scan_roots(stages):
             raise ValueError("installed runtime contains forbidden residuals")
 
@@ -259,7 +443,7 @@ def install(
                     _Component(package_stages[1], openclaw_parent / "media-missher", openclaw_parent / f"media-missher.previous-{release}"),
                 )
             )
-        _rotate(components, renamer, release)
+        _rotate(components, renamer, cleaner, release)
         return InstallResult(
             current=components[0].current.resolve(),
             previous=components[0].previous.resolve() if components[0].prior_moved else None,
@@ -272,8 +456,11 @@ def install(
             openclaw_previous=components[3].previous.resolve() if not runtime_only and components[3].prior_moved else None,
         )
     finally:
-        for stage in stages:
-            _clean_owned(stage)
+        try:
+            for stage in stages:
+                _clean_owned(stage)
+        finally:
+            _release_install_lock(lock_descriptor)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -284,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--codex-root", type=Path, default=Path.home() / ".codex" / "skills")
     parser.add_argument("--openclaw-root", type=Path, default=Path.home() / ".openclaw" / "workspace" / "skills")
     parser.add_argument("--runtime-only", action="store_true", help="Install only the shared runtime and dependency environment")
+    parser.add_argument("--python", type=Path, help="Python 3.11+ interpreter used to create the runtime environment")
     args = parser.parse_args(argv)
     result = install(
         source=args.source,
@@ -291,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         codex_root=args.codex_root,
         openclaw_root=args.openclaw_root,
         runtime_only=args.runtime_only,
+        python=args.python,
     )
     print(json.dumps({"current": str(result.current), "state": str(result.state)}, ensure_ascii=False))
     return 0
@@ -300,4 +489,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["InstallResult", "install", "main"]
+__all__ = ["InstallationRollbackError", "InstallResult", "install", "main", "select_runtime_python"]
