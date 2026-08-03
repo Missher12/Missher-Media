@@ -143,7 +143,7 @@ class XhsCollector:
             if card is not None:
                 _merge_detail(record, card)
                 record["detail_completed"] = True
-            else:
+            elif _has_current_detail_time(payload):
                 # Keep a non-authoritative DOM observation useful, but never
                 # manufacture a publish time or mark it complete from HTML.
                 html = await _read_detail_html(page)
@@ -327,7 +327,7 @@ def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str
 def _base_record(note_id: str | None, kind: str | None, title: str | None, desc: str | None, link: str | None, date: str | None, liked: int | None, comments: int | None, shares: int | None, collected: int | None, author: str | None, observed_at: str) -> dict[str, Any]:
     return {
         "platform": "xhs", "type": kind, "note_id": note_id, "title": title, "desc": desc, "link": link,
-        "date": date, "date_precision": "second" if date else None,
+        "date": date, "date_precision": "second" if date else None, "date_estimated": None,
         "liked": liked, "comments": comments, "shares": shares, "collected": collected,
         "id": note_id, "native_id": note_id, "url": link, "author": author, "published_at": date,
         "observed_at": observed_at, "detail_completed": False, "detail_attempted": False,
@@ -338,6 +338,10 @@ def _base_record(note_id: str | None, kind: str | None, title: str | None, desc:
 
 def _detail_card(payload: Mapping[str, Any], expected_id: str) -> Mapping[str, Any] | None:
     data = _mapping(payload.get("data"))
+    # `current_time` proves this response belongs to the active browser run.
+    # Do not promote a payload without it to current/fresh detail data.
+    if not _has_current_detail_time(payload):
+        return None
     for item in _as_sequence(data.get("items")):
         if not isinstance(item, Mapping):
             continue
@@ -347,12 +351,17 @@ def _detail_card(payload: Mapping[str, Any], expected_id: str) -> Mapping[str, A
     return None
 
 
+def _has_current_detail_time(payload: Mapping[str, Any]) -> bool:
+    return _timestamp(_mapping(payload.get("data")).get("current_time")) is not None
+
+
 def _merge_detail(record: dict[str, Any], card: Mapping[str, Any]) -> None:
     info = _mapping(card.get("interact_info"))
     date = _timestamp(card.get("time"))
     if date is not None:
         record["date"] = record["published_at"] = date
         record["date_precision"] = "second"
+        record["date_estimated"] = False
     for field, source_key in (("liked", "liked_count"), ("comments", "comment_count"), ("collected", "collected_count"), ("shares", "share_count")):
         value = parse_count(info.get(source_key))
         if value is not None:
@@ -484,15 +493,18 @@ async def _click_note_and_check(page: Any, note_id: str) -> None:
 
 
 async def _close_modal(page: Any) -> None:
-    await _raise_for_challenge(page)
+    # Close first: risk detection must not leave the user-facing overlay open.
     close = page.locator(".close-circle")
     try:
         if await close.is_visible():
             await close.click()
         else:
             await page.locator(".note-container").press("Escape")
-    except PlaywrightTimeoutError:
-        await page.locator(".note-container").press("Escape")
+    except (PlaywrightTimeoutError, RuntimeError):
+        try:
+            await page.locator(".note-container").press("Escape")
+        except (PlaywrightTimeoutError, RuntimeError):
+            pass
     try:
         await page.wait_for_function("() => !document.querySelector('.note-container')", timeout=10_000)
     except (AttributeError, TypeError, PlaywrightTimeoutError):

@@ -203,7 +203,8 @@ def test_complete_uses_current_detail_response_and_modal_comments() -> None:
     assert page.clicked == ["one"] and page.listeners == 0
     assert record["complete"] is True and record["detail_completed"] is True
     assert record["engagement_fresh"] is True and record["engagement_source"] == "detail_api"
-    assert record["date_precision"] == "second" and record["comments_data"] == [{"author": "A", "text": "hello", "date": "today", "liked": 1}]
+    assert record["date_precision"] == "second" and record["date_estimated"] is False
+    assert record["comments_data"] == [{"author": "A", "text": "hello", "date": "today", "liked": 1}]
     assert record["metric_sources"] == {"liked": "detail_api", "comments": "detail_api", "collected": "detail_api", "shares": "detail_api"}
 
 
@@ -213,6 +214,32 @@ def test_incomplete_detail_risk_stops_without_further_clicks_and_http_is_checked
     with pytest.raises(CollectionStopped, match="http-403"):
         run(collect_creator(CollectionRequest(platform="xhs", count=2, uid="u", complete=True), Browser(page)))
     assert page.clicked == ["one"]
+
+
+@pytest.mark.parametrize("current_time", (None, "not-a-timestamp", 0))
+def test_detail_without_valid_current_response_timestamp_stays_incomplete(current_time: object) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    response = detail_response("one")
+    response.payload["data"]["current_time"] = current_time  # type: ignore[index]
+    page = Page(responses=[creator_response(note("one")), response], cards=[{"note_id": "one"}])
+
+    record = run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))[0]
+
+    assert record["detail_completed"] is False
+    assert record["complete"] is False
+    assert record["engagement_fresh"] is False
+    assert record["engagement_observed_at"] is None
+    assert "engagement_fresh" in record["missing_fields"]
+
+
+def test_modal_is_closed_before_rethrowing_a_challenge() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, _close_modal
+    page = Page(challenge="challenge-selector", modal_visible=True)
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(_close_modal(page))
+
+    assert page.modal_visible is False
 
 
 @pytest.mark.parametrize("value, expected", [("2万", 20000), ("1.5亿", 150000000), ("0", 0), (None, None), ("NaN万", None), (float("inf"), None)])
