@@ -57,6 +57,19 @@ def test_preflight_fails_when_entrypoint_is_missing(fake_engine_root):
     assert report["checks"]["entrypoint_help"] is False
 
 
+def test_preflight_checks_the_requested_search_entrypoint(fake_engine_root):
+    (fake_engine_root / "scripts" / "scrape_xhs.py").unlink()
+    report = run_preflight(
+        fake_engine_root,
+        live=False,
+        entrypoint_names=("scrape_xhs.py",),
+    )
+    assert report["status"] == "failed"
+    assert report["checks"]["entrypoint"] is False
+    assert report["checks"]["entrypoint_help"] is False
+    assert any("scrape_xhs.py" in error for error in report["errors"])
+
+
 def test_preflight_cli_help_is_offline():
     script = Path(preflight.__file__).resolve()
     completed = subprocess.run(

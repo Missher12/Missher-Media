@@ -28,7 +28,7 @@ Return `risk-stopped`. Do not delete a lock, checkpoint, cache, report, or risk-
 
 ## Risk response
 
-Treat `403`, `429`, `461`, `471`, `999`, `risk`, and `locked` as stop signals. Do not rotate accounts, perform proxy rotation, use a proxy pool, add retries, or attempt platform-control evasion.
+Treat `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, and `blocked` as stop signals. Do not rotate accounts, perform proxy rotation, use a proxy pool, add retries, or attempt platform-control evasion.
 
 ## Partial output
 

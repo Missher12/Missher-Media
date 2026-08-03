@@ -2,7 +2,7 @@
 
 Accept only JSON files in the unique current run directory whose modification time is not older than the recorded start time. Reject symlinks, stale files, malformed JSON, unexpected top-level values, unknown platforms, and reused output.
 
-Deduplicate platform records by their native content identifier or link, then compare each selected platform against its requested count. Preserve unknown values as `null`; never convert them to zero.
+Require every counted record to contain its platform-native content identifier and a non-empty content link. Reject an error/status object even when its filename starts with a platform name. Deduplicate accepted records by native identifier, then compare each selected platform against its requested count. Preserve unknown values as `null`; never convert them to zero.
 
 ## Bilibili complete mode
 

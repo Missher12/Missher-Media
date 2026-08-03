@@ -11,6 +11,7 @@ python3 "$SKILL_DIR/scripts/preflight.py" \
 ```
 
 Add `--live` before real collection. Live preflight only probes the existing CDP endpoint; it does not start Chrome.
+The collection runner repeats preflight against the exact controller or platform search entrypoint it will execute.
 
 ## Creator collection
 

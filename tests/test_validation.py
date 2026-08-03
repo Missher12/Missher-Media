@@ -71,6 +71,21 @@ def test_validation_rejects_malformed_or_unexpected_top_level_json(tmp_path, pay
     assert result["errors"]
 
 
+def test_validation_rejects_error_object_disguised_by_platform_filename(tmp_path):
+    path = tmp_path / "weibo_20260803_000000.json"
+    path.write_text(json.dumps([{"error": "login expired"}]), encoding="utf-8")
+    started_ns = path.stat().st_mtime_ns - 1
+
+    result = validate_run(
+        (path,), CollectionRequest(platforms=("weibo",), count=1), started_ns
+    )
+
+    assert result["status"] == "failed"
+    assert result["counts"] == {"weibo": 0}
+    assert result["evidence"] == []
+    assert any("content identity" in error for error in result["errors"])
+
+
 def test_validation_rejects_stale_evidence(tmp_path):
     path = copy_fixture(tmp_path, "douyin_creator.json")
     started_ns = path.stat().st_mtime_ns + 1_000_000

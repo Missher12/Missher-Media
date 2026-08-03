@@ -47,6 +47,10 @@ def main():
         print("risk signal 471: synthetic stop", file=sys.stderr, flush=True)
         time.sleep(float(os.environ.get("MEDIA_MISSHER_FAKE_SLEEP", "5")))
         return 75
+    if mode == "blocked_wait":
+        print("account blocked: synthetic stop", file=sys.stderr, flush=True)
+        time.sleep(float(os.environ.get("MEDIA_MISSHER_FAKE_SLEEP", "5")))
+        return 75
     if mode == "fail":
         print("synthetic failure", file=sys.stderr)
         return 3
@@ -61,6 +65,12 @@ def main():
     else:
         platforms = (script_name.removeprefix("scrape_").removesuffix(".py"),)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    native_id_keys = {
+        "bilibili": "dynamic_id",
+        "xhs": "note_id",
+        "douyin": "aweme_id",
+        "weibo": "mblog_id",
+    }
     for platform in platforms:
         requested = getattr(args, f"{platform}_count", None)
         count = requested if requested is not None else args.count
@@ -72,6 +82,7 @@ def main():
             {
                 "platform": platform,
                 "id": f"synthetic-{platform}-{index}",
+                native_id_keys[platform]: f"synthetic-{platform}-{index}",
                 "title": "synthetic title",
                 "link": f"https://example.invalid/{platform}/{index}",
                 "date": "2026-01-01",

@@ -116,6 +116,7 @@ def test_skill_preserves_required_safety_contracts():
         "preflight",
         "--no-feishu",
         "risk-stopped",
+        "blocked",
         "current run",
         "captcha",
         "proxy rotation",

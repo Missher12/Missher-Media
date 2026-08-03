@@ -24,7 +24,7 @@ Read [references/commands.md](references/commands.md) before collection. Read [r
 1. Resolve configuration with CLI values taking precedence over environment values and the private mode-`0600` profile.
 2. Run `scripts/preflight.py`. For real collection, require live CDP preflight to pass without starting or restarting Chrome.
 3. Run `scripts/run_collection.py` once. It creates a unique private run directory, forces JSON staging, and applies `--no-feishu` to the multi-platform engine.
-4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, or cooldown signals. Accept no automatic retry after a risk stop.
+4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, `blocked`, or cooldown signals. Accept no automatic retry after a risk stop.
 5. Validate only files from the current run and its recorded start time. Never accept `latest`, a reused directory, an old artifact, a symlink, an exit code, or a console checkmark as sufficient evidence.
 6. Report at most three metadata-only samples (platform and field count) plus absolute current-run evidence paths. Never echo collected content in a summary.
 

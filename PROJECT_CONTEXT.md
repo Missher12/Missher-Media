@@ -19,9 +19,9 @@ The external runtime includes work governed by the Non-Commercial Learning Licen
 - Delivery branch: `codex/media-missher-skill` (implementation prepared in `codex/media-missher-implementation` for fast-forward merge)
 - Design: completed in `docs/superpowers/specs/2026-08-03-media-missher-codex-skill-design.md`
 - Implementation plan: recorded in `docs/superpowers/plans/2026-08-03-media-missher-codex-skill.md`
-- Current phase: final verification and installation complete; independent whole-change review and delivery-branch merge remain.
+- Current phase: final verification, installation, and independent whole-change review complete; only delivery-branch fast-forward merge remains.
 - Installed skill: `/Users/missher/.codex/skills/media-missher`
-- Verification command: `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-socket python -m pytest -q -p no:cacheprovider --disable-socket`. The final candidate passes 106 offline tests, official skill validation, special-character-path portability, real-engine live preflight, and staged reviews.
+- Verification command: `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-socket python -m pytest -q -p no:cacheprovider --disable-socket`. The final candidate passes 109 offline tests, official skill validation, special-character-path portability, real-engine live preflight, staged reviews, and an independent whole-change review.
 - Live compatibility: Xiaohongshu, Douyin, and Weibo each produced and validated one current record in the sequential four-platform run. Bilibili produced and validated one complete current record after its required platform page was temporarily opened. Both runs had no Feishu artifacts, risk signal, or timeout; the temporary page was closed.
 - External runtime integrity: the source aggregate used for the installation gate was `d1aad006f1ce6f6030c57f08652dae1f9307ab38e801c12d1e806d963ea0e5f3` before and after installation, and no source file had a current-day modification time. This aggregate includes the engine's `cache` Python package while excluding only runtime virtual environments, bytecode caches, data, and Playwright artifacts.
 

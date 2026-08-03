@@ -686,17 +686,27 @@ def _platform_from_record(record: Mapping, path: Path) -> str | None:
     return None
 
 
-def _record_identity(record: Mapping, platform: str) -> str:
-    keys = {
-        "bilibili": ("dynamic_id", "bvid", "link"),
-        "xhs": ("note_id", "link"),
-        "douyin": ("aweme_id", "link"),
-        "weibo": ("mblog_id", "link"),
-    }[platform]
+_NATIVE_ID_KEYS = {
+    "bilibili": ("dynamic_id", "bvid"),
+    "xhs": ("note_id",),
+    "douyin": ("aweme_id",),
+    "weibo": ("mblog_id",),
+}
+
+
+def _record_identity(record: Mapping, platform: str) -> str | None:
+    keys = _NATIVE_ID_KEYS[platform]
     for key in keys:
         if record.get(key) not in (None, ""):
             return f"{platform}:{key}:{record[key]}"
-    return f"{platform}:anonymous:{json.dumps(record, sort_keys=True, ensure_ascii=False)}"
+    return None
+
+
+def _has_minimum_content(record: Mapping, platform: str) -> bool:
+    link = record.get("link")
+    return _record_identity(record, platform) is not None and bool(
+        isinstance(link, str) and link.strip()
+    )
 
 
 def _parse_observed_ns(value) -> int | None:
@@ -780,7 +790,7 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
             continue
         if isinstance(payload, dict):
             status = str(payload.get("status", "")).lower().replace("_", "-")
-            if status in {"risk", "risk-stopped", "locked", "cooldown"}:
+            if status in {"risk", "risk-stopped", "locked", "blocked", "cooldown"}:
                 risk_stopped = True
                 diagnostics.append({"path": str(path), "status": status})
                 continue
@@ -799,19 +809,27 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
         except ValueError as exc:
             errors.append(f"invalid records in {path}: {exc}")
             continue
-        evidence.append(str(path))
+        accepted_record = False
         for record in records:
             platform = _platform_from_record(record, path)
             if platform not in request.platforms:
                 errors.append(f"unexpected or unknown platform record in {path}")
                 continue
+            if not _has_minimum_content(record, platform):
+                errors.append(f"record lacks a native content identity or link in {path}")
+                continue
             collected[platform].append(record)
+            accepted_record = True
+        if accepted_record:
+            evidence.append(str(path))
 
     deduplicated: dict[str, list[dict]] = {}
     for platform, records in collected.items():
         unique = {}
         for record in records:
-            unique.setdefault(_record_identity(record, platform), record)
+            identity = _record_identity(record, platform)
+            if identity is not None:
+                unique.setdefault(identity, record)
         deduplicated[platform] = list(unique.values())
 
     counts = {platform: len(records) for platform, records in deduplicated.items()}
@@ -859,7 +877,7 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
 
 
 _RISK_PATTERN = re.compile(
-    r"(?i)(?:\b(?:403|429|461|471|999|risk|locked)\b|\bcooldown(?:\b|_))"
+    r"(?i)(?:\b(?:403|429|461|471|999|risk|locked|blocked)\b|\bcooldown(?:\b|_))"
 )
 
 
@@ -874,7 +892,16 @@ def run_collection_request(
     command_environment: Mapping[str, str] | None = None,
 ) -> dict:
     runner = preflight_runner or run_preflight
-    preflight_report = runner(engine_root, live=True, cdp_url=cdp_url, timeout=10.0)
+    entrypoint_name = (
+        f"scrape_{request.platforms[0]}.py" if request.search else "scrape_all.py"
+    )
+    preflight_report = runner(
+        engine_root,
+        live=True,
+        cdp_url=cdp_url,
+        timeout=10.0,
+        entrypoint_names=(entrypoint_name,),
+    )
     if preflight_report.get("status") != "ok":
         return {
             "status": "preflight-failed",
@@ -980,15 +1007,22 @@ def run_preflight(
     cdp_url: str = DEFAULT_CDP_URL,
     timeout: float = 10.0,
     urlopen: Callable | None = None,
+    entrypoint_names: tuple[str, ...] | None = None,
 ) -> dict:
     if timeout <= 0:
         raise ConfigurationError("timeout must be greater than zero")
     root = Path(engine_root).expanduser().resolve()
-    entrypoint = root / "scripts" / "scrape_all.py"
+    allowed_entrypoints = {"scrape_all.py", *(f"scrape_{name}.py" for name in PLATFORMS)}
+    requested_entrypoints = entrypoint_names or ("scrape_all.py",)
+    if not requested_entrypoints or any(
+        name not in allowed_entrypoints for name in requested_entrypoints
+    ):
+        raise ConfigurationError("unknown preflight entrypoint")
+    entrypoints = tuple(root / "scripts" / name for name in requested_entrypoints)
     checks = {
         "engine_root": root.is_dir(),
         "interpreter": False,
-        "entrypoint": entrypoint.is_file(),
+        "entrypoint": all(entrypoint.is_file() for entrypoint in entrypoints),
         "entrypoint_help": False,
     }
     errors: list[str] = []
@@ -1001,24 +1035,33 @@ def run_preflight(
         checks["interpreter"] = True
     except ConfigurationError as exc:
         errors.append(str(exc))
-    if not checks["entrypoint"]:
-        errors.append(f"entrypoint is missing: {entrypoint}")
+    for entrypoint in entrypoints:
+        if not entrypoint.is_file():
+            errors.append(f"entrypoint is missing: {entrypoint}")
 
     if checks["interpreter"] and checks["entrypoint"] and interpreter is not None:
-        try:
-            completed = subprocess.run(
-                [str(interpreter), str(entrypoint), "--help"],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            checks["entrypoint_help"] = completed.returncode == 0
-            if not checks["entrypoint_help"]:
-                errors.append(f"entrypoint --help exited with status {completed.returncode}")
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            errors.append(f"entrypoint --help failed: {type(exc).__name__}: {exc}")
+        help_checks = []
+        for entrypoint in entrypoints:
+            try:
+                completed = subprocess.run(
+                    [str(interpreter), str(entrypoint), "--help"],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                help_checks.append(completed.returncode == 0)
+                if completed.returncode != 0:
+                    errors.append(
+                        f"entrypoint --help exited with status {completed.returncode}: {entrypoint}"
+                    )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                help_checks.append(False)
+                errors.append(
+                    f"entrypoint --help failed: {entrypoint}: {type(exc).__name__}: {exc}"
+                )
+        checks["entrypoint_help"] = all(help_checks)
 
     cdp: dict[str, str | None] | None = None
     if live:
