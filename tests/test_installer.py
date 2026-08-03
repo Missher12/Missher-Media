@@ -30,7 +30,12 @@ class FakeExecutor:
             interpreter.parent.mkdir(parents=True)
             interpreter.write_text(
                 "#!/bin/sh\n"
-                "if [ \"$1\" = \"-c\" ]; then exit 0; fi\n"
+                "if [ \"$1\" = \"-c\" ]; then\n"
+                "  case \"$2\" in\n"
+                f"    *version_info*) printf '%s\\n' '{sys.version_info[0]}.{sys.version_info[1]}'; exit 0 ;;\n"
+                "    *) exit 0 ;;\n"
+                "  esac\n"
+                "fi\n"
                 f"exec {shlex.quote(str(Path(sys.executable).resolve()))} \"$@\"\n",
                 encoding="utf-8",
             )
@@ -313,6 +318,53 @@ def test_install_reuses_existing_venv_without_recreating_it(tmp_path: Path) -> N
 
     assert first.current.parent.joinpath("venv", "bin", "python").is_file()
     assert not any(command[1:3] == ("-m", "venv") for command, _ in executor.calls)
+
+
+@pytest.mark.parametrize("old_version", ("3.9", "3.10"))
+def test_upgrade_rebuilds_only_the_staged_venv_when_existing_python_is_too_old(
+    tmp_path: Path,
+    old_version: str,
+) -> None:
+    first = _install(tmp_path)
+    active_interpreter = first.venv / "bin" / "python"
+    active_interpreter.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-c\" ]; then\n"
+        "  case \"$2\" in\n"
+        f"    *version_info*) printf '%s\\n' '{old_version}'; exit 0 ;;\n"
+        "  esac\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    active_interpreter.chmod(0o700)
+    old_bytes = active_interpreter.read_bytes()
+    executor = FakeExecutor()
+
+    upgraded = _install(tmp_path, executor=executor)
+
+    assert any(command[1:3] == ("-m", "venv") for command, _ in executor.calls)
+    assert upgraded.venv_previous is not None
+    assert upgraded.venv_previous.joinpath("bin", "python").read_bytes() == old_bytes
+    assert upgraded.venv.joinpath("bin", "python").read_bytes() != old_bytes
+
+
+def test_failed_old_venv_rebuild_leaves_the_active_venv_unchanged(tmp_path: Path) -> None:
+    first = _install(tmp_path)
+    active_interpreter = first.venv / "bin" / "python"
+    active_interpreter.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-c\" ]; then printf '%s\\n' '3.10'; exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    active_interpreter.chmod(0o700)
+    old_bytes = active_interpreter.read_bytes()
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        _install(tmp_path, executor=FakeExecutor(failure="pip install"))
+
+    assert first.venv.joinpath("bin", "python").read_bytes() == old_bytes
 
 
 def test_venv_and_pip_use_isolated_sanitized_subprocesses(tmp_path: Path, monkeypatch) -> None:

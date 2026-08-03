@@ -401,13 +401,15 @@ def install(
             if not venv.is_dir():
                 raise ValueError("runtime venv is not a directory")
             shutil.copytree(venv, venv_stage, symlinks=True, ignore=_IGNORE)
-        else:
+        interpreter = venv_stage / "bin" / "python"
+        staged_version = _runtime_python_version(interpreter) if venv_stage.exists() else None
+        if staged_version is None or staged_version < (3, 11):
+            _clean_owned(venv_stage)
             _invoke(
                 executor,
                 [str(runtime_python), "-m", "venv", str(venv_stage)],
                 env=subprocess_environment,
             )
-        interpreter = venv_stage / "bin" / "python"
         if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
             raise ValueError("runtime interpreter is missing or not executable")
         _invoke(
