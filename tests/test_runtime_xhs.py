@@ -445,6 +445,49 @@ def test_complete_uses_current_detail_response_and_modal_comments() -> None:
     assert record["metric_sources"] == {"liked": "detail_api", "comments": "detail_api", "collected": "detail_api", "shares": "detail_api"}
 
 
+def test_complete_captures_exact_edith_detail_response() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    detail.url = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert record["engagement_source"] == "detail_api"
+    assert record["engagement_observed_at"] is not None
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    (
+        ("https://edith.xiaohongshu.com/api/sns/web/v1/feed", True),
+        ("https://www.xiaohongshu.com/api/sns/web/v1/feed", True),
+        ("https://edith.xiaohongshu.com.evil.example/api/sns/web/v1/feed", False),
+        ("https://evil-edith.xiaohongshu.com/api/sns/web/v1/feed", False),
+        ("https://www.edith.xiaohongshu.com/api/sns/web/v1/feed", False),
+        ("https://edith.xiaohongshu.com/api/sns/web/v1/feed/extra", False),
+    ),
+)
+def test_detail_response_requires_exact_observed_host_and_path(
+    url: str,
+    expected: bool,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _is_detail_response
+
+    assert _is_detail_response(Response({}, url=url)) is expected
+
+
 def test_incomplete_detail_risk_stops_without_further_clicks_and_http_is_checked_before_json() -> None:
     from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
     page = Page(responses=[creator_response(note("one"), note("two")), Response("not-json", status=403, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")], cards=[{"note_id": "one"}, {"note_id": "two"}])

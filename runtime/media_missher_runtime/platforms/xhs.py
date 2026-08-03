@@ -31,6 +31,7 @@ _HOST = "www.xiaohongshu.com"
 _HOSTS = ("xiaohongshu.com", _HOST)
 _CREATOR_PATH = "/api/sns/web/v1/user_posted"
 _DETAIL_PATH = "/api/sns/web/v1/feed"
+_DETAIL_RESPONSE_HOSTS = frozenset({_HOST, "edith.xiaohongshu.com"})
 _NOTE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _PLACEHOLDERS = frozenset({"", "-", "--", "暂无标题", "untitled", "无标题"})
 _CHALLENGE_PHRASES = (
@@ -330,7 +331,7 @@ def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool
 
 def _is_detail_response(response: Any) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return parsed.hostname == _HOST and parsed.path == _DETAIL_PATH
+    return parsed.hostname in _DETAIL_RESPONSE_HOSTS and parsed.path == _DETAIL_PATH
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:
