@@ -419,22 +419,77 @@ def test_search_dispatches_one_keyword_request(tmp_path: Path) -> None:
     assert request.keyword == "synthetic topic" and request.uid is None and request.count == 3
 
 
-def test_preflight_failure_happens_before_a_run_directory_is_created(tmp_path: Path) -> None:
-    from runtime.media_missher_runtime.cli import main
+def test_platform_preflight_failure_emits_only_a_safe_line_before_inner_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from runtime.media_missher_runtime.browser import PreconditionError
+    from runtime.media_missher_runtime.cli import PlatformPreflightError, main
 
     class PreflightFailure(FakeDispatcher):
         async def preflight(self, requests: object) -> None:
-            raise RuntimeError("page is missing")
+            raise PlatformPreflightError(
+                "xhs",
+                PreconditionError(
+                    "https://server.invalid/?uid=private-xhs page is missing"
+                ),
+            )
 
     dispatcher = PreflightFailure()
     code = main(
-        ["search", "--platform", "weibo", "--keyword", "topic", "--output-dir", str(tmp_path)],
+        [
+            "creator",
+            "--platforms",
+            "bilibili,xhs",
+            "--bilibili-uid",
+            "private-bili",
+            "--xhs-uid",
+            "private-xhs",
+            "--output-dir",
+            str(tmp_path),
+        ],
         dispatcher=dispatcher,
     )
 
-    assert code == 1
     assert dispatcher.closed is True
+    captured = capsys.readouterr()
+    assert code == 78
+    assert captured.out == ""
+    assert captured.err == (
+        "media-missher-diagnostic platform=xhs "
+        "kind=precondition code=precondition-failed\n"
+    )
     assert not list(tmp_path.glob("run-*"))
+    assert "server.invalid" not in captured.err
+    assert "private-xhs" not in captured.err
+
+
+def test_runtime_dispatcher_preflight_attaches_only_the_failing_platform() -> None:
+    from runtime.media_missher_runtime.browser import PreconditionError
+    from runtime.media_missher_runtime.cli import (
+        PlatformPreflightError,
+        RuntimeDispatcher,
+    )
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    class Session:
+        async def require_authenticated_page(self, platform: str) -> object:
+            if platform == "xhs":
+                raise PreconditionError("private server detail")
+            return object()
+
+    dispatcher = RuntimeDispatcher("http://127.0.0.1:9222")
+    dispatcher.browser = Session()
+    requests = [
+        CollectionRequest(platform="bilibili", count=1, uid="one"),
+        CollectionRequest(platform="xhs", count=1, uid="two"),
+    ]
+
+    with pytest.raises(PlatformPreflightError) as failure:
+        _run(dispatcher.preflight(requests))
+
+    assert failure.value.platform == "xhs"
+    assert isinstance(failure.value.cause, PreconditionError)
+    assert str(failure.value) == "platform preflight failed"
 
 
 @pytest.mark.parametrize(

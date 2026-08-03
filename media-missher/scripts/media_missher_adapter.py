@@ -1382,6 +1382,27 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
 _RISK_PATTERN = re.compile(
     r"(?i)(?:\b(?:403|429|461|471|999|risk|locked|blocked)\b|\bcooldown(?:\b|_))"
 )
+_RUNTIME_PRECONDITION_PATTERN = re.compile(
+    r"\Amedia-missher-diagnostic "
+    r"platform=(bilibili|xhs|douyin|weibo) "
+    r"kind=precondition code=precondition-failed\r?\n?\Z"
+)
+
+
+def _runtime_precondition_diagnostics(
+    *, returncode: int, stderr: str
+) -> dict[str, dict[str, str]] | None:
+    if returncode != 78:
+        return None
+    match = _RUNTIME_PRECONDITION_PATTERN.fullmatch(stderr)
+    if match is None:
+        return None
+    return {
+        match.group(1): {
+            "kind": "precondition",
+            "code": "precondition-failed",
+        }
+    }
 
 
 def _run_collection_request_unlocked(
@@ -1441,6 +1462,10 @@ def _run_collection_request_unlocked(
     stdout = completed.stdout_path.read_text(encoding="utf-8", errors="replace")
     stderr = completed.stderr_path.read_text(encoding="utf-8", errors="replace")
     combined_log = f"{stdout}\n{stderr}"
+    runtime_preflight_diagnostics = _runtime_precondition_diagnostics(
+        returncode=completed.returncode,
+        stderr=stderr,
+    )
     discovery_errors: list[str] = []
     try:
         evidence = discover_current_json(run_dir, started_ns=started_ns)
@@ -1456,7 +1481,10 @@ def _run_collection_request_unlocked(
     if completed.returncode != 0:
         errors.append(f"engine exited with status {completed.returncode}")
     errors.extend(validation["errors"])
-    if (
+    if runtime_preflight_diagnostics is not None:
+        errors = ["runtime platform preflight failed"]
+        status = "preflight-failed"
+    elif (
         completed.risk_detected
         or _RISK_PATTERN.search(combined_log)
         or validation["status"] == "risk-stopped"
@@ -1490,7 +1518,7 @@ def _run_collection_request_unlocked(
             status = "partial" if validation["records"] else "failed"
 
     validation_summary = {key: value for key, value in validation.items() if key != "records"}
-    return {
+    summary = {
         "status": status,
         "run_dir": str(run_dir),
         "evidence": list(validation["evidence"]),
@@ -1504,6 +1532,9 @@ def _run_collection_request_unlocked(
         "preflight": preflight_report,
         "validation": validation_summary,
     }
+    if runtime_preflight_diagnostics is not None:
+        summary["diagnostics"] = runtime_preflight_diagnostics
+    return summary
 
 
 def _preflight_failure(error: str, *, checks: Mapping[str, bool]) -> dict:

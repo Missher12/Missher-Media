@@ -85,6 +85,17 @@ class CollectorContractError(RuntimeError):
     """Signal that a collector returned a value outside the runtime contract."""
 
 
+class PlatformPreflightError(RuntimeError):
+    """A platform page failed the private controller preflight."""
+
+    def __init__(self, platform: str, cause: PreconditionError) -> None:
+        if platform not in PLATFORMS or not isinstance(cause, PreconditionError):
+            raise ValueError("invalid platform preflight failure")
+        self.platform = platform
+        self.cause = cause
+        super().__init__("platform preflight failed")
+
+
 class RuntimeDispatcher:
     """Own one connection to the user's existing browser for a serial run."""
 
@@ -107,7 +118,10 @@ class RuntimeDispatcher:
         if self.browser is None:
             raise RuntimeError("browser dispatcher is not connected")
         for platform in dict.fromkeys(request.platform for request in requests):
-            await self.browser.require_authenticated_page(platform)
+            try:
+                await self.browser.require_authenticated_page(platform)
+            except PreconditionError as error:
+                raise PlatformPreflightError(platform, error) from error
 
     async def collect(self, request: CollectionRequest) -> list[dict[str, Any]]:
         if self.browser is None:
@@ -440,9 +454,25 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
             enforce_timeout=not injected,
         )
         return _run_immediate(operation) if injected else asyncio.run(operation)
+    except PlatformPreflightError as error:
+        print(
+            "media-missher-diagnostic "
+            f"platform={error.platform} "
+            "kind=precondition code=precondition-failed",
+            file=sys.stderr,
+        )
+        return 78
     except Exception as exc:
         print(f"runtime failed: {type(exc).__name__}", file=sys.stderr)
         return 1
 
 
-__all__ = ["DEFAULT_CDP_URL", "PLATFORMS", "RiskStop", "RuntimeDispatcher", "build_parser", "main"]
+__all__ = [
+    "DEFAULT_CDP_URL",
+    "PLATFORMS",
+    "PlatformPreflightError",
+    "RiskStop",
+    "RuntimeDispatcher",
+    "build_parser",
+    "main",
+]

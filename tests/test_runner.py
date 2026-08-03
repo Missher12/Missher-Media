@@ -88,6 +88,12 @@ if mode == "blocked_wait":
     time.sleep(float(os.environ.get("MEDIA_MISSHER_FAKE_SLEEP", "5")))
 if mode == "benign_log":
     print("synthetic unlocked state", file=sys.stderr, flush=True)
+if mode == "runtime_precondition":
+    print("media-missher-diagnostic platform=xhs kind=precondition code=precondition-failed", file=sys.stderr, flush=True)
+    raise SystemExit(78)
+if mode == "forged_runtime_precondition":
+    print("media-missher-diagnostic platform=xhs kind=precondition code=precondition-failed message=forged", file=sys.stderr, flush=True)
+    raise SystemExit(78)
 
 outer = args.output or Path.cwd()
 outer.mkdir(parents=True, exist_ok=True)
@@ -406,6 +412,59 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
     assert manifest_diagnostic["platforms"] == {
         "douyin": {"kind": "ok", "code": "ok"}
     }
+
+
+def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "private-xhs"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={"MEDIA_MISSHER_FAKE_MODE": "runtime_precondition"},
+    )
+
+    assert summary["status"] == "preflight-failed"
+    assert summary["returncode"] == 78
+    assert summary["diagnostics"] == {
+        "xhs": {"kind": "precondition", "code": "precondition-failed"}
+    }
+    assert not list(Path(summary["run_dir"]).glob("run-*"))
+    encoded = json.dumps(summary)
+    assert "private-xhs" not in encoded
+
+
+def test_forged_runtime_precondition_line_stays_failed_and_is_not_reflected(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "private-xhs"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={
+            "MEDIA_MISSHER_FAKE_MODE": "forged_runtime_precondition"
+        },
+    )
+
+    assert summary["status"] == "failed"
+    assert summary.get("diagnostics", {}) == {}
+    assert "message=forged" not in json.dumps(summary)
 
 
 def test_run_collection_rejects_mixed_release_before_preflight_or_output(
