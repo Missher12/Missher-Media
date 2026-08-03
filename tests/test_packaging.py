@@ -179,6 +179,48 @@ def test_documentation_covers_shared_runtime_operations_and_recovery():
         assert phrase in corpus, f"documentation is missing {phrase!r}"
 
 
+def test_validation_documentation_defines_the_strict_five_key_diagnostic_contract():
+    text = (SKILL / "references" / "validation.md").read_text(encoding="utf-8")
+
+    assert "`counts`, `paths`, `platforms`, `status`, and `diagnostics`" in text
+    assert "exactly `kind` and `code`" in text
+    for kind in (
+        "ok",
+        "result",
+        "not-run",
+        "dependency",
+        "precondition",
+        "source-response",
+        "risk-stop",
+        "timeout",
+        "collector-contract",
+        "internal",
+    ):
+        assert f"`{kind}`" in text
+    for code in (
+        "count-shortfall",
+        "incomplete-record",
+        "preflight-aborted",
+        "prior-risk-stop",
+        "module-not-found",
+        "precondition-failed",
+        "source-response-failed",
+        "http-403",
+        "http-429",
+        "payload-461",
+        "payload-471",
+        "payload-999",
+        "challenge",
+        "risk-signal",
+        "platform-timeout",
+        "creator-capture-timeout",
+        "detail-capture-timeout",
+        "invalid-records",
+        "unexpected",
+    ):
+        assert f"`{code}`" in text
+
+
 def test_skill_preserves_read_only_requests_and_requires_collection_authorization():
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 

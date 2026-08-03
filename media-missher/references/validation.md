@@ -4,7 +4,24 @@ Validation accepts only artifacts from one unique run whose modification time is
 
 ## Validate the runtime manifest
 
-The manifest must contain exactly `counts`, `paths`, `platforms`, and `status`. Artifact names must be relative basenames inside the run directory. A platform marked `complete` must have its named JSON artifact.
+The manifest must contain exactly `counts`, `paths`, `platforms`, `status`, and `diagnostics`. The keys in `counts`, `platforms`, and `diagnostics` must identify the same non-empty subset of `bilibili`, `xhs`, `douyin`, and `weibo`.
+
+Each diagnostic object contains exactly `kind` and `code`. Accept only these kind-to-code pairs:
+
+- `ok`: `ok`
+- `result`: `count-shortfall`, `incomplete-record`
+- `not-run`: `preflight-aborted`, `prior-risk-stop`
+- `dependency`: `module-not-found`
+- `precondition`: `precondition-failed`
+- `source-response`: `source-response-failed`
+- `risk-stop`: `http-403`, `http-429`, `payload-461`, `payload-471`, `payload-999`, `challenge`, `risk-signal`
+- `timeout`: `platform-timeout`, `creator-capture-timeout`, `detail-capture-timeout`
+- `collector-contract`: `invalid-records`
+- `internal`: `unexpected`
+
+The platform-status-to-kind enum is strict: `complete` accepts `ok`; `shortfall` and `incomplete` accept `result`; `failed` accepts `dependency`, `precondition`, `source-response`, `timeout`, `collector-contract`, or `internal`; `risk-stopped` accepts `risk-stop`; and `not-run` accepts `not-run`. In addition, `complete` requires `ok`/`ok`, `shortfall` requires `result`/`count-shortfall`, and `incomplete` requires `result`/`incomplete-record`. The overall status must agree with all platform statuses.
+
+Artifact values must be exact safe basenames with no URL, query, UID, directory, or duplicate path. A selected platform may name only `<platform>.json`; Xiaohongshu may additionally name `xhs_report.json` and `xhs_checkpoint.json` through the `xhs_report` and `xhs_checkpoint` keys. A platform marked `complete` must have its platform content artifact.
 
 Accept only documented platform statuses: `complete`, `shortfall`, `incomplete`, `failed`, `risk-stopped`, and `not-run`. A risk status wins over partial evidence. A failed, shortfall, incomplete, or not-run platform prevents a success result.
 

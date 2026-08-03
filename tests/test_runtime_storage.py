@@ -29,6 +29,18 @@ def test_run_store_writes_private_json_without_losing_values(tmp_path: Path) -> 
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize("name", ("manifest.json", "./manifest.json", Path("manifest.json")))
+def test_public_json_writer_reserves_manifest_name(tmp_path: Path, name: str | Path) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "reserved-manifest")
+
+    with pytest.raises(ValueError, match="reserved"):
+        store.write_json(name, {"untrusted": True})
+
+    assert not (store.path / "manifest.json").exists()
+
+
 def test_manifest_accepts_only_strict_status_and_diagnostic_metadata(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.storage import RunStore
 
@@ -61,6 +73,119 @@ def test_manifest_accepts_only_strict_status_and_diagnostic_metadata(tmp_path: P
             diagnostics={},
             extra="not allowed",
         )
+
+
+@pytest.mark.parametrize(
+    ("counts", "paths", "platforms", "status", "diagnostics"),
+    (
+        (
+            {"unknown": 0},
+            {},
+            {"unknown": "shortfall"},
+            "failed",
+            {"unknown": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"unexpected": "unexpected.json"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"xhs_report": "xhs_report.json"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"bilibili": "https://example.invalid/bilibili.json?uid=private"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"bilibili": "bilibili.json?uid=private"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"bilibili": "bilibili-private-uid.json"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"bilibili": 0},
+            {"bilibili": "/tmp/bilibili.json"},
+            {"bilibili": "shortfall"},
+            "failed",
+            {"bilibili": {"kind": "result", "code": "count-shortfall"}},
+        ),
+        (
+            {"xhs": 0},
+            {"xhs": "xhs.json", "xhs_report": "xhs.json"},
+            {"xhs": "complete"},
+            "complete",
+            {"xhs": {"kind": "ok", "code": "ok"}},
+        ),
+        (
+            {"weibo": 0},
+            {},
+            {"weibo": "complete"},
+            "complete",
+            {"weibo": {"kind": "ok", "code": "ok"}},
+        ),
+    ),
+)
+def test_manifest_rejects_unknown_platforms_and_unsafe_artifact_contracts(
+    tmp_path: Path,
+    counts: dict[str, int],
+    paths: dict[str, str],
+    platforms: dict[str, str],
+    status: str,
+    diagnostics: dict[str, dict[str, str]],
+) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "strict-artifacts")
+
+    with pytest.raises(ValueError, match="manifest"):
+        store.write_manifest(
+            counts=counts,
+            paths=paths,
+            platforms=platforms,
+            status=status,
+            diagnostics=diagnostics,
+        )
+
+
+def test_manifest_accepts_exact_xhs_content_and_aggregate_basenames(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "xhs-artifacts")
+    target = store.write_manifest(
+        counts={"xhs": 1},
+        paths={
+            "xhs": "xhs.json",
+            "xhs_report": "xhs_report.json",
+            "xhs_checkpoint": "xhs_checkpoint.json",
+        },
+        platforms={"xhs": "complete"},
+        status="complete",
+        diagnostics={"xhs": {"kind": "ok", "code": "ok"}},
+    )
+
+    assert json.loads(target.read_text(encoding="utf-8"))["paths"] == {
+        "xhs": "xhs.json",
+        "xhs_report": "xhs_report.json",
+        "xhs_checkpoint": "xhs_checkpoint.json",
+    }
 
 
 def test_atomic_json_syncs_file_and_containing_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

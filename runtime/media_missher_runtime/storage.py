@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+PLATFORMS = frozenset({"bilibili", "xhs", "douyin", "weibo"})
+
 DIAGNOSTIC_CODES = {
     "ok": frozenset({"ok"}),
     "result": frozenset({"count-shortfall", "incomplete-record"}),
@@ -88,6 +90,12 @@ class RunStore:
 
     def write_json(self, name: str, value: Any) -> Path:
         target = self.path / name
+        if target.name == "manifest.json":
+            raise ValueError("manifest.json is reserved for write_manifest")
+        return self._write_json_atomic(name, value)
+
+    def _write_json_atomic(self, name: str, value: Any) -> Path:
+        target = self.path / name
         if target.parent != self.path:
             raise ValueError("JSON path must stay inside the run directory")
         descriptor, temporary_name = tempfile.mkstemp(prefix=".tmp-", dir=self.path)
@@ -121,13 +129,34 @@ class RunStore:
         if extra:
             raise ValueError("manifest supports only the strict runtime schema")
         selected = set(platforms)
-        if not selected or set(counts) != selected or set(diagnostics) != selected:
+        if (
+            not selected
+            or not selected.issubset(PLATFORMS)
+            or set(counts) != selected
+            or set(diagnostics) != selected
+        ):
             raise ValueError("manifest platform keys do not match")
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 0
             for value in counts.values()
         ):
             raise ValueError("manifest counts are invalid")
+        allowed_paths = set(selected)
+        if "xhs" in selected:
+            allowed_paths.update({"xhs_report", "xhs_checkpoint"})
+        if set(paths) - allowed_paths:
+            raise ValueError("manifest has an unexpected artifact key")
+        if any(not isinstance(value, str) for value in paths.values()):
+            raise ValueError("manifest artifact paths must be strings")
+        if len(set(paths.values())) != len(paths):
+            raise ValueError("manifest artifact paths must be unique")
+        if any(value != f"{key}.json" for key, value in paths.items()):
+            raise ValueError("manifest artifact paths must be exact safe basenames")
+        if any(
+            platform_status == "complete" and platform not in paths
+            for platform, platform_status in platforms.items()
+        ):
+            raise ValueError("manifest is missing a completed platform artifact")
         for platform in selected:
             _validate_diagnostic(platforms[platform], diagnostics[platform])
         if status not in {"complete", "failed", "risk-stopped"}:
@@ -141,7 +170,7 @@ class RunStore:
         )
         if status != expected_status:
             raise ValueError("manifest overall status is inconsistent")
-        return self.write_json(
+        return self._write_json_atomic(
             "manifest.json",
             {
                 "counts": dict(counts),

@@ -352,6 +352,28 @@ def test_discover_current_json_rejects_multiple_fresh_inner_runs(tmp_path):
         discover_current_json(tmp_path, started_ns=started_ns)
 
 
+def test_discover_current_json_rejects_single_run_legacy_four_key_manifest(tmp_path):
+    started_ns = time.time_ns()
+    inner = tmp_path / "run-current"
+    inner.mkdir(mode=0o700)
+    artifact = inner / "bilibili.json"
+    artifact.write_text("[]", encoding="utf-8")
+    (inner / "manifest.json").write_text(
+        json.dumps(
+            {
+                "counts": {"bilibili": 0},
+                "paths": {"bilibili": "bilibili.json"},
+                "platforms": {"bilibili": "complete"},
+                "status": "complete",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="diagnostic contract"):
+        discover_current_json(tmp_path, started_ns=started_ns)
+
+
 def test_discover_current_json_rejects_unexpected_manifest_path_key(tmp_path):
     started_ns = time.time_ns()
     inner = tmp_path / "run-current"
