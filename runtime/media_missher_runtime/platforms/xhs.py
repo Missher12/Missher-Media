@@ -83,16 +83,32 @@ class XhsCollector:
             raise PreconditionError("Xiaohongshu creator collection requires authorized navigation")
         await _raise_for_challenge(page)
         creator_predicate = lambda response: _is_creator_response(response, self.request.uid)
+        navigation_succeeded = False
+
+        async def navigate() -> None:
+            nonlocal navigation_succeeded
+            await self._navigate_and_check(page, target)
+            navigation_succeeded = True
+
         try:
             response = await _capture_while(
                 page,
                 creator_predicate,
-                lambda: self._navigate_and_check(page, target),
+                navigate,
             )
         except PlaywrightTimeoutError as error:
             await _raise_for_challenge(page)
-            raise CaptureTimeout("creator-capture-timeout") from error
-        records = await self._collect_creator_pages(page, response)
+            if not navigation_succeeded or getattr(page, "url", "") != target:
+                raise CaptureTimeout("creator-capture-timeout") from error
+            observation = await _read_creator_cards(page)
+            await _raise_for_challenge(page)
+            records = _creator_dom_records(
+                _as_sequence(observation.get("cards")), self.request.target_count
+            )
+            if not records:
+                raise CaptureTimeout("creator-capture-timeout") from error
+        else:
+            records = await self._collect_creator_pages(page, response)
         if self.request.complete:
             for record in records:
                 await self._complete_record(page, record)
@@ -415,6 +431,24 @@ def _append_creator(records: list[dict[str, Any]], seen: set[str], items: Sequen
     return added
 
 
+def _creator_dom_records(items: Sequence[Any], target: int | None) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    observed_at = _observed_at()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        record = parse_creator_dom_item(item, observed_at=observed_at)
+        note_id = record["note_id"]
+        if not _safe_note_id(note_id) or note_id in seen:
+            continue
+        seen.add(note_id)
+        records.append(record)
+        if target is not None and len(records) >= target:
+            break
+    return records
+
+
 def _append_search(records: list[dict[str, Any]], seen: set[str], items: Sequence[Mapping[str, Any]], keyword: str, target: int | None) -> int:
     added = 0
     for item in items:
@@ -438,6 +472,25 @@ def parse_creator_item(item: Mapping[str, Any], *, observed_at: str | None = Non
     link = _explore_link(note_id)
     stamp = observed_at or _observed_at()
     return _base_record(note_id, _text(item.get("type")), title, None, link, None, parse_count(info.get("liked_count")), None, None, None, _text(user.get("nickname")), stamp)
+
+
+def parse_creator_dom_item(item: Mapping[str, Any], *, observed_at: str | None = None) -> dict[str, Any]:
+    """Build a minimal creator record from an already-rendered safe DOM card."""
+    note_id = _text(item.get("note_id"))
+    return _base_record(
+        note_id,
+        None,
+        _text(item.get("title")),
+        None,
+        _explore_link(note_id),
+        None,
+        parse_count(item.get("liked")),
+        None,
+        None,
+        None,
+        _text(item.get("author")),
+        observed_at or _observed_at(),
+    )
 
 
 def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str | None = None) -> dict[str, Any]:
@@ -560,6 +613,46 @@ def _missing_completion(record: Mapping[str, Any]) -> list[str]:
         if record.get(field) is None:
             missing.append(field)
     return missing
+
+
+async def _read_creator_cards(page: Any) -> Mapping[str, Any]:
+    value = await page.evaluate("""() => {
+        /* creator DOM fallback */
+        const isVisible = (element) => {
+            if (!element) return false;
+            if (typeof element.checkVisibility === 'function' && !element.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+            })) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return !element.hidden
+                && element.getAttribute('aria-hidden') !== 'true'
+                && style.display !== 'none'
+                && style.visibility !== 'hidden'
+                && Number(style.opacity) !== 0
+                && rect.width > 0
+                && rect.height > 0;
+        };
+        const text = (card, selectors) => {
+            for (const selector of selectors) {
+                const element = card.querySelector(selector);
+                const value = element?.textContent?.trim();
+                if (value) return value;
+            }
+            return null;
+        };
+        const cards = Array.from(document.querySelectorAll(
+            '#userPostedFeeds .note-item[data-note-id]'
+        )).filter(isVisible).map((card) => ({
+            note_id: card.getAttribute('data-note-id'),
+            title: text(card, ['.footer > a.title', '.footer .title']),
+            author: text(card, ['.author-wrapper .name', '.author-wrapper .author', '.author-wrapper']),
+            liked: text(card, ['.like-wrapper .count']),
+        }));
+        return {cards};
+    }""")
+    return value if isinstance(value, Mapping) else {"cards": []}
 
 
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:

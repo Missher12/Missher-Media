@@ -154,6 +154,7 @@ class Page:
     search_settlement_states: list[dict[str, Any]] = field(default_factory=list)
     settlement_checks: int = 0
     wait_timeouts: list[int] = field(default_factory=list)
+    creator_dom_responses: list[Response] = field(default_factory=list)
 
     @property
     def keyboard(self) -> Keyboard:
@@ -182,6 +183,29 @@ class Page:
         self.evaluations.append(script)
         if "window.scrollTo" in script:
             return None
+        if "creator DOM fallback" in script:
+            lowered = script.casefold()
+            for forbidden in (
+                "cookie",
+                "localstorage",
+                "sessionstorage",
+                "xsec_token",
+                "location.search",
+                ".href",
+                "document.body",
+            ):
+                assert forbidden not in lowered
+            cards = [
+                {
+                    key: card.get(key)
+                    for key in ("note_id", "title", "author", "liked")
+                }
+                for card in self.cards
+                if card.get("visible", True)
+            ]
+            self.responses.extend(self.creator_dom_responses)
+            self.creator_dom_responses.clear()
+            return {"cards": cards}
         if "search settlement observation" in script:
             self.events.append("search-settle")
             self.settlement_checks += 1
@@ -226,6 +250,7 @@ class Browser:
     allow_navigation: bool = True
     navigations: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     navigation_status: int | None = None
+    navigation_url_override: str | None = None
 
     def require_page(self, platform: str) -> Page:
         assert platform == "xhs"
@@ -236,6 +261,8 @@ class Browser:
         if not self.allow_navigation:
             raise PreconditionError("navigation")
         await page.goto(url)
+        if self.navigation_url_override is not None:
+            page.url = self.navigation_url_override
         if self.navigation_status is None:
             return None
         return type("NavigationResponse", (), {"status": self.navigation_status})()
@@ -450,6 +477,133 @@ def test_initial_creator_capture_timeout_rechecks_challenge_then_uses_fixed_code
                 Browser(challenged),
             )
         )
+    assert not any("creator DOM fallback" in script for script in challenged.evaluations)
+
+
+def test_initial_creator_timeout_uses_visible_target_dom_cards_without_sensitive_reads() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        cards=[
+            {
+                "note_id": "dom-one",
+                "title": "DOM title",
+                "author": "DOM author",
+                "liked": "1.2万",
+                "visible": True,
+                "href": "/explore/dom-one?xsec_token=must-not-leak",
+                "xsec_token": "must-not-leak",
+            },
+            {"note_id": "dom-two", "title": "Never needed", "visible": True},
+        ]
+    )
+
+    records = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u"),
+            Browser(page),
+        )
+    )
+
+    assert len(records) == 1
+    assert records[0]["note_id"] == records[0]["native_id"] == "dom-one"
+    assert records[0]["title"] == "DOM title"
+    assert records[0]["author"] == "DOM author"
+    assert records[0]["liked"] == 12_000
+    assert records[0]["link"] == records[0]["url"] == "https://www.xiaohongshu.com/explore/dom-one"
+    assert records[0]["complete"] is False
+    assert records[0]["detail_attempted"] is False
+    encoded = json.dumps(records, ensure_ascii=False)
+    assert "must-not-leak" not in encoded
+    assert "xsec_token" not in encoded
+    fallback_script = next(script for script in page.evaluations if "creator DOM fallback" in script)
+    assert "#userPostedFeeds" in fallback_script
+    assert "data-note-id" in fallback_script
+    assert "isVisible" in fallback_script
+
+
+@pytest.mark.parametrize(
+    ("navigation_url_override", "cards"),
+    (
+        (
+            "https://www.xiaohongshu.com/user/profile/other",
+            [{"note_id": "wrong-target", "title": "Wrong target", "visible": True}],
+        ),
+        (
+            None,
+            [{"note_id": "hidden", "title": "Hidden", "visible": False}],
+        ),
+    ),
+    ids=("target-mismatch", "no-visible-card"),
+)
+def test_creator_timeout_rejects_unsafe_dom_fallback_conditions(
+    navigation_url_override: str | None,
+    cards: list[dict[str, Any]],
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CaptureTimeout, collect_creator
+
+    page = Page(cards=cards)
+    with pytest.raises(CaptureTimeout) as timeout:
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u"),
+                Browser(page, navigation_url_override=navigation_url_override),
+            )
+        )
+
+    assert timeout.value.code == "creator-capture-timeout"
+    if navigation_url_override is not None:
+        assert not any("creator DOM fallback" in script for script in page.evaluations)
+
+
+def test_dom_fallback_complete_mode_still_requires_fresh_detail_response() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        cards=[
+            {
+                "note_id": "dom-one",
+                "title": "DOM title",
+                "author": "DOM author",
+                "liked": "999",
+                "visible": True,
+            }
+        ],
+        creator_dom_responses=[detail_response("dom-one")],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is True
+    assert record["detail_attempted"] is True
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert record["engagement_source"] == "detail_api"
+    assert record["engagement_observed_at"] is not None
+    assert record["liked"] == 0
+
+
+def test_dom_fallback_detail_timeout_keeps_fixed_detail_reason_code() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CaptureTimeout, collect_creator
+
+    page = Page(
+        cards=[{"note_id": "dom-one", "title": "DOM title", "visible": True}]
+    )
+
+    with pytest.raises(CaptureTimeout) as timeout:
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+                Browser(page),
+            )
+        )
+
+    assert timeout.value.code == "detail-capture-timeout"
 
 
 def test_detail_capture_timeout_rechecks_challenge_then_uses_fixed_code() -> None:
