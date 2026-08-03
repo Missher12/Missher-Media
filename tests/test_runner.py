@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import shlex
@@ -6,6 +7,10 @@ import stat
 import sys
 import time
 from pathlib import Path
+
+import pytest
+
+import media_missher_adapter as adapter
 
 from media_missher_adapter import (
     CollectionRequest,
@@ -26,6 +31,7 @@ def ok_preflight(*_args, **_kwargs):
 
 NESTED_RUNTIME_SOURCE = r'''#!/usr/bin/env python3
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -54,6 +60,22 @@ for platform in PLATFORMS:
     parser.add_argument(f"--{platform}-uid")
 args = parser.parse_args()
 mode = os.environ.get("MEDIA_MISSHER_FAKE_MODE", "ok")
+if os.environ.get("MEDIA_MISSHER_REQUIRE_SHARED_LEASE") == "1":
+    descriptor = os.open(
+        Path(os.environ["MEDIA_MISSHER_HOME"]) / ".media-missher-install.lock",
+        os.O_RDONLY,
+    )
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            print("shared runtime lease was not held", file=sys.stderr)
+            raise SystemExit(86)
+    finally:
+        os.close(descriptor)
 if mode == "sleep":
     time.sleep(float(os.environ.get("MEDIA_MISSHER_FAKE_SLEEP", "5")))
 if mode == "risk_wait":
@@ -139,6 +161,20 @@ def make_runtime_layout(fake_engine_root):
     for script in (home / "current" / "scripts").glob("scrape_*.py"):
         script.write_text(NESTED_RUNTIME_SOURCE, encoding="utf-8")
     (home / "state").mkdir(mode=0o700)
+    home.chmod(0o700)
+    owner = home / ".media-missher-owner.json"
+    owner.write_text(
+        json.dumps({"name": "media-missher-runtime-home", "schema": 1}) + "\n",
+        encoding="utf-8",
+    )
+    owner.chmod(0o600)
+    lock = home / ".media-missher-install.lock"
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    for root in (home / "current", home / "venv"):
+        marker = root / ".media-missher-release"
+        marker.write_text("test-release\n", encoding="ascii")
+        marker.chmod(0o600)
     return resolve_runtime_layout(environ={"MEDIA_MISSHER_HOME": str(home)})
 
 
@@ -317,6 +353,80 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
     assert len(summary["evidence"]) == 1
     assert Path(summary["run_dir"]).is_dir()
     assert summary["validation"]["counts"] == {"douyin": 1}
+
+
+def test_run_collection_rejects_mixed_release_before_preflight_or_output(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+    (layout.current / ".media-missher-release").write_text(
+        "mixed-release\n", encoding="ascii"
+    )
+    preflight_called = False
+
+    def preflight(*_args, **_kwargs):
+        nonlocal preflight_called
+        preflight_called = True
+        return ok_preflight()
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("douyin",),
+            count=1,
+            platform_uids={"douyin": "douyin-user"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=preflight,
+        execution_timeout=5,
+    )
+
+    assert summary["status"] == "preflight-failed"
+    assert summary["run_dir"] is None
+    assert summary["preflight"]["checks"] == {
+        "runtime_lease": True,
+        "release": False,
+    }
+    assert preflight_called is False
+    assert not list(tmp_path.glob("run-*"))
+    assert any("release" in error.lower() for error in summary["errors"])
+
+
+def test_run_collection_holds_lease_through_child_and_validation(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    lock = layout.home / ".media-missher-install.lock"
+    real_validate = adapter.validate_run
+    validation_saw_lease = False
+
+    def validate_while_locked(paths, request, started_ns):
+        nonlocal validation_saw_lease
+        descriptor = os.open(lock, os.O_RDONLY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            validation_saw_lease = True
+        finally:
+            os.close(descriptor)
+        return real_validate(paths, request, started_ns)
+
+    monkeypatch.setattr(adapter, "validate_run", validate_while_locked)
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "weibo-user"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={"MEDIA_MISSHER_REQUIRE_SHARED_LEASE": "1"},
+    )
+
+    assert summary["status"] == "success"
+    assert validation_saw_lease is True
 
 
 def test_run_collection_converts_only_after_validation(fake_engine_root, tmp_path):

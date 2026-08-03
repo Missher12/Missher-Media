@@ -47,6 +47,20 @@ def make_runtime_home(fake_engine_root):
     )
     interpreter.chmod(0o700)
     (home / "state").mkdir(mode=0o700)
+    home.chmod(0o700)
+    owner = home / ".media-missher-owner.json"
+    owner.write_text(
+        json.dumps({"name": "media-missher-runtime-home", "schema": 1}) + "\n",
+        encoding="utf-8",
+    )
+    owner.chmod(0o600)
+    lock = home / ".media-missher-install.lock"
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    for root in (home / "current", home / "venv"):
+        marker = root / ".media-missher-release"
+        marker.write_text("portable-release\n", encoding="ascii")
+        marker.chmod(0o600)
     return home
 
 
@@ -60,6 +74,9 @@ def test_skill_scripts_work_from_path_with_spaces_and_at_sign(fake_engine_root, 
         assert completed.returncode == 0, completed.stderr
 
     runtime_home = make_runtime_home(fake_engine_root)
+    skill_marker = portable_skill / ".media-missher-release"
+    skill_marker.write_text("portable-release\n", encoding="ascii")
+    skill_marker.chmod(0o600)
     completed = _run(
         scripts / "preflight.py",
         "--json",

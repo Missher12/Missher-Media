@@ -1,3 +1,4 @@
+import json
 import shlex
 import shutil
 import subprocess
@@ -26,6 +27,20 @@ def make_runtime_layout(fake_engine_root):
     )
     interpreter.chmod(0o700)
     (home / "state").mkdir(mode=0o700)
+    home.chmod(0o700)
+    owner = home / ".media-missher-owner.json"
+    owner.write_text(
+        json.dumps({"name": "media-missher-runtime-home", "schema": 1}) + "\n",
+        encoding="utf-8",
+    )
+    owner.chmod(0o600)
+    lock = home / ".media-missher-install.lock"
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    for root in (home / "current", home / "venv"):
+        marker = root / ".media-missher-release"
+        marker.write_text("test-release\n", encoding="ascii")
+        marker.chmod(0o600)
     return resolve_runtime_layout(environ={"MEDIA_MISSHER_HOME": str(home)})
 
 

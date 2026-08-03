@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import json
 import math
 import os
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from contextlib import contextmanager
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,10 +36,24 @@ RUNTIME_ENTRYPOINTS = (
 )
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_OWNER_MARKER = ".media-missher-owner.json"
+RUNTIME_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
+RELEASE_MARKER = ".media-missher-release"
+INSTALL_LOCK = ".media-missher-install.lock"
+MAX_RELEASE_ID_BYTES = 128
+_RELEASE_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 
 class ConfigurationError(ValueError):
     """Raised when a request cannot be validated before engine execution."""
+
+
+class _RuntimeLeaseError(ConfigurationError):
+    """Raised when the installed runtime cannot be leased as one release."""
+
+    def __init__(self, message: str, *, lease_acquired: bool = False) -> None:
+        super().__init__(message)
+        self.lease_acquired = lease_acquired
 
 
 @dataclass(frozen=True)
@@ -238,6 +254,192 @@ def resolve_runtime_layout(*, environ: Mapping[str, str]) -> RuntimeLayout:
         python=(home / "venv" / "bin" / "python").absolute(),
         state=(home / "state").absolute(),
     )
+
+
+def _reject_symlink_components(path: Path, label: str) -> None:
+    absolute = Path(path).expanduser().absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise _RuntimeLeaseError(f"{label} contains a symlink")
+
+
+def _owned_private_stat(path: Path, label: str) -> os.stat_result:
+    try:
+        file_stat = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise _RuntimeLeaseError(f"{label} is unavailable: {type(exc).__name__}") from exc
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise _RuntimeLeaseError(f"{label} is not a regular file")
+    if stat.S_IMODE(file_stat.st_mode) != 0o600:
+        raise _RuntimeLeaseError(f"{label} must use exact mode 0600")
+    if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+        raise _RuntimeLeaseError(f"{label} must be owned by the current user")
+    return file_stat
+
+
+def _read_owned_private_file(
+    path: Path,
+    label: str,
+    *,
+    limit: int,
+    lease_acquired: bool = False,
+) -> bytes:
+    try:
+        _reject_symlink_components(path, label)
+        expected = _owned_private_stat(path, label)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if not os.path.samestat(expected, opened):
+                raise _RuntimeLeaseError(f"{label} changed while being opened")
+            if opened.st_size > limit:
+                raise _RuntimeLeaseError(f"{label} exceeds its size limit")
+            payload = os.read(descriptor, limit + 1)
+            if len(payload) > limit:
+                raise _RuntimeLeaseError(f"{label} exceeds its size limit")
+            return payload
+        finally:
+            os.close(descriptor)
+    except _RuntimeLeaseError as exc:
+        if lease_acquired and not exc.lease_acquired:
+            raise _RuntimeLeaseError(str(exc), lease_acquired=True) from exc
+        raise
+    except OSError as exc:
+        raise _RuntimeLeaseError(
+            f"{label} is unavailable: {type(exc).__name__}",
+            lease_acquired=lease_acquired,
+        ) from exc
+
+
+def _development_skill_root() -> bool:
+    repository = SKILL_ROOT.parent
+    return (
+        SKILL_ROOT.name == "media-missher"
+        and (repository / ".git").exists()
+        and (repository / "tests").is_dir()
+        and (repository / "runtime").is_dir()
+    )
+
+
+def _validate_runtime_owner(home: Path) -> None:
+    _reject_symlink_components(home, "runtime home")
+    try:
+        home_stat = os.stat(home, follow_symlinks=False)
+    except OSError as exc:
+        raise _RuntimeLeaseError(
+            f"runtime home is unavailable: {type(exc).__name__}"
+        ) from exc
+    if not stat.S_ISDIR(home_stat.st_mode):
+        raise _RuntimeLeaseError("runtime home is not a directory")
+    if stat.S_IMODE(home_stat.st_mode) != 0o700:
+        raise _RuntimeLeaseError("runtime home must use exact mode 0700")
+    if hasattr(os, "getuid") and home_stat.st_uid != os.getuid():
+        raise _RuntimeLeaseError("runtime home must be owned by the current user")
+    marker = home / RUNTIME_OWNER_MARKER
+    try:
+        payload = json.loads(
+            _read_owned_private_file(marker, "runtime ownership marker", limit=512).decode(
+                "utf-8"
+            )
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise _RuntimeLeaseError("runtime ownership marker is invalid") from exc
+    if payload != RUNTIME_OWNER_PAYLOAD:
+        raise _RuntimeLeaseError("runtime ownership marker is invalid")
+
+
+def _read_release_marker(root: Path, label: str) -> str:
+    marker = root / RELEASE_MARKER
+    try:
+        raw = _read_owned_private_file(
+            marker,
+            f"{label} release marker",
+            limit=MAX_RELEASE_ID_BYTES + 1,
+            lease_acquired=True,
+        )
+        text = raw.decode("ascii")
+    except UnicodeError as exc:
+        raise _RuntimeLeaseError(
+            f"{label} release marker must be ASCII", lease_acquired=True
+        ) from exc
+    release = text[:-1] if text.endswith("\n") else text
+    if text not in {release, release + "\n"} or not _RELEASE_ID_PATTERN.fullmatch(release):
+        raise _RuntimeLeaseError(
+            f"{label} release marker is invalid", lease_acquired=True
+        )
+    return release
+
+
+def _validate_release_set(layout: RuntimeLayout) -> str:
+    markers = [
+        (layout.current, "current runtime"),
+        (layout.home / "venv", "runtime venv"),
+    ]
+    if not _development_skill_root():
+        markers.append((SKILL_ROOT, "installed Codex skill"))
+    releases = [(label, _read_release_marker(root, label)) for root, label in markers]
+    release_ids = {release for _label, release in releases}
+    if len(release_ids) != 1:
+        raise _RuntimeLeaseError(
+            "runtime release markers do not match", lease_acquired=True
+        )
+    return releases[0][1]
+
+
+@contextmanager
+def _runtime_lease(layout: RuntimeLayout, *, timeout: float):
+    if not isinstance(layout, RuntimeLayout):
+        raise ConfigurationError("runtime layout is required")
+    home = layout.home.expanduser().absolute()
+    if not (
+        layout.current.expanduser().absolute() == (home / "current").absolute()
+        and layout.python.expanduser().absolute()
+        == (home / "venv" / "bin" / "python").absolute()
+        and layout.state.expanduser().absolute() == (home / "state").absolute()
+    ):
+        raise _RuntimeLeaseError("runtime layout paths do not match the shared-home contract")
+    _validate_runtime_owner(home)
+    lock = home / INSTALL_LOCK
+    _reject_symlink_components(lock, "installation lock")
+    expected = _owned_private_stat(lock, "installation lock")
+    descriptor: int | None = None
+    acquired = False
+    try:
+        descriptor = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(descriptor)
+        if not os.path.samestat(expected, opened):
+            raise _RuntimeLeaseError("installation lock changed while being opened")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _RuntimeLeaseError(
+                        "installation lock remained exclusive until the lease timeout"
+                    ) from exc
+                time.sleep(min(0.01, remaining))
+        release = _validate_release_set(layout)
+        yield release
+    except _RuntimeLeaseError:
+        raise
+    except OSError as exc:
+        raise _RuntimeLeaseError(
+            f"installation lock is unavailable: {type(exc).__name__}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            try:
+                if acquired:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
 
 def resolve_data_root(
@@ -1058,7 +1260,7 @@ _RISK_PATTERN = re.compile(
 )
 
 
-def run_collection_request(
+def _run_collection_request_unlocked(
     request: CollectionRequest,
     *,
     layout: RuntimeLayout,
@@ -1068,32 +1270,20 @@ def run_collection_request(
     execution_timeout: float | None = None,
     command_environment: Mapping[str, str] | None = None,
 ) -> dict:
-    if not request.search:
-        missing_uids = [
-            platform
-            for platform in request.platforms
-            if platform not in request.platform_uids
-        ]
-        if missing_uids:
-            error = f"creator UID is required for: {', '.join(missing_uids)}"
-            return {
-                "status": "preflight-failed",
-                "run_dir": None,
-                "evidence": [],
-                "errors": [error],
-                "preflight": {
-                    "status": "failed",
-                    "checks": {"creator_uids": False},
-                    "errors": [error],
-                },
-            }
-    runner = preflight_runner or run_preflight
-    preflight_report = runner(
-        layout,
-        live=True,
-        cdp_url=cdp_url,
-        timeout=10.0,
-    )
+    if preflight_runner is None or preflight_runner is run_preflight:
+        preflight_report = _run_preflight_unlocked(
+            layout,
+            live=True,
+            cdp_url=cdp_url,
+            timeout=10.0,
+        )
+    else:
+        preflight_report = preflight_runner(
+            layout,
+            live=True,
+            cdp_url=cdp_url,
+            timeout=10.0,
+        )
     if preflight_report.get("status") != "ok":
         return {
             "status": "preflight-failed",
@@ -1192,6 +1382,60 @@ def run_collection_request(
     }
 
 
+def _preflight_failure(error: str, *, checks: Mapping[str, bool]) -> dict:
+    return {
+        "status": "preflight-failed",
+        "run_dir": None,
+        "evidence": [],
+        "errors": [error],
+        "preflight": {
+            "status": "failed",
+            "checks": dict(checks),
+            "errors": [error],
+        },
+    }
+
+
+def run_collection_request(
+    request: CollectionRequest,
+    *,
+    layout: RuntimeLayout,
+    data_root: Path,
+    cdp_url: str = DEFAULT_CDP_URL,
+    preflight_runner: Callable = None,
+    execution_timeout: float | None = None,
+    command_environment: Mapping[str, str] | None = None,
+) -> dict:
+    if not request.search:
+        missing_uids = [
+            platform
+            for platform in request.platforms
+            if platform not in request.platform_uids
+        ]
+        if missing_uids:
+            error = f"creator UID is required for: {', '.join(missing_uids)}"
+            return _preflight_failure(error, checks={"creator_uids": False})
+    try:
+        with _runtime_lease(layout, timeout=10.0):
+            return _run_collection_request_unlocked(
+                request,
+                layout=layout,
+                data_root=data_root,
+                cdp_url=cdp_url,
+                preflight_runner=preflight_runner,
+                execution_timeout=execution_timeout,
+                command_environment=command_environment,
+            )
+    except _RuntimeLeaseError as exc:
+        return _preflight_failure(
+            str(exc),
+            checks={
+                "runtime_lease": exc.lease_acquired,
+                "release": False,
+            },
+        )
+
+
 def _cdp_version_url(cdp_url: str) -> str:
     normalized = cdp_url.rstrip("/")
     if normalized.endswith("/json/version"):
@@ -1233,7 +1477,19 @@ def _probe_state_writable(state: Path) -> tuple[bool, str | None]:
     return error is None, error
 
 
-def run_preflight(
+def _validated_preflight_timeout(timeout: float) -> float:
+    if isinstance(timeout, bool):
+        raise ConfigurationError("timeout must be finite and greater than zero")
+    try:
+        parsed = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError("timeout must be finite and greater than zero") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ConfigurationError("timeout must be finite and greater than zero")
+    return parsed
+
+
+def _run_preflight_unlocked(
     layout: RuntimeLayout,
     *,
     live: bool,
@@ -1241,14 +1497,7 @@ def run_preflight(
     timeout: float = 10.0,
     urlopen: Callable | None = None,
 ) -> dict:
-    if isinstance(timeout, bool):
-        raise ConfigurationError("timeout must be finite and greater than zero")
-    try:
-        timeout = float(timeout)
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError("timeout must be finite and greater than zero") from exc
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ConfigurationError("timeout must be finite and greater than zero")
+    timeout = _validated_preflight_timeout(timeout)
     if not isinstance(layout, RuntimeLayout):
         raise ConfigurationError("runtime layout is required")
     home = layout.home.expanduser().absolute()
@@ -1285,6 +1534,8 @@ def run_preflight(
     if state_private and safe_boundaries:
         state_writable, state_probe_error = _probe_state_writable(state)
     checks = {
+        "runtime_lease": True,
+        "release": True,
         "layout": exact_layout and safe_boundaries,
         "runtime_home": home.is_dir(),
         "current": current.is_dir(),
@@ -1415,3 +1666,35 @@ def run_preflight(
     if cdp is not None:
         report["cdp"] = cdp
     return report
+
+
+def run_preflight(
+    layout: RuntimeLayout,
+    *,
+    live: bool,
+    cdp_url: str = DEFAULT_CDP_URL,
+    timeout: float = 10.0,
+    urlopen: Callable | None = None,
+) -> dict:
+    timeout = _validated_preflight_timeout(timeout)
+    if not isinstance(layout, RuntimeLayout):
+        raise ConfigurationError("runtime layout is required")
+    try:
+        with _runtime_lease(layout, timeout=timeout):
+            return _run_preflight_unlocked(
+                layout,
+                live=live,
+                cdp_url=cdp_url,
+                timeout=timeout,
+                urlopen=urlopen,
+            )
+    except _RuntimeLeaseError as exc:
+        return {
+            "status": "failed",
+            "runtime_home": str(layout.home.expanduser().absolute()),
+            "checks": {
+                "runtime_lease": exc.lease_acquired,
+                "release": False,
+            },
+            "errors": [str(exc)],
+        }
