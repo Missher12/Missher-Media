@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--format", choices=("json", "csv", "jsonl", "sqlite"), default="json")
     parser.add_argument("--cdp-url", help="Existing Chrome CDP base URL")
     parser.add_argument(
+        "--allow-navigation",
+        action="store_true",
+        help="Explicitly authorize exact-host browser navigation for this run",
+    )
+    parser.add_argument(
         "--collect-as-much-as-safe",
         action="store_true",
         help="Explicitly authorize count zero within the engine safety cap",
@@ -99,6 +104,17 @@ def main(argv: list[str] | None = None) -> int:
             value = getattr(args, f"{platform}_uid")
             if value is not None:
                 platform_uids[platform] = value
+        if args.search is None:
+            missing_uids = [
+                platform
+                for platform in platforms
+                if not str(platform_uids.get(platform, "")).strip()
+            ]
+            if missing_uids:
+                raise ConfigurationError(
+                    "creator collection requires a UID for every selected platform: "
+                    + ", ".join(missing_uids)
+                )
         request = CollectionRequest(
             platforms=platforms,
             count=args.count,
@@ -112,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             platform_timeout=args.platform_timeout,
             output_format=args.format,
             collect_as_much_as_safe=args.collect_as_much_as_safe,
+            allow_navigation=args.allow_navigation,
         )
         cdp_url = (
             args.cdp_url

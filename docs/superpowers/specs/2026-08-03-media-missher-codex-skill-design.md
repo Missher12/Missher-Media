@@ -88,7 +88,7 @@ Generate `agents/openai.yaml` with the official skill-creator script. Do not add
 
 - Write every adapter and test file from scratch against the documented command and output contract.
 - Do not copy code, comments, tests, JavaScript, fixtures containing real collected data, or documentation prose from the installed engine.
-- Do not include `NanmiCoder/MediaCrawler` source files or inherited copyright headers in the new skill.
+- Do not include legacy upstream source files or inherited copyright headers in the new skill.
 - State in `references/licensing.md` that the adapter does not distribute the external runtime and that the external runtime remains governed by its own license.
 - Do not label the external engine MIT or imply ownership of it.
 - Do not assign a repository-wide license to the new adapter until the user selects one. This avoids accidentally relicensing the external runtime by implication.

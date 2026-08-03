@@ -1,11 +1,15 @@
+import os
 import re
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 
 REPO = Path(__file__).resolve().parents[1]
 SKILL = REPO / "media-missher"
+RUNTIME_SCRIPTS = REPO / "runtime" / "scripts"
 
 
 def parse_skill_frontmatter(text):
@@ -90,3 +94,42 @@ def test_skill_contains_no_bundled_engine_or_generated_artifacts():
     }
     assert not forbidden.intersection(path.name for path in SKILL.rglob("*"))
     assert all(path.is_file() for path in (SKILL / "scripts").iterdir())
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    (
+        "scrape_all.py",
+        "scrape_bilibili.py",
+        "scrape_xhs.py",
+        "scrape_douyin.py",
+        "scrape_weibo.py",
+    ),
+)
+def test_all_runtime_entrypoint_help_is_offline_and_has_no_removed_root_flag(script_name):
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, str(RUNTIME_SCRIPTS / script_name), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+
+    assert completed.returncode == 0
+    assert "{creator,search}" in completed.stdout
+    assert "--engine-root" not in completed.stdout
+
+    creator_help = subprocess.run(
+        [sys.executable, str(RUNTIME_SCRIPTS / script_name), "creator", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+    assert creator_help.returncode == 0
+    assert "--allow-navigation" in creator_help.stdout
+    assert "--engine-root" not in creator_help.stdout

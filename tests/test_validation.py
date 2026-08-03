@@ -59,6 +59,54 @@ def test_validation_reports_count_shortfall_as_partial(tmp_path):
     assert any("expected 2" in error for error in result["errors"])
 
 
+@pytest.mark.parametrize(
+    ("platform_status", "overall_status", "expected_status"),
+    (
+        ("complete", "complete", "success"),
+        ("shortfall", "failed", "partial"),
+        ("incomplete", "failed", "partial"),
+        ("failed", "failed", "partial"),
+        ("not-run", "failed", "partial"),
+        ("risk-stopped", "risk-stopped", "risk-stopped"),
+    ),
+)
+def test_validation_preserves_runtime_manifest_failure_statuses(
+    tmp_path, platform_status, overall_status, expected_status
+):
+    started_ns = time.time_ns() - 1_000_000
+    content = tmp_path / "bilibili.json"
+    content.write_text(
+        (FIXTURES / "bilibili_creator.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "counts": {"bilibili": 1},
+                "paths": {"bilibili": "bilibili.json"},
+                "platforms": {"bilibili": platform_status},
+                "status": overall_status,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(content, ns=(started_ns + 1, started_ns + 1))
+    os.utime(manifest, ns=(started_ns + 1, started_ns + 1))
+
+    result = validate_run(
+        (manifest, content),
+        CollectionRequest(platforms=("bilibili",), count=1),
+        started_ns,
+    )
+
+    assert result["status"] == expected_status
+    assert result["counts"] == {"bilibili": 1}
+    assert [record["dynamic_id"] for record in result["records"]] == [
+        "synthetic-bili-creator-1"
+    ]
+
+
 @pytest.mark.parametrize("payload", ["{not-json", json.dumps({"unexpected": "object"})])
 def test_validation_rejects_malformed_or_unexpected_top_level_json(tmp_path, payload):
     path = tmp_path / "xhs_bad.json"

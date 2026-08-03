@@ -1,12 +1,15 @@
 from pathlib import Path
+import json
 import subprocess
 import sys
 
 import pytest
 
+import run_collection
 from media_missher_adapter import (
     CollectionRequest,
     ConfigurationError,
+    RuntimeLayout,
     build_engine_command,
 )
 
@@ -17,9 +20,20 @@ def creator_request(**overrides):
     return CollectionRequest(**values)
 
 
+def runtime_layout(fake_engine_root, tmp_path):
+    return RuntimeLayout(
+        home=fake_engine_root,
+        current=fake_engine_root,
+        python=fake_engine_root / "engine" / ".venv" / "bin" / "python",
+        state=tmp_path / "state",
+    )
+
+
 def test_creator_command_forces_json_and_no_feishu(fake_engine_root, tmp_path):
     staging = tmp_path / "staging"
-    command = build_engine_command(creator_request(), staging, engine_root=fake_engine_root)
+    command = build_engine_command(
+        creator_request(), staging, layout=runtime_layout(fake_engine_root, tmp_path)
+    )
     assert command.script.name == "scrape_all.py"
     argv = list(command.argv)
     assert argv[argv.index("--format") + 1] == "json"
@@ -38,7 +52,9 @@ def test_creator_command_preserves_counts_uids_and_complete_flags(fake_engine_ro
         xhs_comments=4,
         platform_timeout=42,
     )
-    argv = build_engine_command(request, tmp_path, engine_root=fake_engine_root).argv
+    argv = build_engine_command(
+        request, tmp_path, layout=runtime_layout(fake_engine_root, tmp_path)
+    ).argv
     for flag, value in (
         ("--bilibili-count", "2"),
         ("--xhs-count", "3"),
@@ -59,7 +75,9 @@ def test_search_uses_single_platform_entrypoint_and_json(fake_engine_root, tmp_p
         platform_counts={"weibo": 2},
         search="synthetic topic",
     )
-    command = build_engine_command(request, tmp_path, engine_root=fake_engine_root)
+    command = build_engine_command(
+        request, tmp_path, layout=runtime_layout(fake_engine_root, tmp_path)
+    )
     assert command.script.name == "scrape_weibo.py"
     assert "--search" in command.argv
     assert "--no-feishu" not in command.argv
@@ -104,26 +122,25 @@ def test_collection_cli_exposes_compatibility_options():
     )
     assert completed.returncode == 0
     for option in (
-        "--engine-root",
         "--platform",
         "--count",
         "--search",
         "--complete",
         "--xhs-comments",
+        "--allow-navigation",
         "--no-feishu",
         "--json-summary",
     ):
         assert option in completed.stdout
+    assert "--engine-root" not in completed.stdout
 
 
-def test_collection_cli_rejects_override_for_unselected_platform(fake_engine_root, tmp_path):
+def test_collection_cli_rejects_override_for_unselected_platform(tmp_path):
     script = Path(__file__).resolve().parents[1] / "media-missher" / "scripts" / "run_collection.py"
     completed = subprocess.run(
         [
             sys.executable,
             str(script),
-            "--engine-root",
-            str(fake_engine_root),
             "--data-root",
             str(tmp_path / "runs"),
             "--platform",
@@ -139,3 +156,118 @@ def test_collection_cli_rejects_override_for_unselected_platform(fake_engine_roo
     )
     assert completed.returncode == 1
     assert "selected platform" in completed.stdout
+
+
+def _successful_summary():
+    return {"status": "success", "run_dir": None, "evidence": [], "errors": []}
+
+
+def test_creator_cli_rejects_missing_uid_before_creating_output(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "runs"
+    called = False
+
+    def unexpected_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", unexpected_run)
+
+    returncode = run_collection.main(
+        ["--platform", "bilibili", "--data-root", str(output), "--json-summary"]
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert returncode == 1
+    assert summary["status"] == "preflight-failed"
+    assert "bilibili" in summary["errors"][0]
+    assert called is False
+    assert not output.exists()
+
+
+def test_private_profile_supplies_all_creator_uids(tmp_path, monkeypatch):
+    profile = tmp_path / "profile.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "platform_uids": {
+                    "bilibili": "bili-profile",
+                    "xhs": "xhs-profile",
+                    "douyin": "douyin-profile",
+                    "weibo": "weibo-profile",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    profile.chmod(0o600)
+    captured = {}
+
+    def capture(request, **_kwargs):
+        captured["request"] = request
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", capture)
+
+    assert run_collection.main(["--profile", str(profile)]) == 0
+    assert captured["request"].platform_uids == {
+        "bilibili": "bili-profile",
+        "xhs": "xhs-profile",
+        "douyin": "douyin-profile",
+        "weibo": "weibo-profile",
+    }
+
+
+def test_creator_cli_uid_overrides_private_profile(tmp_path, monkeypatch):
+    profile = tmp_path / "profile.json"
+    profile.write_text(
+        json.dumps({"platform_uids": {"bilibili": "profile-value"}}),
+        encoding="utf-8",
+    )
+    profile.chmod(0o600)
+    captured = {}
+
+    def capture(request, **_kwargs):
+        captured["request"] = request
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", capture)
+
+    assert run_collection.main(
+        [
+            "--profile",
+            str(profile),
+            "--platform",
+            "bilibili",
+            "--bilibili-uid",
+            "cli-value",
+        ]
+    ) == 0
+    assert captured["request"].platform_uids == {"bilibili": "cli-value"}
+
+
+@pytest.mark.parametrize(
+    ("navigation_flag", "expected"),
+    (([], False), (["--allow-navigation"], True)),
+)
+def test_collection_cli_requires_explicit_navigation_authorization(
+    navigation_flag, expected, monkeypatch
+):
+    captured = {}
+
+    def capture(request, **_kwargs):
+        captured["request"] = request
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", capture)
+
+    assert run_collection.main(
+        [
+            "--platform",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            *navigation_flag,
+        ]
+    ) == 0
+    assert captured["request"].allow_navigation is expected

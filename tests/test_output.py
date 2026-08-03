@@ -13,6 +13,15 @@ from media_missher_adapter import (
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+GOLDEN_FIXTURES = tuple(sorted(FIXTURES.glob("*.json")))
+
+
+def type_tree(value):
+    if isinstance(value, dict):
+        return {key: type_tree(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [type_tree(child) for child in value]
+    return type(value)
 
 
 @pytest.fixture
@@ -42,6 +51,39 @@ def test_conversion_preserves_null_zero_and_nested_values(tmp_path, format_name)
     assert converted[0]["nested"] == {"a": [1, None]}
     assert converted[1]["liked"] == 0
     assert converted[1]["comments"] is None
+
+
+@pytest.mark.parametrize("format_name", ["json", "csv", "jsonl", "sqlite"])
+def test_all_golden_outputs_preserve_field_types_and_native_id_order(tmp_path, format_name):
+    expected = normalize_records(
+        [
+            record
+            for fixture in GOLDEN_FIXTURES
+            for record in json.loads(fixture.read_text(encoding="utf-8"))
+        ]
+    )
+    path = write_output(expected, format_name, tmp_path / "golden-contract")
+    converted = read_output(path, format_name)
+
+    assert converted == expected
+    assert type_tree(converted) == type_tree(expected)
+    assert [
+        record.get("dynamic_id")
+        or record.get("bvid")
+        or record.get("note_id")
+        or record.get("aweme_id")
+        or record.get("mblog_id")
+        for record in converted
+    ] == [
+        record.get("dynamic_id")
+        or record.get("bvid")
+        or record.get("note_id")
+        or record.get("aweme_id")
+        or record.get("mblog_id")
+        for record in expected
+    ]
+    assert any(value is None for record in converted for value in record.values())
+    assert any(type(value) is int and value == 0 for record in converted for value in record.values())
 
 
 def test_normalize_records_rejects_non_object_items():

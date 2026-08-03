@@ -533,7 +533,7 @@ Run:
 ```bash
 python3 /Users/missher/.codex/skills/.system/skill-creator/scripts/quick_validate.py media-missher
 git diff --check
-rg -n '/Users/missher|ou_[A-Za-z0-9]+|NanmiCoder/MediaCrawler|openclaw.skill.json|xsec_token[^[:space:]]*[:=][^[:space:]]+' media-missher
+rg -n '/Users/missher|ou_[A-Za-z0-9]+|legacy[[:space:]-]+upstream|openclaw.skill.json|xsec_token[^[:space:]]*[:=][^[:space:]]+' media-missher
 find media-missher -type d \( -name .venv -o -name __pycache__ -o -name data \) -print
 ```
 
