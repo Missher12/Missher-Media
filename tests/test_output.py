@@ -1,4 +1,5 @@
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,9 @@ def test_normalize_records_rejects_non_object_items():
 def test_redaction_removes_query_tokens_personal_ids_and_secret_canary(sample_records):
     sample_records[0]["author_id"] = "personal-author-id"
     sample_records[0]["environment"] = {"SECRET": "CANARY-SECRET"}
+    sample_records[0]["cookie_header"] = "session=CANARY-COOKIE"
+    sample_records[0]["api_key"] = "CANARY-API-KEY"
+    sample_records[0]["sessionid"] = "CANARY-SESSION"
     redacted = redact_for_summary(
         sample_records,
         secrets={"CANARY-SECRET", "CANARY-TOKEN"},
@@ -60,9 +64,42 @@ def test_redaction_removes_query_tokens_personal_ids_and_secret_canary(sample_re
     assert "CANARY-TOKEN" not in rendered
     assert "xsec_token" not in rendered
     assert "author_id" not in rendered
+    assert "cookie_header" not in rendered
+    assert "api_key" not in rendered
+    assert "sessionid" not in rendered
     assert "?" not in redacted[0]["link"]
 
 
 def test_write_output_rejects_unknown_format(tmp_path, sample_records):
     with pytest.raises(ValueError, match="format"):
         write_output(sample_records, "xlsx", tmp_path / "out")
+
+
+def test_csv_temporary_file_is_private_while_being_written(tmp_path, sample_records, monkeypatch):
+    observed_modes = []
+    original = __import__("csv").DictWriter.writeheader
+
+    def inspect_mode(writer):
+        temporary = next(tmp_path.glob(".*.tmp"))
+        observed_modes.append(stat.S_IMODE(temporary.stat().st_mode))
+        return original(writer)
+
+    monkeypatch.setattr(__import__("csv").DictWriter, "writeheader", inspect_mode)
+    write_output(sample_records, "csv", tmp_path / "private")
+    assert observed_modes == [0o600]
+
+
+def test_sqlite_temporary_file_is_private_when_connected(tmp_path, sample_records, monkeypatch):
+    import media_missher_adapter
+
+    observed_modes = []
+    original = media_missher_adapter.sqlite3.connect
+
+    def inspect_mode(database, *args, **kwargs):
+        connection = original(database, *args, **kwargs)
+        observed_modes.append(stat.S_IMODE(Path(database).stat().st_mode))
+        return connection
+
+    monkeypatch.setattr(media_missher_adapter.sqlite3, "connect", inspect_mode)
+    write_output(sample_records, "sqlite", tmp_path / "private")
+    assert observed_modes == [0o600]

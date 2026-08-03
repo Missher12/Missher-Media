@@ -479,6 +479,20 @@ def _quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def _open_private_text(path: Path, *, newline=None):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        return os.fdopen(descriptor, "w", encoding="utf-8", newline=newline)
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _create_private_file(path: Path):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+
+
 def write_output(records, format_name: str, output_base: Path) -> Path:
     normalized = normalize_records(records)
     path = _output_path(output_base, format_name)
@@ -486,18 +500,16 @@ def write_output(records, format_name: str, output_base: Path) -> Path:
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
     try:
         if format_name == "json":
-            temporary.write_text(
-                json.dumps(normalized, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            with _open_private_text(temporary) as handle:
+                handle.write(json.dumps(normalized, ensure_ascii=False, indent=2))
         elif format_name == "jsonl":
-            with temporary.open("x", encoding="utf-8") as handle:
+            with _open_private_text(temporary) as handle:
                 for record in normalized:
                     handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
                     handle.write("\n")
         elif format_name == "csv":
             columns = list(normalized[0]) if normalized else []
-            with temporary.open("x", encoding="utf-8", newline="") as handle:
+            with _open_private_text(temporary, newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=columns)
                 writer.writeheader()
                 for record in normalized:
@@ -509,6 +521,7 @@ def write_output(records, format_name: str, output_base: Path) -> Path:
                     )
         else:
             columns = list(normalized[0]) if normalized else []
+            _create_private_file(temporary)
             connection = sqlite3.connect(temporary)
             try:
                 definitions = ", ".join(
@@ -602,6 +615,24 @@ _SENSITIVE_KEYS = {
     "sec_uid",
     "account_id",
 }
+_SENSITIVE_CANONICAL_KEYS = {
+    re.sub(r"[^a-z0-9]", "", alias) for alias in _SENSITIVE_KEYS
+}
+_SENSITIVE_MARKERS = (
+    "token",
+    "cookie",
+    "password",
+    "passwd",
+    "secret",
+    "credential",
+    "authorization",
+    "apikey",
+    "sessionid",
+    "sessionkey",
+    "bearer",
+    "csrf",
+    "proxy",
+)
 
 
 def redact_for_summary(value, *, secrets: set[str] | None = None):
@@ -612,9 +643,9 @@ def redact_for_summary(value, *, secrets: set[str] | None = None):
             cleaned = {}
             for key, child in item.items():
                 normalized_key = str(key).strip().lower()
-                if normalized_key in _SENSITIVE_KEYS or any(
-                    marker in normalized_key
-                    for marker in ("password", "credential", "access_token", "refresh_token")
+                canonical_key = re.sub(r"[^a-z0-9]", "", normalized_key)
+                if canonical_key in _SENSITIVE_CANONICAL_KEYS or any(
+                    marker in canonical_key for marker in _SENSITIVE_MARKERS
                 ):
                     continue
                 cleaned[str(key)] = redact(child)
