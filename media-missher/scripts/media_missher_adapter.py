@@ -14,6 +14,7 @@ from typing import Callable, Mapping
 
 PLATFORMS = ("bilibili", "xhs", "douyin", "weibo")
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+SKILL_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ConfigurationError(ValueError):
@@ -49,13 +50,19 @@ def parse_platforms(value: str | None) -> tuple[str, ...]:
 def read_profile(path: Path | None) -> dict:
     if path is None:
         return {}
-    profile_path = Path(path).expanduser()
+    profile_path = Path(path).expanduser().resolve(strict=False)
+    forbidden_roots = [SKILL_ROOT]
+    development_root = SKILL_ROOT.parent
+    if (development_root / ".git").exists() or (development_root / "tests").is_dir():
+        forbidden_roots.append(development_root)
+    if any(profile_path.is_relative_to(root) for root in forbidden_roots):
+        raise ConfigurationError("profile must live outside the repository and installed skill")
     try:
         mode = stat.S_IMODE(profile_path.stat().st_mode)
     except OSError as exc:
         raise ConfigurationError(f"cannot read profile: {exc}") from exc
-    if mode & 0o077:
-        raise ConfigurationError("profile must use mode 0600 with no group/world permissions")
+    if mode != 0o600:
+        raise ConfigurationError("profile must use exact mode 0600")
     try:
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

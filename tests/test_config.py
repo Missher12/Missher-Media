@@ -15,6 +15,9 @@ from media_missher_adapter import (
 )
 
 
+REPO = Path(__file__).resolve().parents[1]
+
+
 def write_profile(path: Path, payload: dict, mode: int = 0o600):
     path.write_text(json.dumps(payload), encoding="utf-8")
     path.chmod(mode)
@@ -72,6 +75,18 @@ def test_private_profile_rejects_group_or_world_permissions(tmp_path):
     profile = write_profile(tmp_path / "profile.json", {}, 0o644)
     with pytest.raises(ConfigurationError, match="0600"):
         read_profile(profile)
+
+
+@pytest.mark.parametrize("mode", [0o400, 0o700])
+def test_private_profile_requires_exact_mode_0600(tmp_path, mode):
+    profile = write_profile(tmp_path / "profile.json", {}, mode)
+    with pytest.raises(ConfigurationError, match="0600"):
+        read_profile(profile)
+
+
+def test_private_profile_must_live_outside_repository():
+    with pytest.raises(ConfigurationError, match="outside"):
+        read_profile(REPO / "private-profile.json")
 
 
 def test_profile_must_be_json_object(tmp_path):
