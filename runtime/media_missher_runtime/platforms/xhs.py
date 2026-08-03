@@ -13,15 +13,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from numbers import Real
 from typing import Any, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from ..browser import BrowserSession, PreconditionError
 from ..models import CollectionRequest
 from ..safety import classify_response
 
 try:
+    from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:  # pragma: no cover - browser is optional during offline tests
+    PlaywrightError = RuntimeError
     PlaywrightTimeoutError = TimeoutError
 
 
@@ -36,6 +38,7 @@ _CHALLENGE_PHRASES = (
 )
 _RISK_WORDS = ("risk", "locked", "blocked", "cooldown", "challenge")
 _RISK_CODES = frozenset({461, 471, 999})
+_MAX_CLOCK_SKEW_SECONDS = 300
 _MISSING = object()
 
 
@@ -65,7 +68,8 @@ class XhsCollector:
             # A passive wait cannot prove that the response belongs to this run.
             raise PreconditionError("Xiaohongshu creator collection requires authorized navigation")
         await _raise_for_challenge(page)
-        response = await _capture_while(page, _is_creator_response, lambda: self._navigate_and_check(page, target))
+        creator_predicate = lambda response: _is_creator_response(response, self.request.uid)
+        response = await _capture_while(page, creator_predicate, lambda: self._navigate_and_check(page, target))
         records = await self._collect_creator_pages(page, response)
         if self.request.complete:
             for record in records:
@@ -86,6 +90,7 @@ class XhsCollector:
             await self._navigate_and_check(page, target)
         else:
             _require_open_target(page, target, "matching Xiaohongshu search page")
+        await _wait_for_search_settled(page)
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
         for page_number in range(self.request.page_cap):
@@ -101,6 +106,7 @@ class XhsCollector:
             try:
                 await _wait_for_card_change(page, sorted(seen))
             except PlaywrightTimeoutError:
+                await _raise_for_challenge(page)
                 break
         return records
 
@@ -121,8 +127,13 @@ class XhsCollector:
                 break
             prior_cursor = cursor
             try:
-                response = await _capture_while(page, _is_creator_response, lambda: _scroll_and_check(page))
+                response = await _capture_while(
+                    page,
+                    lambda candidate: _is_creator_response(candidate, self.request.uid),
+                    lambda: _scroll_and_check(page),
+                )
             except PlaywrightTimeoutError:
+                await _raise_for_challenge(page)
                 break
         return records
 
@@ -135,13 +146,21 @@ class XhsCollector:
             record["complete"] = False
             return
         await _raise_for_challenge(page)
+        if not await _wait_for_note_card(page, note_id):
+            record["missing_fields"] = _missing_completion(record)
+            record["complete"] = False
+            return
         record["detail_attempted"] = True
+        primary_error: BaseException | None = None
         try:
             response = await _capture_while(page, _is_detail_response, lambda: _click_note_and_check(page, note_id))
             payload = await _response_payload(response)
             card = _detail_card(payload, note_id)
             if card is not None:
-                _merge_detail(record, card)
+                observed_at = _detail_server_observed_at(payload)
+                if observed_at is None:  # defensive: _detail_card already requires this
+                    raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
+                _merge_detail(record, card, engagement_observed_at=observed_at)
                 record["detail_completed"] = True
             elif _has_current_detail_time(payload):
                 # Keep a non-authoritative DOM observation useful, but never
@@ -153,8 +172,15 @@ class XhsCollector:
                 comments = await _read_comments(page, self.request.comment_limit)
                 _raise_for_observation(comments)
                 record["comments_data"] = _safe_comments(_as_sequence(comments.get("comments")), self.request.comment_limit)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            await _close_modal(page)
+            try:
+                await _close_modal(page)
+            except BaseException:
+                if primary_error is None:
+                    raise
         missing = _missing_completion(record)
         record["missing_fields"] = missing
         record["complete"] = not missing
@@ -166,6 +192,8 @@ class XhsCollector:
             decision = classify_response(status=status)
             if decision.stop_all:
                 raise CollectionStopped(decision.reason or "risk response")
+            if not 200 <= status < 300:
+                raise SourceResponseError(f"Xiaohongshu navigation returned http-{status}")
         await _raise_for_challenge(page)
 
 
@@ -225,9 +253,14 @@ async def _capture_while(page: Any, predicate: Callable[[Any], bool], action: Ca
     return await response_info.value
 
 
-def _is_creator_response(response: Any) -> bool:
+def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return parsed.hostname == _HOST and parsed.path == _CREATOR_PATH
+    if parsed.hostname != _HOST or parsed.path != _CREATOR_PATH:
+        return False
+    if expected_uid is None:
+        return True
+    user_ids = _response_request_user_ids(response)
+    return bool(user_ids) and all(value == expected_uid for value in user_ids)
 
 
 def _is_detail_response(response: Any) -> bool:
@@ -251,6 +284,13 @@ async def _response_payload(response: Any) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise SourceResponseError("Xiaohongshu source returned a non-object JSON payload")
     _raise_for_payload_risk(payload)
+    path = urlparse(getattr(response, "url", "")).path
+    if path == _CREATOR_PATH:
+        _payload_collection(payload, "notes")
+    elif path == _DETAIL_PATH:
+        _payload_collection(payload, "items")
+    else:
+        raise SourceResponseError("Xiaohongshu response used an unexpected endpoint")
     return payload
 
 
@@ -268,9 +308,48 @@ def _raise_for_payload_risk(payload: Mapping[str, Any]) -> None:
         raise SourceResponseError(f"Xiaohongshu source reported code-{code}")
 
 
+def _payload_collection(payload: Mapping[str, Any], field: str) -> tuple[Mapping[str, Any], Sequence[Mapping[str, Any]]]:
+    if _int_like(payload.get("code")) != 0 or payload.get("success") is not True:
+        raise SourceResponseError("Xiaohongshu endpoint payload has invalid success/code")
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        raise SourceResponseError("Xiaohongshu endpoint payload has invalid data")
+    collection = data.get(field)
+    if not isinstance(collection, Sequence) or isinstance(collection, (str, bytes, bytearray)):
+        raise SourceResponseError(f"Xiaohongshu endpoint payload has invalid {field} collection")
+    if any(not isinstance(item, Mapping) for item in collection):
+        raise SourceResponseError(f"Xiaohongshu endpoint payload has malformed {field} item")
+    return data, collection
+
+
+def _response_request_user_ids(response: Any) -> list[str]:
+    request = getattr(response, "request", None)
+    urls = [getattr(request, "url", None), getattr(response, "url", None)]
+    values: list[str] = []
+    for url in urls:
+        if not isinstance(url, str):
+            continue
+        values.extend(parse_qs(urlparse(url).query, keep_blank_values=True).get("user_id", ()))
+    try:
+        post_data = getattr(request, "post_data_json", None)
+    except Exception:
+        post_data = None
+    if callable(post_data):
+        try:
+            post_data = post_data()
+        except Exception:
+            post_data = None
+    if isinstance(post_data, Mapping) and isinstance(post_data.get("user_id"), str):
+        values.append(post_data["user_id"])
+    return values
+
+
 def _creator_page(payload: Mapping[str, Any]) -> tuple[Sequence[Mapping[str, Any]], bool, object]:
-    data = _mapping(payload.get("data"))
-    notes = [item for item in _as_sequence(data.get("notes")) if isinstance(item, Mapping)]
+    data, notes = _payload_collection(payload, "notes")
+    if "has_more" not in data or data.get("has_more") not in (True, False, 0, 1):
+        raise SourceResponseError("Xiaohongshu creator payload has invalid has_more")
+    if "cursor" not in data:
+        raise SourceResponseError("Xiaohongshu creator payload has no cursor")
     return notes, _has_more(data.get("has_more")), data.get("cursor")
 
 
@@ -337,25 +416,27 @@ def _base_record(note_id: str | None, kind: str | None, title: str | None, desc:
 
 
 def _detail_card(payload: Mapping[str, Any], expected_id: str) -> Mapping[str, Any] | None:
-    data = _mapping(payload.get("data"))
+    data, items = _payload_collection(payload, "items")
     # `current_time` proves this response belongs to the active browser run.
     # Do not promote a payload without it to current/fresh detail data.
-    if not _has_current_detail_time(payload):
+    server_seconds = _detail_server_seconds(payload)
+    if server_seconds is None:
         return None
-    for item in _as_sequence(data.get("items")):
-        if not isinstance(item, Mapping):
-            continue
+    for item in items:
         card = _mapping(item.get("note_card"))
         if _text(card.get("note_id")) == expected_id and _text(item.get("id")) in (None, expected_id):
+            published_seconds = _timestamp_seconds(card.get("time"))
+            if published_seconds is not None and published_seconds > server_seconds:
+                return None
             return card
     return None
 
 
 def _has_current_detail_time(payload: Mapping[str, Any]) -> bool:
-    return _timestamp(_mapping(payload.get("data")).get("current_time")) is not None
+    return _detail_server_seconds(payload) is not None
 
 
-def _merge_detail(record: dict[str, Any], card: Mapping[str, Any]) -> None:
+def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement_observed_at: str) -> None:
     info = _mapping(card.get("interact_info"))
     date = _timestamp(card.get("time"))
     if date is not None:
@@ -375,7 +456,7 @@ def _merge_detail(record: dict[str, Any], card: Mapping[str, Any]) -> None:
     if author is not None:
         record["author"] = author
     record["engagement_fresh"] = True
-    record["engagement_observed_at"] = _observed_at()
+    record["engagement_observed_at"] = engagement_observed_at
     record["engagement_source"] = "detail_api"
 
 
@@ -474,11 +555,56 @@ async def _scroll_and_check(page: Any) -> None:
     await _raise_for_challenge(page)
 
 
+async def _wait_for_search_settled(page: Any) -> None:
+    try:
+        await page.wait_for_function("""() => {
+            /* search page settled */
+            /* challenge-selector */
+            const body = document.body?.innerText || '';
+            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
+            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
+            if (challenge || phrases.some((word) => body.includes(word))) return true;
+            if (document.querySelector('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')) return true;
+            const empty = document.querySelector('.feeds-page .empty, .feeds-page .no-result, .feeds-page .search-no-result, .feeds-page [class*="empty"]');
+            return Boolean(empty) || ['暂无内容','暂无搜索结果','没有找到'].some((word) => body.includes(word));
+        }""", timeout=10_000)
+    except PlaywrightTimeoutError as error:
+        await _raise_for_challenge(page)
+        raise SourceResponseError("Xiaohongshu search page did not settle") from error
+    await _raise_for_challenge(page)
+
+
 async def _wait_for_card_change(page: Any, note_ids: list[str]) -> None:
     await page.wait_for_function("""(prior) => {
-        const ids = Array.from(document.querySelectorAll('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')).map((el) => el.getAttribute('data-note-id')).filter(Boolean).sort();
-        return ids.join('\\n') !== prior.slice().sort().join('\\n');
+        /* unseen note card */
+        const body = document.body?.innerText || '';
+        const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
+        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
+        if (challenge || phrases.some((word) => body.includes(word))) return true;
+        const priorSet = new Set(prior);
+        const ids = Array.from(document.querySelectorAll('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')).map((el) => el.getAttribute('data-note-id')).filter(Boolean);
+        return ids.some((noteId) => !priorSet.has(noteId));
     }""", arg=note_ids, timeout=10_000)
+    await _raise_for_challenge(page)
+
+
+async def _wait_for_note_card(page: Any, note_id: str) -> bool:
+    try:
+        await page.wait_for_function("""(expected) => {
+            /* exact note card rendered */
+            /* challenge-selector */
+            const body = document.body?.innerText || '';
+            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
+            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
+            if (challenge || phrases.some((word) => body.includes(word))) return true;
+            return Array.from(document.querySelectorAll('#userPostedFeeds .note-item[data-note-id]'))
+                .some((item) => item.getAttribute('data-note-id') === expected);
+        }""", arg=note_id, timeout=10_000)
+    except PlaywrightTimeoutError:
+        await _raise_for_challenge(page)
+        return False
+    await _raise_for_challenge(page)
+    return True
 
 
 async def _click_note_and_check(page: Any, note_id: str) -> None:
@@ -494,20 +620,21 @@ async def _click_note_and_check(page: Any, note_id: str) -> None:
 
 async def _close_modal(page: Any) -> None:
     # Close first: risk detection must not leave the user-facing overlay open.
-    close = page.locator(".close-circle")
+    modal = page.locator(".note-container")
+    close = modal.locator(".close-circle")
     try:
-        if await close.is_visible():
-            await close.click()
+        if await close.is_visible(timeout=1_000):
+            await close.click(timeout=2_000)
         else:
-            await page.locator(".note-container").press("Escape")
-    except (PlaywrightTimeoutError, RuntimeError):
+            await page.keyboard.press("Escape")
+    except (PlaywrightError, PlaywrightTimeoutError, TypeError):
         try:
-            await page.locator(".note-container").press("Escape")
-        except (PlaywrightTimeoutError, RuntimeError):
+            await page.keyboard.press("Escape")
+        except (PlaywrightError, PlaywrightTimeoutError, TypeError):
             pass
     try:
-        await page.wait_for_function("() => !document.querySelector('.note-container')", timeout=10_000)
-    except (AttributeError, TypeError, PlaywrightTimeoutError):
+        await modal.wait_for(state="hidden", timeout=3_000)
+    except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TypeError):
         pass
     await _raise_for_challenge(page)
 
@@ -581,15 +708,42 @@ def _int_like(value: object) -> int | None:
 
 
 def _timestamp(value: object) -> str | None:
+    seconds = _timestamp_seconds(value)
+    if seconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, UTC).replace(microsecond=0).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _timestamp_seconds(value: object) -> float | None:
     if isinstance(value, str) and re.fullmatch(r"\d+(?:\.\d+)?", value.strip()):
         value = float(value)
     if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(float(value)) or value <= 0:
         return None
     seconds = float(value) / 1000 if value > 10_000_000_000 else float(value)
     try:
-        return datetime.fromtimestamp(seconds, UTC).replace(microsecond=0).isoformat()
+        datetime.fromtimestamp(seconds, UTC)
     except (OverflowError, OSError, ValueError):
         return None
+    return seconds
+
+
+def _detail_server_seconds(payload: Mapping[str, Any]) -> float | None:
+    server_seconds = _timestamp_seconds(_mapping(payload.get("data")).get("current_time"))
+    if server_seconds is None:
+        return None
+    if abs(server_seconds - datetime.now(UTC).timestamp()) > _MAX_CLOCK_SKEW_SECONDS:
+        return None
+    return server_seconds
+
+
+def _detail_server_observed_at(payload: Mapping[str, Any]) -> str | None:
+    server_seconds = _detail_server_seconds(payload)
+    if server_seconds is None:
+        return None
+    return datetime.fromtimestamp(server_seconds, UTC).replace(microsecond=0).isoformat()
 
 
 def _observed_at() -> str:

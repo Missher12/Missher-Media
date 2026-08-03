@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -24,11 +26,27 @@ class Response:
     status: int = 200
     url: str = "https://www.xiaohongshu.com/api/sns/web/v1/user_posted"
     error: Exception | None = None
+    request: object | None = None
 
     async def json(self) -> object:
         if self.error:
             raise self.error
         return self.payload
+
+
+@dataclass
+class Request:
+    url: str
+    post_data_json: object = None
+
+
+class UnreadablePostRequest:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    @property
+    def post_data_json(self) -> object:
+        raise RuntimeError("synthetic non-JSON request body")
 
 
 @dataclass
@@ -49,9 +67,14 @@ class Waiter:
     @property
     def value(self) -> Any:
         async def value() -> Response:
-            response = self.page.responses.pop(0)
-            assert self.predicate(response)
-            return response
+            while self.page.responses:
+                response = self.page.responses.pop(0)
+                if self.predicate(response):
+                    return response
+                self.page.ignored_responses += 1
+            if self.page.challenge_on_response_timeout:
+                self.page.challenge = "challenge-selector"
+            raise TimeoutError("synthetic response timeout")
         return value()
 
 
@@ -59,23 +82,47 @@ class Waiter:
 class Locator:
     page: "Page"
     note_id: str | None = None
+    selector: str = ""
 
-    async def click(self) -> None:
+    def locator(self, selector: str) -> "Locator":
+        self.page.locator_paths.append((self.selector, selector))
+        return Locator(self.page, selector=f"{self.selector} {selector}".strip())
+
+    async def click(self, **_kwargs: Any) -> None:
+        if self.page.close_click_error and ".close-circle" in self.selector:
+            raise RuntimeError("synthetic Playwright close failure")
         if self.note_id:
             self.page.clicked.append(self.note_id)
         self.page.modal_visible = False if self.note_id is None else True
+        if ".close-circle" in self.selector and self.page.challenge_on_close:
+            self.page.challenge = "challenge-selector"
 
-    async def press(self, key: str) -> None:
+    async def press(self, key: str, **_kwargs: Any) -> None:
         assert key == "Escape"
         self.page.modal_visible = False
 
-    async def is_visible(self) -> bool:
+    async def is_visible(self, **_kwargs: Any) -> bool:
         return self.page.modal_visible
+
+    async def wait_for(self, **kwargs: Any) -> None:
+        self.page.modal_waits.append(kwargs)
+        if self.page.modal_wait_error:
+            raise RuntimeError("synthetic Playwright modal wait failure")
 
     async def evaluate_all(self, _script: str, note_id: str) -> None:
         assert self.note_id is not None
         self.page.clicked.append(note_id)
         self.page.modal_visible = True
+
+
+@dataclass
+class Keyboard:
+    page: "Page"
+
+    async def press(self, key: str) -> None:
+        assert key == "Escape"
+        self.page.keyboard_presses.append(key)
+        self.page.modal_visible = False
 
 
 @dataclass
@@ -89,14 +136,34 @@ class Page:
     listeners: int = 0
     modal_visible: bool = False
     evaluations: list[str] = field(default_factory=list)
+    wait_scripts: list[tuple[str, object, int]] = field(default_factory=list)
+    events: list[str] = field(default_factory=list)
+    locator_paths: list[tuple[str, str]] = field(default_factory=list)
+    modal_waits: list[dict[str, Any]] = field(default_factory=list)
+    keyboard_presses: list[str] = field(default_factory=list)
+    ignored_responses: int = 0
+    challenge_on_response_timeout: bool = False
+    challenge_on_wait_timeout: bool = False
+    timeout_card_change: bool = False
+    timeout_search_settle: bool = False
+    timeout_note_render: bool = False
+    close_click_error: bool = False
+    modal_wait_error: bool = False
+    challenge_on_close: bool = False
+
+    @property
+    def keyboard(self) -> Keyboard:
+        return Keyboard(self)
 
     def expect_response(self, predicate: Any, *, timeout: int) -> Waiter:
         assert timeout == 10_000
+        self.events.append("listener")
         return Waiter(self, predicate)
 
     async def goto(self, url: str, **_kwargs: Any) -> None:
         self.url = url
         self.gotos.append(url)
+        self.events.append("navigate")
 
     def get_by_test_id(self, *_args: Any, **_kwargs: Any) -> Locator:
         return Locator(self)
@@ -104,8 +171,8 @@ class Page:
     def locator(self, selector: str, *, has: Any = None) -> Locator:
         assert "must-not-leak" not in selector
         if selector == "[data-note-id]":
-            return Locator(self, self.cards[0]["note_id"] if self.cards else None)
-        return Locator(self)
+            return Locator(self, self.cards[0]["note_id"] if self.cards else None, selector)
+        return Locator(self, selector=selector)
 
     async def evaluate(self, script: str, *args: Any) -> Any:
         self.evaluations.append(script)
@@ -116,11 +183,26 @@ class Page:
         if "userPostedFeeds" in script:
             return {"risk_text": self.challenge, "cards": self.cards}
         if "feeds-page" in script:
+            self.events.append("read-search")
             return {"risk_text": self.challenge, "cards": self.cards}
         return {"risk_text": self.challenge, "visible": self.modal_visible}
 
-    async def wait_for_function(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def wait_for_function(self, script: str, *, arg: object = None, timeout: int) -> None:
+        self.wait_scripts.append((script, arg, timeout))
+        if "search page settled" in script:
+            self.events.append("search-settle")
+            should_timeout = self.timeout_search_settle
+        elif "exact note card rendered" in script:
+            self.events.append("note-render")
+            should_timeout = self.timeout_note_render
+        elif "unseen note card" in script:
+            should_timeout = self.timeout_card_change
+        else:
+            should_timeout = False
+        if should_timeout:
+            if self.challenge_on_wait_timeout:
+                self.challenge = "challenge-selector"
+            raise TimeoutError("synthetic wait timeout")
 
 
 @dataclass
@@ -128,16 +210,20 @@ class Browser:
     page: Page
     allow_navigation: bool = True
     navigations: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+    navigation_status: int | None = None
 
     def require_page(self, platform: str) -> Page:
         assert platform == "xhs"
         return self.page
 
-    async def navigate(self, page: Page, url: str, *, allowed_hosts: tuple[str, ...]) -> None:
+    async def navigate(self, page: Page, url: str, *, allowed_hosts: tuple[str, ...]) -> object:
         self.navigations.append((url, allowed_hosts))
         if not self.allow_navigation:
             raise PreconditionError("navigation")
         await page.goto(url)
+        if self.navigation_status is None:
+            return None
+        return type("NavigationResponse", (), {"status": self.navigation_status})()
 
 
 def note(note_id: str, *, title: object = "Nice note", liked: object = 0) -> dict[str, Any]:
@@ -148,24 +234,27 @@ def note(note_id: str, *, title: object = "Nice note", liked: object = 0) -> dic
     }
 
 
-def creator_response(*items: dict[str, Any], has_more: object = False, cursor: object = "0") -> Response:
-    return Response({"code": 0, "success": True, "msg": "ok", "data": {"cursor": cursor, "has_more": has_more, "notes": list(items)}})
+def creator_response(*items: dict[str, Any], has_more: object = False, cursor: object = "0", uid: str = "u", post_uid: str | None = None) -> Response:
+    url = f"https://www.xiaohongshu.com/api/sns/web/v1/user_posted?user_id={quote(uid, safe='')}&xsec_token=must-not-leak"
+    request = Request(url, {"user_id": post_uid, "xsec_token": "must-not-leak"} if post_uid is not None else None)
+    return Response({"code": 0, "success": True, "msg": "ok", "data": {"cursor": cursor, "has_more": has_more, "notes": list(items)}}, url=url, request=request)
 
 
 def detail_response(note_id: str, **overrides: Any) -> Response:
+    current_time = int(datetime.now(UTC).timestamp() * 1000)
     card = {
         "note_id": note_id, "title": "Detail title", "desc": "Detail desc", "type": "normal",
-        "time": 1_700_000_000_000, "last_update_time": 1_700_000_000_000,
+        "time": current_time - 1_000, "last_update_time": current_time - 1_000,
         "interact_info": {"liked_count": 0, "comment_count": 2, "collected_count": 3, "share_count": 4},
         "user": {"nickname": "Creator", "user_id": "must-not-leak"}, "xsec_token": "must-not-leak",
     }
     card.update(overrides)
-    return Response({"code": 0, "success": True, "msg": "ok", "data": {"current_time": 1_700_000_001_000, "items": [{"id": note_id, "note_card": card}] }}, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+    return Response({"code": 0, "success": True, "msg": "ok", "data": {"current_time": current_time, "items": [{"id": note_id, "note_card": card}] }}, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
 
 
 def test_creator_parses_safe_schema_dedupes_and_paginates() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
-    page = Page(responses=[creator_response(note("one"), note("one"), has_more=1, cursor="next"), creator_response(note("two"), has_more=0, cursor="end")])
+    page = Page(responses=[creator_response(note("one"), note("one"), has_more=1, cursor="next", uid="user id"), creator_response(note("two"), has_more=0, cursor="end", uid="user id")])
     records = run(collect_creator(CollectionRequest(platform="xhs", count=0, page_cap=3, uid="user id"), Browser(page)))
     assert [r["note_id"] for r in records] == ["one", "two"]
     assert page.gotos == ["https://www.xiaohongshu.com/user/profile/user%20id"]
@@ -242,6 +331,178 @@ def test_modal_is_closed_before_rethrowing_a_challenge() -> None:
     assert page.modal_visible is False
 
 
+@pytest.mark.parametrize("offset", (-timedelta(minutes=10), timedelta(minutes=10)))
+def test_detail_server_time_outside_current_run_skew_is_not_fresh(offset: timedelta) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    response = detail_response("one")
+    current_time = int((datetime.now(UTC) + offset).timestamp() * 1000)
+    response.payload["data"]["current_time"] = current_time  # type: ignore[index]
+    response.payload["data"]["items"][0]["note_card"]["time"] = current_time - 1_000  # type: ignore[index]
+    page = Page(responses=[creator_response(note("one")), response], cards=[{"note_id": "one"}])
+
+    record = run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))[0]
+
+    assert record["engagement_fresh"] is False
+    assert record["engagement_observed_at"] is None
+    assert record["detail_completed"] is False
+
+
+def test_detail_publish_time_after_server_current_time_is_rejected() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    response = detail_response("one")
+    current_time = response.payload["data"]["current_time"]  # type: ignore[index]
+    response.payload["data"]["items"][0]["note_card"]["time"] = current_time + 1_000  # type: ignore[index]
+    page = Page(responses=[creator_response(note("one")), response], cards=[{"note_id": "one"}])
+
+    record = run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))[0]
+
+    assert record["engagement_fresh"] is False
+    assert record["detail_completed"] is False
+    assert record["date"] is None
+
+
+def test_creator_listener_ignores_other_users_and_accepts_exact_query_or_post_uid() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _is_creator_response, collect_creator
+    wrong = creator_response(note("wrong"), uid="other")
+    matching = creator_response(note("right"), uid="target user")
+    page = Page(responses=[wrong, matching])
+
+    records = run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="target user"), Browser(page)))
+
+    assert [record["note_id"] for record in records] == ["right"]
+    assert page.ignored_responses == 1
+    post_url = "https://www.xiaohongshu.com/api/sns/web/v1/user_posted?xsec_token=must-not-leak"
+    post_response = Response({}, url=post_url, request=Request(post_url, {"user_id": "target user", "xsec_token": "must-not-leak"}))
+    assert _is_creator_response(post_response, "target user") is True
+    assert "must-not-leak" not in json.dumps(records)
+
+
+def test_creator_predicate_safely_ignores_unreadable_post_body_when_query_uid_matches() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _is_creator_response
+    url = "https://www.xiaohongshu.com/api/sns/web/v1/user_posted?user_id=target&xsec_token=must-not-leak"
+    response = Response({}, url=url, request=UnreadablePostRequest(url))
+
+    assert _is_creator_response(response, "target") is True
+
+
+def test_creator_response_timeout_rechecks_challenge_before_stopping_pagination() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
+    page = Page(
+        responses=[creator_response(note("one"), has_more=True, cursor="next")],
+        challenge_on_response_timeout=True,
+    )
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(collect_creator(CollectionRequest(platform="xhs", count=0, page_cap=2, uid="u"), Browser(page)))
+
+
+def test_search_card_change_timeout_rechecks_challenge_before_normal_break() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, search
+    page = Page(
+        cards=[{"note_id": "one", "title": "T"}],
+        timeout_card_change=True,
+        challenge_on_wait_timeout=True,
+    )
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(search(CollectionRequest(platform="xhs", count=0, page_cap=2, keyword="term"), Browser(page)))
+
+
+def test_nonrisk_navigation_http_error_is_controlled_source_error() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import SourceResponseError, collect_creator
+    browser = Browser(Page(responses=[creator_response(note("never"))]), navigation_status=500)
+
+    with pytest.raises(SourceResponseError, match="http-500"):
+        run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u"), browser))
+
+    assert browser.page.listeners == 0
+
+
+def test_search_waits_for_semantic_settled_state_before_first_dom_read() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import search
+    page = Page(cards=[{"note_id": "one", "title": "T"}])
+
+    run(search(CollectionRequest(platform="xhs", count=1, keyword="term"), Browser(page)))
+
+    assert page.events.index("search-settle") < page.events.index("read-search")
+    settle_script, _, timeout = next(item for item in page.wait_scripts if "search page settled" in item[0])
+    assert "challenge-selector" in settle_script and "暂无" in settle_script and timeout == 10_000
+
+
+def test_complete_waits_for_exact_note_render_before_detail_listener() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    page = Page(responses=[creator_response(note("one")), detail_response("one")], cards=[{"note_id": "one"}])
+
+    run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))
+
+    assert page.events == ["listener", "navigate", "note-render", "listener"]
+    render_script, arg, timeout = next(item for item in page.wait_scripts if "exact note card rendered" in item[0])
+    assert arg == "one" and "challenge-selector" in render_script and timeout == 10_000
+
+
+def test_card_change_wait_predicate_requires_an_unseen_note_id() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _wait_for_card_change
+    page = Page(cards=[{"note_id": "one"}])
+
+    run(_wait_for_card_change(page, ["one", "removed"]))
+
+    script = page.wait_scripts[-1][0]
+    assert "unseen note card" in script
+    assert ".some" in script and "!priorSet.has" in script
+
+
+def test_modal_cleanup_uses_modal_scoped_close_and_keyboard_fallback_for_playwright_error() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _close_modal
+    page = Page(modal_visible=True, close_click_error=True, modal_wait_error=True)
+
+    run(_close_modal(page))
+
+    assert (".note-container", ".close-circle") in page.locator_paths
+    assert page.keyboard_presses == ["Escape"]
+    assert page.modal_visible is False
+    assert page.modal_waits == [{"state": "hidden", "timeout": 3_000}]
+
+
+def test_cleanup_challenge_does_not_mask_primary_detail_error() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import SourceResponseError, collect_creator
+    bad_detail = Response({}, status=500, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+    page = Page(
+        responses=[creator_response(note("one")), bad_detail],
+        cards=[{"note_id": "one"}],
+        challenge_on_close=True,
+    )
+
+    with pytest.raises(SourceResponseError, match="http-500"):
+        run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))
+
+    assert page.modal_visible is False
+
+
+@pytest.mark.parametrize(
+    ("source", "payload"),
+    (
+        ("creator", {}),
+        ("creator", {"code": 0, "success": True, "data": {"notes": {}}}),
+        ("detail", {}),
+        ("detail", {"code": 0, "success": True, "data": {"current_time": 1, "items": {}}}),
+    ),
+)
+def test_endpoint_payload_requires_success_code_data_and_collection_shapes(source: str, payload: object) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import SourceResponseError, collect_creator
+    if source == "creator":
+        malformed = creator_response()
+        malformed.payload = payload
+        page = Page(responses=[malformed])
+        request = CollectionRequest(platform="xhs", count=1, uid="u")
+    else:
+        malformed = Response(payload, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+        page = Page(responses=[creator_response(note("one")), malformed], cards=[{"note_id": "one"}])
+        request = CollectionRequest(platform="xhs", count=1, uid="u", complete=True)
+
+    with pytest.raises(SourceResponseError, match="payload"):
+        run(collect_creator(request, Browser(page)))
+
+
 @pytest.mark.parametrize("value, expected", [("2万", 20000), ("1.5亿", 150000000), ("0", 0), (None, None), ("NaN万", None), (float("inf"), None)])
 def test_count_parser_is_finite_and_localized(value: object, expected: object) -> None:
     from runtime.media_missher_runtime.platforms.xhs import parse_count
@@ -250,10 +511,12 @@ def test_count_parser_is_finite_and_localized(value: object, expected: object) -
 
 def test_risk_success_false_challenge_and_reports_cannot_leak_content_or_secrets() -> None:
     from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, build_checkpoint, build_run_report, collect_creator
+    risk_response = creator_response()
+    risk_response.payload = {"code": 0, "success": False, "msg": "account locked"}
     with pytest.raises(CollectionStopped):
         run(collect_creator(
             CollectionRequest(platform="xhs", count=1, uid="u"),
-            Browser(Page(responses=[Response({"code": 0, "success": False, "msg": "account locked"})])),
+            Browser(Page(responses=[risk_response])),
         ))
     report = build_run_report("complete", [{"note_id": "n", "title": "must-not-leak", "detail_attempted": True, "detail_completed": True, "complete": True, "engagement_fresh": True}], "start", "end", reason="xsec_token=must-not-leak")
     checkpoint = build_checkpoint([{"note_id": "n", "observed_at": "now", "xsec_token": "must-not-leak"}])
