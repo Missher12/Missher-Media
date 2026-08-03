@@ -52,6 +52,34 @@ class ResponseWaiter:
 
 
 @dataclass
+class LazyResponseWaiter:
+    page: "ChallengeTimingPage"
+    predicate: Any
+    exited: bool = False
+    cancelled: bool = False
+
+    async def __aenter__(self) -> "LazyResponseWaiter":
+        self.page.listener_active = True
+        return self
+
+    async def __aexit__(self, exc_type: object, *args: Any) -> None:
+        self.exited = True
+        self.cancelled = exc_type is not None
+        self.page.listener_active = False
+
+    @property
+    def value(self) -> Coroutine[Any, Any, Response]:
+        async def result() -> Response:
+            if not self.page.responses:
+                raise TimeoutError("synthetic response timeout")
+            response = self.page.responses.pop(0)
+            assert self.predicate(response)
+            return response
+
+        return result()
+
+
+@dataclass
 class CapturePage:
     url: str = "https://www.douyin.com/"
     responses: list[Response] = field(default_factory=list)
@@ -79,6 +107,31 @@ class CapturePage:
     async def wait_for_function(self, script: str, *, arg: list[str], timeout: int) -> None:
         assert timeout == 10_000
         self.waits.append(arg)
+
+
+@dataclass
+class ChallengeTimingPage(CapturePage):
+    challenge_on_navigation: bool = False
+    challenge_on_scroll: bool = False
+    listener_active: bool = False
+    listener_waiters: list[LazyResponseWaiter] = field(default_factory=list)
+
+    def expect_response(self, predicate: Any, **kwargs: Any) -> LazyResponseWaiter:
+        assert kwargs["timeout"] == 10_000
+        waiter = LazyResponseWaiter(self, predicate)
+        self.listener_waiters.append(waiter)
+        return waiter
+
+    async def goto(self, url: str, **kwargs: Any) -> None:
+        await super().goto(url, **kwargs)
+        if self.challenge_on_navigation:
+            self.challenge = "challenge-selector"
+
+    async def evaluate(self, script: str) -> Any:
+        result = await super().evaluate(script)
+        if "window.scrollTo" in script and self.challenge_on_scroll:
+            self.challenge = "challenge-selector"
+        return result
 
 
 @dataclass
@@ -293,6 +346,102 @@ def test_navigation_disabled_requires_exact_preopened_target_but_can_consume_a_f
         _run(search(CollectionRequest(platform="douyin", count=1, keyword="term"), ProductionBrowser(CapturePage(url="https://www.douyin.com/user/creator"), allow_navigation=False)))
 
 
+@pytest.mark.parametrize(
+    ("uid", "page_url"),
+    (
+        ("中文 id", "https://www.douyin.com/user/%e4%b8%ad%e6%96%87%20id?uid=%E4%B8%AD%E6%96%87+id&utm_source=test"),
+        (None, "https://www.douyin.com/search/%e4%b8%ad%e6%96%87%20term?keyword=%E4%B8%AD%E6%96%87+term&utm_source=test"),
+    ),
+)
+def test_navigation_disabled_normalizes_encoded_target_and_allows_matching_content_query(uid: str | None, page_url: str) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
+
+    if uid is not None:
+        page = CapturePage(url=page_url, responses=[_creator(_aweme("open"))])
+        records = _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid=uid), ProductionBrowser(page, allow_navigation=False)))
+    else:
+        page = CapturePage(url=page_url, responses=[_search(_aweme("open"))])
+        records = _run(search(CollectionRequest(platform="douyin", count=1, keyword="中文 term"), ProductionBrowser(page, allow_navigation=False)))
+
+    assert [record["native_id"] for record in records] == ["open"]
+
+
+@pytest.mark.parametrize(
+    ("uid", "page_url"),
+    (
+        ("creator", "https://www.douyin.com/user/creator?uid=other&utm_source=test"),
+        (None, "https://www.douyin.com/search/term?keyword=other&utm_source=test"),
+    ),
+)
+def test_navigation_disabled_rejects_conflicting_content_query(uid: str | None, page_url: str) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
+
+    page = CapturePage(url=page_url, responses=[_creator(_aweme("never")) if uid is not None else _search(_aweme("never"))])
+    with pytest.raises(PreconditionError, match="matching Douyin"):
+        if uid is not None:
+            _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid=uid), ProductionBrowser(page, allow_navigation=False)))
+        else:
+            _run(search(CollectionRequest(platform="douyin", count=1, keyword="term"), ProductionBrowser(page, allow_navigation=False)))
+    assert len(page.responses) == 1
+
+
+def test_existing_challenge_is_checked_before_installing_initial_listener() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
+
+    page = ChallengeTimingPage(challenge="challenge-selector", responses=[_creator(_aweme("never"))])
+    with pytest.raises(CollectionStopped, match="challenge"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(page)))
+
+    assert page.gotos == []
+    assert page.listener_waiters == []
+    assert len(page.responses) == 1
+
+
+def test_navigation_challenge_cancels_listener_without_consuming_response() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
+
+    page = ChallengeTimingPage(challenge_on_navigation=True, responses=[_creator(_aweme("never"))])
+    with pytest.raises(CollectionStopped, match="challenge"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(page)))
+
+    assert page.gotos == ["https://www.douyin.com/user/creator"]
+    assert len(page.responses) == 1
+    assert page.listener_active is False
+    assert len(page.listener_waiters) == 1
+    assert page.listener_waiters[0].exited is True
+    assert page.listener_waiters[0].cancelled is True
+
+
+def test_scroll_challenge_cancels_listener_without_consuming_next_response_or_scrolling_again() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
+
+    page = ChallengeTimingPage(
+        challenge_on_scroll=True,
+        responses=[_creator(_aweme("one"), has_more=True, cursor=1), _creator(_aweme("never"), has_more=False)],
+    )
+    with pytest.raises(CollectionStopped, match="challenge"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=3, uid="creator"), ProductionBrowser(page)))
+
+    assert len(page.responses) == 1
+    assert sum("window.scrollTo" in script for script in page.evaluations) == 1
+    assert page.listener_active is False
+    assert len(page.listener_waiters) == 2
+    assert page.listener_waiters[-1].exited is True
+    assert page.listener_waiters[-1].cancelled is True
+
+
+def test_passive_response_timeout_exits_listener_without_leaking_it() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator
+
+    page = ChallengeTimingPage(url="https://www.douyin.com/user/creator")
+    with pytest.raises(TimeoutError, match="response timeout"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(page, allow_navigation=False)))
+
+    assert page.listener_active is False
+    assert len(page.listener_waiters) == 1
+    assert page.listener_waiters[0].exited is True
+
+
 @pytest.mark.parametrize("status", (403, 429))
 def test_risk_http_status_is_classified_before_json_or_scroll(status: int) -> None:
     from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
@@ -305,7 +454,7 @@ def test_risk_http_status_is_classified_before_json_or_scroll(status: int) -> No
     assert not any("window.scrollTo" in script for script in page.evaluations)
 
 
-@pytest.mark.parametrize("payload", ({"status_code": 461, "aweme_list": []}, {"code": 471, "aweme_list": []}, {"status_code": 999, "aweme_list": []}, {"status_code": 0, "douyin_ai_search_info": {"is_hit_high_risk": True}, "data": []}))
+@pytest.mark.parametrize("payload", ({"status_code": 461, "aweme_list": []}, {"code": 471, "aweme_list": []}, {"status_code": 999, "aweme_list": []}, {"status_code": 0, "douyin_ai_search_info": {"is_hit_high_risk": True}, "data": []}, {"status_code": 5, "douyin_ai_search_info": {"is_hit_high_risk": True}, "data": []}))
 def test_payload_risk_stops_immediately(payload: object) -> None:
     from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
 
@@ -313,6 +462,38 @@ def test_payload_risk_stops_immediately(payload: object) -> None:
     with pytest.raises(CollectionStopped):
         _run(collect_creator(CollectionRequest(platform="douyin", count=2, uid="creator"), ProductionBrowser(page)))
     assert not any("window.scrollTo" in script for script in page.evaluations)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"status_code": "461", "aweme_list": []},
+        {"code": "471", "aweme_list": []},
+        {"status_code": 7, "code": 999, "aweme_list": []},
+    ),
+)
+def test_int_like_or_conflicting_payload_risk_code_stops(payload: object) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import CollectionStopped, collect_creator
+
+    with pytest.raises(CollectionStopped, match="payload-"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(CapturePage(responses=[Response(payload)]))))
+
+
+@pytest.mark.parametrize("payload", ({"status_code": 5, "aweme_list": []}, {"code": "-1", "aweme_list": []}, {"status_code": 0, "code": "5", "aweme_list": []}))
+def test_nonzero_nonrisk_payload_code_is_a_controlled_source_error(payload: object) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import SourceResponseError, collect_creator
+
+    with pytest.raises(SourceResponseError, match="payload.*code"):
+        _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(CapturePage(responses=[Response(payload)]))))
+
+
+def test_zero_or_missing_payload_codes_are_success() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator
+
+    page = CapturePage(responses=[Response({"status_code": 0, "code": "0", "aweme_list": [_aweme("safe")], "has_more": False, "max_cursor": 0})])
+    records = _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid="creator"), ProductionBrowser(page)))
+
+    assert [record["native_id"] for record in records] == ["safe"]
 
 
 def test_challenge_page_stops_but_normal_english_risk_in_title_does_not() -> None:
@@ -349,6 +530,50 @@ def test_parser_uses_observed_media_kind_and_nested_video_duration() -> None:
 
     assert record["type"] == "images"
     assert record["duration_ms"] == 987
+
+
+@pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
+def test_parser_rejects_nonfinite_metrics_and_dates(value: float) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    item = _aweme("finite")
+    item["create_time"] = value
+    item["duration"] = value
+    item["statistics"] = {"digg_count": value, "comment_count": value, "share_count": value, "collect_count": value, "play_count": value}
+    record = parse_aweme_item(item, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["date"] is None and record["published_at"] is None
+    assert record["duration_ms"] is None
+    assert (record["liked"], record["comments"], record["shares"], record["collected"], record["plays"]) == (None, None, None, None, None)
+
+
+def test_parser_handles_out_of_range_timestamp_as_unknown() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    record = parse_aweme_item({"aweme_id": "extreme", "create_time": 10**1000}, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["date"] is None and record["published_at"] is None
+
+
+@pytest.mark.parametrize("identifier", ("slash/id", "query?id", "has space", "control\nchar", "x" * 65))
+def test_parser_rejects_unsafe_aweme_id_and_never_builds_a_link(identifier: str) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    record = parse_aweme_item(_aweme(identifier), observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["aweme_id"] is None
+    assert record["id"] is None and record["native_id"] is None
+    assert record["link"] is None and record["url"] is None
+
+
+def test_collection_skips_unsafe_aweme_ids() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator
+
+    page = CapturePage(responses=[_creator(_aweme("bad/id"), _aweme("safe_id-1"), has_more=False)])
+    records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, uid="creator"), ProductionBrowser(page)))
+
+    assert [record["native_id"] for record in records] == ["safe_id-1"]
+    assert records[0]["url"] == "https://www.douyin.com/video/safe_id-1"
 
 
 def test_complete_search_is_unsupported_and_remote_browser_is_never_closed() -> None:

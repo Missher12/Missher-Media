@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from numbers import Real
 from typing import Any, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..browser import BrowserSession, PreconditionError
 from ..models import CollectionRequest
@@ -23,6 +25,8 @@ _CREATOR_PATH = "/aweme/v1/web/aweme/post/"
 _SEARCH_PATH = "/aweme/v1/web/general/search/"
 _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"})
 _RISK_CODES = frozenset({461, 471, 999})
+_CONTENT_QUERY_KEYS = frozenset({"keyword", "q", "uid", "sec_uid"})
+_AWEME_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class CollectionStopped(RuntimeError):
@@ -46,10 +50,12 @@ class DouyinCollector:
             raise ValueError("creator collection requires uid")
         page = self.browser.require_page("douyin")
         target = _creator_page_url(self.request.uid)
-        if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, _is_creator_response, lambda: self._navigate(page, target))
-        else:
+        if not getattr(self.browser, "allow_navigation", False):
             _require_open_target(page, target, "matching Douyin creator page")
+        await _raise_for_page_challenge(page)
+        if getattr(self.browser, "allow_navigation", False):
+            response = await _capture_response_while(page, _is_creator_response, lambda: self._navigate_and_check(page, target))
+        else:
             response = await _capture_response_while(page, _is_creator_response, _noop)
         return await self._collect_pages(page, response, source="creator")
 
@@ -60,10 +66,12 @@ class DouyinCollector:
             raise ValueError("complete search is not supported")
         page = self.browser.require_page("douyin")
         target = _search_page_url(self.request.keyword)
-        if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, _is_search_response, lambda: self._navigate(page, target))
-        else:
+        if not getattr(self.browser, "allow_navigation", False):
             _require_open_target(page, target, "matching Douyin search page")
+        await _raise_for_page_challenge(page)
+        if getattr(self.browser, "allow_navigation", False):
+            response = await _capture_response_while(page, _is_search_response, lambda: self._navigate_and_check(page, target))
+        else:
             response = await _capture_response_while(page, _is_search_response, _noop)
         return await self._collect_pages(page, response, source="search")
 
@@ -94,7 +102,7 @@ class DouyinCollector:
                 break
             prior_cursor = cursor
             try:
-                response = await _capture_response_while(page, predicate, lambda: _scroll(page))
+                response = await _capture_response_while(page, predicate, lambda: _scroll_and_check(page))
             except PlaywrightTimeoutError:
                 break
         return records
@@ -104,6 +112,10 @@ class DouyinCollector:
         status = getattr(response, "status", None)
         if isinstance(status, int) and classify_response(status=status).stop_all:
             raise CollectionStopped(f"http-{status}")
+
+    async def _navigate_and_check(self, page: Any, url: str) -> None:
+        await self._navigate(page, url)
+        await _raise_for_page_challenge(page)
 
 
 async def collect_creator(request: CollectionRequest, browser: BrowserSession | Any) -> list[dict[str, Any]]:
@@ -154,15 +166,41 @@ async def _response_payload(response: Any) -> Mapping[str, Any]:
 
 
 def _raise_for_payload_risk(payload: Mapping[str, Any]) -> None:
+    codes: list[tuple[str, object]] = []
     for field in ("status_code", "code"):
-        value = payload.get(field)
-        if isinstance(value, str) and value.isdigit():
-            value = int(value)
-        if isinstance(value, int) and not isinstance(value, bool) and value in _RISK_CODES:
+        if field in payload:
+            codes.append((field, _int_like(payload[field])))
+    for _, value in codes:
+        if isinstance(value, int) and value in _RISK_CODES:
             raise CollectionStopped(f"payload-{value}")
     high_risk = _mapping(payload.get("douyin_ai_search_info")).get("is_hit_high_risk")
     if high_risk is True:
         raise CollectionStopped("payload-high-risk")
+    invalid_field = next((field for field, value in codes if value is _INVALID), None)
+    if invalid_field is not None:
+        raise SourceResponseError(f"Douyin payload {invalid_field} is not an integer code")
+    nonzero = next(((field, value) for field, value in codes if value != 0), None)
+    if nonzero is not None:
+        field, value = nonzero
+        raise SourceResponseError(f"Douyin payload {field} returned code {value}")
+
+
+_INVALID = object()
+
+
+def _int_like(value: object) -> int | object:
+    if isinstance(value, bool):
+        return _INVALID
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Real):
+        try:
+            return int(value) if math.isfinite(value) and value == int(value) else _INVALID
+        except (OverflowError, TypeError, ValueError):
+            return _INVALID
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value):
+        return int(value)
+    return _INVALID
 
 
 async def _raise_for_page_challenge(page: Any) -> None:
@@ -188,6 +226,11 @@ async def _noop() -> None:
 
 async def _scroll(page: Any) -> None:
     await page.evaluate("() => window.scrollTo(0, document.documentElement.scrollHeight)")
+
+
+async def _scroll_and_check(page: Any) -> None:
+    await _scroll(page)
+    await _raise_for_page_challenge(page)
 
 
 def _page_items(payload: Mapping[str, Any], source: str) -> tuple[list[Mapping[str, Any]], bool, object]:
@@ -245,7 +288,7 @@ def _append_records(
 
 
 def parse_aweme_item(item: Mapping[str, Any], *, observed_at: str | None = None) -> dict[str, Any]:
-    aweme_id = _text(item.get("aweme_id"))
+    aweme_id = _safe_aweme_id(item.get("aweme_id"))
     author = _mapping(item.get("author"))
     statistics = _mapping(item.get("statistics"))
     video = _mapping(item.get("video"))
@@ -277,7 +320,13 @@ def parse_aweme_item(item: Mapping[str, Any], *, observed_at: str | None = None)
 def _require_open_target(page: Any, target: str, message: str) -> None:
     parsed = urlparse(getattr(page, "url", ""))
     expected = urlparse(target)
-    if parsed.scheme != "https" or parsed.hostname != _DOUYIN_HOST or parsed.path != expected.path:
+    actual_segments = tuple(unquote(segment) for segment in parsed.path.split("/"))
+    expected_segments = tuple(unquote(segment) for segment in expected.path.split("/"))
+    if parsed.scheme != "https" or parsed.hostname != _DOUYIN_HOST or actual_segments != expected_segments:
+        raise PreconditionError(message)
+    intended_segment = expected_segments[-1]
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if any(value != intended_segment for key in _CONTENT_QUERY_KEYS for value in query.get(key, ())):
         raise PreconditionError(message)
 
 
@@ -290,7 +339,8 @@ def _search_page_url(keyword: str) -> str:
 
 
 def _video_link(aweme_id: str | None) -> str | None:
-    return f"https://{_DOUYIN_HOST}/video/{aweme_id}" if aweme_id else None
+    validated = _safe_aweme_id(aweme_id)
+    return f"https://{_DOUYIN_HOST}/video/{validated}" if validated else None
 
 
 def _media_type(item: Mapping[str, Any]) -> str:
@@ -317,14 +367,35 @@ def _text(value: object) -> str | None:
     return str(value) if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _safe_aweme_id(value: object) -> str | None:
+    text = str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+    return text if isinstance(text, str) and _AWEME_ID_PATTERN.fullmatch(text) else None
+
+
 def _metric(value: object) -> int | float | None:
-    return value if isinstance(value, Real) and not isinstance(value, bool) else None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return value if math.isfinite(value) else None
+    except (OverflowError, TypeError, ValueError):
+        return None
 
 
 def _date(value: object) -> str | None:
     if isinstance(value, bool) or not isinstance(value, Real):
         return value if isinstance(value, str) and value else None
-    return datetime.fromtimestamp(value, UTC).isoformat()
+    if not isinstance(value, int):
+        try:
+            if not math.isfinite(value):
+                return None
+        except (OverflowError, TypeError, ValueError):
+            return None
+    try:
+        return datetime.fromtimestamp(value, UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _observed_at() -> str:
