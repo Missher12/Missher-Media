@@ -1,0 +1,16 @@
+[
+  {
+    "platform": "weibo",
+    "mblog_id": "synthetic-weibo-creator-1",
+    "type": "text",
+    "title": "Synthetic Weibo creator post",
+    "link": "https://example.invalid/weibo/creator/1",
+    "date": "2026-01-06",
+    "liked": 7,
+    "comments": 2,
+    "shares": 1,
+    "collected": 0,
+    "source": "Synthetic Client",
+    "pics": []
+  }
+]

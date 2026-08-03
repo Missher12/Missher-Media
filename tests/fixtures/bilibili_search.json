@@ -1,0 +1,16 @@
+[
+  {
+    "platform": "bilibili",
+    "bvid": "BVsyntheticSearch1",
+    "type": "video",
+    "title": "Synthetic Bilibili search result",
+    "desc": "Invented search fixture",
+    "link": "https://example.invalid/bilibili/search/1?from=fixture",
+    "date": "2026-01-02",
+    "liked": 5,
+    "comments": 1,
+    "shares": 0,
+    "collected": 2,
+    "search_keyword": "synthetic topic"
+  }
+]

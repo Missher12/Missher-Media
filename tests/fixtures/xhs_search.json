@@ -1,0 +1,17 @@
+[
+  {
+    "platform": "xhs",
+    "note_id": "synthetic-xhs-search-1",
+    "type": "video",
+    "title": "Synthetic Xiaohongshu search result",
+    "desc": "Invented search fixture",
+    "link": "https://example.invalid/xhs/search/1?xsec_token=CANARY-TOKEN",
+    "date": null,
+    "liked": null,
+    "comments": 0,
+    "collected": null,
+    "shares": null,
+    "search_keyword": "synthetic topic",
+    "xsec_token": "CANARY-TOKEN"
+  }
+]

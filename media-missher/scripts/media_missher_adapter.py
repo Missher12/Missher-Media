@@ -3,18 +3,21 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import os
 import re
 import secrets
 import signal
+import sqlite3
 import stat
 import subprocess
 import tempfile
 import threading
 import time
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -417,6 +420,400 @@ def discover_current_json(run_dir: Path, *, started_ns: int) -> tuple[Path, ...]
     return tuple(sorted(discovered))
 
 
+def _normalize_value(value):
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("records cannot contain non-finite numbers")
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_value(item) for item in value]
+    raise ValueError(f"record value is not JSON-compatible: {type(value).__name__}")
+
+
+def normalize_records(records) -> list[dict]:
+    if not isinstance(records, (list, tuple)):
+        raise ValueError("records must be a list of JSON objects")
+    normalized_source = []
+    columns: list[str] = []
+    seen = set()
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise ValueError(f"record {index} must be a JSON object")
+        normalized = {str(key): _normalize_value(value) for key, value in record.items()}
+        normalized_source.append(normalized)
+        for key in normalized:
+            if key not in seen:
+                seen.add(key)
+                columns.append(key)
+    return [{key: record.get(key) for key in columns} for record in normalized_source]
+
+
+_FORMAT_SUFFIX = {
+    "json": ".json",
+    "csv": ".csv",
+    "jsonl": ".jsonl",
+    "sqlite": ".sqlite",
+}
+
+
+def _output_path(output_base: Path, format_name: str) -> Path:
+    if format_name not in _FORMAT_SUFFIX:
+        raise ValueError(f"unsupported output format: {format_name}")
+    base = Path(output_base).expanduser().resolve()
+    suffix = _FORMAT_SUFFIX[format_name]
+    return base if base.suffix == suffix else Path(f"{base}{suffix}")
+
+
+def _prepare_private_parent(path: Path):
+    parent_existed = path.parent.exists()
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if not parent_existed:
+        path.parent.chmod(0o700)
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def write_output(records, format_name: str, output_base: Path) -> Path:
+    normalized = normalize_records(records)
+    path = _output_path(output_base, format_name)
+    _prepare_private_parent(path)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        if format_name == "json":
+            temporary.write_text(
+                json.dumps(normalized, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        elif format_name == "jsonl":
+            with temporary.open("x", encoding="utf-8") as handle:
+                for record in normalized:
+                    handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                    handle.write("\n")
+        elif format_name == "csv":
+            columns = list(normalized[0]) if normalized else []
+            with temporary.open("x", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns)
+                writer.writeheader()
+                for record in normalized:
+                    writer.writerow(
+                        {
+                            key: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                            for key, value in record.items()
+                        }
+                    )
+        else:
+            columns = list(normalized[0]) if normalized else []
+            connection = sqlite3.connect(temporary)
+            try:
+                definitions = ", ".join(
+                    f"{_quote_identifier(column)} TEXT" for column in columns
+                )
+                schema = '"_position" INTEGER PRIMARY KEY'
+                if definitions:
+                    schema = f"{schema}, {definitions}"
+                connection.execute(f'CREATE TABLE "records" ({schema})')
+                if columns:
+                    names = ", ".join(_quote_identifier(column) for column in columns)
+                    placeholders = ", ".join("?" for _ in columns)
+                    for position, record in enumerate(normalized):
+                        values = [
+                            json.dumps(record[column], ensure_ascii=False, separators=(",", ":"))
+                            for column in columns
+                        ]
+                        connection.execute(
+                            f'INSERT INTO "records" ("_position", {names}) VALUES (?, {placeholders})',
+                            [position, *values],
+                        )
+                connection.commit()
+            finally:
+                connection.close()
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return path.resolve()
+
+
+def read_output(path: Path, format_name: str) -> list[dict]:
+    source = Path(path).expanduser().resolve()
+    if format_name == "json":
+        records = json.loads(source.read_text(encoding="utf-8"))
+    elif format_name == "jsonl":
+        records = [
+            json.loads(line)
+            for line in source.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    elif format_name == "csv":
+        with source.open(encoding="utf-8", newline="") as handle:
+            records = [
+                {key: json.loads(value) for key, value in row.items()}
+                for row in csv.DictReader(handle)
+            ]
+    elif format_name == "sqlite":
+        connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+        try:
+            columns = [
+                row[1]
+                for row in connection.execute('PRAGMA table_info("records")')
+                if row[1] != "_position"
+            ]
+            names = ", ".join(_quote_identifier(column) for column in columns)
+            rows = connection.execute(
+                f'SELECT {names} FROM "records" ORDER BY "_position"'
+                if names
+                else 'SELECT "_position" FROM "records" ORDER BY "_position"'
+            ).fetchall()
+            records = [
+                {column: json.loads(value) for column, value in zip(columns, row)}
+                for row in rows
+            ]
+        finally:
+            connection.close()
+    else:
+        raise ValueError(f"unsupported output format: {format_name}")
+    return normalize_records(records)
+
+
+_SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "cookies",
+    "environment",
+    "env",
+    "password",
+    "proxy",
+    "secret",
+    "token",
+    "xsec_token",
+    "author_id",
+    "author_sec_uid",
+    "user_id",
+    "open_id",
+    "uid",
+    "sec_uid",
+    "account_id",
+}
+
+
+def redact_for_summary(value, *, secrets: set[str] | None = None):
+    configured_secrets = {item for item in (secrets or set()) if item}
+
+    def redact(item):
+        if isinstance(item, Mapping):
+            cleaned = {}
+            for key, child in item.items():
+                normalized_key = str(key).strip().lower()
+                if normalized_key in _SENSITIVE_KEYS or any(
+                    marker in normalized_key
+                    for marker in ("password", "credential", "access_token", "refresh_token")
+                ):
+                    continue
+                cleaned[str(key)] = redact(child)
+            return cleaned
+        if isinstance(item, (list, tuple)):
+            return [redact(child) for child in item]
+        if isinstance(item, str):
+            cleaned = item
+            for secret in configured_secrets:
+                cleaned = cleaned.replace(secret, "[redacted]")
+            parsed = urlsplit(cleaned)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                cleaned = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+            return cleaned
+        return item
+
+    return redact(value)
+
+
+def _platform_from_record(record: Mapping, path: Path) -> str | None:
+    explicit = str(record.get("platform", "")).strip().lower()
+    if explicit in PLATFORMS:
+        return explicit
+    name = path.name.lower()
+    for platform in PLATFORMS:
+        if name.startswith(f"{platform}_"):
+            return platform
+    key_platforms = (
+        ("bvid", "bilibili"),
+        ("dynamic_id", "bilibili"),
+        ("note_id", "xhs"),
+        ("aweme_id", "douyin"),
+        ("mblog_id", "weibo"),
+    )
+    for key, platform in key_platforms:
+        if record.get(key) is not None:
+            return platform
+    return None
+
+
+def _record_identity(record: Mapping, platform: str) -> str:
+    keys = {
+        "bilibili": ("dynamic_id", "bvid", "link"),
+        "xhs": ("note_id", "link"),
+        "douyin": ("aweme_id", "link"),
+        "weibo": ("mblog_id", "link"),
+    }[platform]
+    for key in keys:
+        if record.get(key) not in (None, ""):
+            return f"{platform}:{key}:{record[key]}"
+    return f"{platform}:anonymous:{json.dumps(record, sort_keys=True, ensure_ascii=False)}"
+
+
+def _parse_observed_ns(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and math.isfinite(float(value)) and value > 0:
+        numeric = float(value)
+        if numeric < 10_000_000_000:
+            return int(numeric * 1_000_000_000)
+        if numeric < 10_000_000_000_000:
+            return int(numeric * 1_000_000)
+        if numeric < 10_000_000_000_000_000:
+            return int(numeric * 1_000)
+        return int(numeric)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1_000_000_000)
+
+
+def _bilibili_complete(record: Mapping) -> bool:
+    title = str(record.get("title") or "").strip()
+    if title in {"", "无标题", "(无标题)", "动态"}:
+        return False
+    return bool(
+        record.get("complete") is True
+        and record.get("date")
+        and all(record.get(key) is not None for key in ("liked", "comments", "shares", "collected"))
+    )
+
+
+def _xhs_complete(record: Mapping, started_ns: int) -> bool:
+    observed_ns = _parse_observed_ns(
+        record.get("engagement_observed_at") or record.get("metric_observed_at")
+    )
+    source = str(record.get("engagement_source") or "").lower()
+    precision = str(record.get("date_precision") or "").lower()
+    return bool(
+        record.get("complete") is True
+        and record.get("detail_attempted") is True
+        and record.get("date")
+        and precision not in {"", "unknown", "estimated", "estimated_day"}
+        and record.get("engagement_fresh") is True
+        and source in {"detail", "detail_api", "html", "cdp", "detail_html", "detail_cdp"}
+        and observed_ns is not None
+        and observed_ns >= started_ns
+        and all(record.get(key) is not None for key in ("liked", "comments", "collected"))
+    )
+
+
+def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
+    errors: list[str] = []
+    evidence: list[str] = []
+    collected: dict[str, list[dict]] = {platform: [] for platform in request.platforms}
+    risk_stopped = False
+    for raw_path in paths:
+        unresolved = Path(raw_path).expanduser()
+        if unresolved.is_symlink():
+            path = unresolved.absolute()
+            evidence.append(str(path))
+            errors.append(f"stale or unsafe evidence: {path}")
+            continue
+        path = unresolved.resolve()
+        evidence.append(str(path))
+        try:
+            stat_result = path.stat()
+        except OSError as exc:
+            errors.append(f"evidence cannot be read: {path}: {exc}")
+            continue
+        if path.is_symlink() or stat_result.st_mtime_ns < started_ns:
+            errors.append(f"stale or unsafe evidence: {path}")
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid JSON evidence: {path}: {exc}")
+            continue
+        if isinstance(payload, dict):
+            status = str(payload.get("status", "")).lower().replace("_", "-")
+            if status in {"risk", "risk-stopped", "locked", "cooldown"}:
+                risk_stopped = True
+                continue
+            errors.append(f"unexpected top-level JSON object: {path}")
+            continue
+        if not isinstance(payload, list):
+            errors.append(f"unexpected top-level JSON type: {path}")
+            continue
+        try:
+            records = normalize_records(payload)
+        except ValueError as exc:
+            errors.append(f"invalid records in {path}: {exc}")
+            continue
+        for record in records:
+            platform = _platform_from_record(record, path)
+            if platform not in request.platforms:
+                errors.append(f"unexpected or unknown platform record in {path}")
+                continue
+            collected[platform].append(record)
+
+    deduplicated: dict[str, list[dict]] = {}
+    for platform, records in collected.items():
+        unique = {}
+        for record in records:
+            unique.setdefault(_record_identity(record, platform), record)
+        deduplicated[platform] = list(unique.values())
+
+    counts = {platform: len(records) for platform, records in deduplicated.items()}
+    for platform in request.platforms:
+        expected = request.platform_counts.get(platform, request.count)
+        if expected > 0 and counts[platform] < expected:
+            errors.append(f"{platform}: expected {expected} records, found {counts[platform]}")
+
+    if "bilibili" in request.platforms and (request.complete or request.bilibili_complete):
+        incomplete = sum(not _bilibili_complete(record) for record in deduplicated["bilibili"])
+        if incomplete:
+            errors.append(f"Bilibili complete validation failed for {incomplete} records")
+    if "xhs" in request.platforms and (request.complete or request.xhs_complete):
+        incomplete = sum(
+            not _xhs_complete(record, started_ns) for record in deduplicated["xhs"]
+        )
+        if incomplete:
+            errors.append(f"XHS complete validation failed for {incomplete} records")
+
+    records = normalize_records(
+        [record for platform in request.platforms for record in deduplicated[platform]]
+    )
+    if risk_stopped:
+        status = "risk-stopped"
+    elif not records:
+        status = "failed"
+    elif errors:
+        status = "partial"
+    else:
+        status = "success"
+    return {
+        "status": status,
+        "counts": counts,
+        "records": records,
+        "evidence": evidence,
+        "errors": errors,
+    }
+
+
 _RISK_PATTERN = re.compile(r"(?i)(?:\b(?:403|429|461|471|999)\b|risk|locked|cooldown)")
 
 
@@ -460,6 +857,7 @@ def run_collection_request(
             "preflight": preflight_report,
         }
     evidence = discover_current_json(run_dir, started_ns=started_ns)
+    validation = validate_run(evidence, request, started_ns)
     feishu_artifacts = tuple(run_dir.glob("feishu_*"))
     stdout = completed.stdout_path.read_text(encoding="utf-8", errors="replace")
     stderr = completed.stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -471,20 +869,49 @@ def run_collection_request(
         errors.append("engine execution timed out")
     if completed.returncode != 0:
         errors.append(f"engine exited with status {completed.returncode}")
-    if completed.risk_detected or _RISK_PATTERN.search(combined_log):
+    errors.extend(validation["errors"])
+    if (
+        completed.risk_detected
+        or _RISK_PATTERN.search(combined_log)
+        or validation["status"] == "risk-stopped"
+    ):
         status = "risk-stopped"
     elif feishu_artifacts:
         status = "failed"
     elif completed.timed_out or completed.returncode != 0:
         status = "partial" if evidence else "failed"
     else:
-        status = "success" if evidence else "failed"
-        if not evidence:
-            errors.append("engine produced no current JSON evidence")
+        status = validation["status"]
+
+    outputs = [str(path) for path in evidence] if request.output_format == "json" else []
+    if (
+        request.output_format != "json"
+        and validation["records"]
+        and status in {"success", "partial"}
+    ):
+        try:
+            outputs.append(
+                str(
+                    write_output(
+                        validation["records"],
+                        request.output_format,
+                        run_dir / "validated",
+                    )
+                )
+            )
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            errors.append(f"output conversion failed: {exc}")
+            status = "partial" if validation["records"] else "failed"
+
+    validation_summary = {
+        key: value for key, value in validation.items() if key != "records"
+    }
+    validation_summary["samples"] = redact_for_summary(validation["records"][:3])
     return {
         "status": status,
         "run_dir": str(run_dir),
         "evidence": [str(path) for path in evidence],
+        "outputs": outputs,
         "errors": errors,
         "returncode": completed.returncode,
         "timed_out": completed.timed_out,
@@ -492,6 +919,7 @@ def run_collection_request(
         "stdout_path": str(completed.stdout_path),
         "stderr_path": str(completed.stderr_path),
         "preflight": preflight_report,
+        "validation": validation_summary,
     }
 
 

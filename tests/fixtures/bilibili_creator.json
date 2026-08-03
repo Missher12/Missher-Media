@@ -1,0 +1,19 @@
+[
+  {
+    "platform": "bilibili",
+    "dynamic_id": "synthetic-bili-creator-1",
+    "bvid": "BVsynthetic1",
+    "type": "opus",
+    "title": "Synthetic Bilibili creator post",
+    "desc": "Invented fixture content",
+    "link": "https://example.invalid/bilibili/creator/1",
+    "date": "2026-01-01",
+    "date_precision": "exact",
+    "liked": 11,
+    "comments": 2,
+    "shares": 3,
+    "collected": 4,
+    "complete": true,
+    "missing_fields": []
+  }
+]

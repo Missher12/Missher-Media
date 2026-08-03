@@ -1,0 +1,16 @@
+[
+  {
+    "platform": "douyin",
+    "aweme_id": "synthetic-douyin-search-1",
+    "type": "video",
+    "title": "Synthetic Douyin search result",
+    "link": "https://example.invalid/douyin/search/1?cursor=synthetic",
+    "date": "2026-01-05",
+    "liked": 3,
+    "comments": 0,
+    "shares": 0,
+    "collected": 1,
+    "search_keyword": "synthetic topic",
+    "cursor": "synthetic-cursor"
+  }
+]

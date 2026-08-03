@@ -10,6 +10,7 @@ from media_missher_adapter import (
     create_run_directory,
     discover_current_json,
     execute_engine,
+    read_output,
     run_collection_request,
 )
 
@@ -72,6 +73,36 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
     assert summary["status"] == "success"
     assert len(summary["evidence"]) == 1
     assert Path(summary["run_dir"]).is_dir()
+    assert summary["validation"]["counts"] == {"douyin": 1}
+
+
+def test_run_collection_converts_only_after_validation(fake_engine_root, tmp_path):
+    summary = run_collection_request(
+        CollectionRequest(platforms=("weibo",), count=1, output_format="csv"),
+        engine_root=fake_engine_root,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+    )
+    assert summary["status"] == "success"
+    assert len(summary["outputs"]) == 1
+    converted = Path(summary["outputs"][0])
+    assert converted.suffix == ".csv"
+    assert len(read_output(converted, "csv")) == 1
+    assert not list(Path(summary["run_dir"]).glob("feishu_*"))
+
+
+def test_run_collection_uses_validated_count_for_partial_status(fake_engine_root, tmp_path):
+    summary = run_collection_request(
+        CollectionRequest(platforms=("bilibili",), count=2),
+        engine_root=fake_engine_root,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={"MEDIA_MISSHER_FAKE_COUNT_CAP": "1"},
+    )
+    assert summary["status"] == "partial"
+    assert summary["validation"]["counts"] == {"bilibili": 1}
 
 
 def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):

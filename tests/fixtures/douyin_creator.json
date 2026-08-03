@@ -1,0 +1,16 @@
+[
+  {
+    "platform": "douyin",
+    "aweme_id": "synthetic-douyin-creator-1",
+    "type": "video",
+    "title": "Synthetic Douyin creator video",
+    "link": "https://example.invalid/douyin/creator/1",
+    "date": "2026-01-04",
+    "liked": 13,
+    "comments": 2,
+    "shares": 1,
+    "collected": 3,
+    "plays": 21,
+    "duration_ms": 12000
+  }
+]

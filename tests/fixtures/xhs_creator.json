@@ -1,0 +1,28 @@
+[
+  {
+    "platform": "xhs",
+    "note_id": "synthetic-xhs-creator-1",
+    "type": "normal",
+    "title": "Synthetic Xiaohongshu creator note",
+    "desc": "Invented fixture content",
+    "link": "https://example.invalid/xhs/creator/1?xsec_token=CANARY-TOKEN&source=fixture",
+    "date": "2026-01-03",
+    "date_precision": "exact",
+    "liked": 8,
+    "comments": 2,
+    "collected": 3,
+    "shares": null,
+    "complete": true,
+    "detail_attempted": true,
+    "engagement_fresh": true,
+    "engagement_source": "detail_api",
+    "engagement_observed_at": "2026-08-03T00:00:00+00:00",
+    "metric_sources": {
+      "liked": "detail_api",
+      "comments": "detail_api",
+      "collected": "detail_api"
+    },
+    "missing_fields": [],
+    "xsec_token": "CANARY-TOKEN"
+  }
+]

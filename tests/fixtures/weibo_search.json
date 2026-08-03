@@ -1,0 +1,17 @@
+[
+  {
+    "platform": "weibo",
+    "mblog_id": "synthetic-weibo-search-1",
+    "type": "article",
+    "title": "Synthetic Weibo search result",
+    "link": "https://example.invalid/weibo/search/1?containerid=synthetic",
+    "date": "2026-01-07",
+    "liked": 4,
+    "comments": 1,
+    "shares": 2,
+    "collected": 0,
+    "source": "Synthetic HTML card",
+    "search_keyword": "synthetic topic",
+    "raw_html": "<p>Invented fixture only</p>"
+  }
+]

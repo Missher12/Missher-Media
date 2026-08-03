@@ -63,6 +63,9 @@ def main():
         requested = getattr(args, f"{platform}_count", None)
         count = requested if requested is not None else args.count
         count = max(1, count)
+        cap = os.environ.get("MEDIA_MISSHER_FAKE_COUNT_CAP")
+        if cap is not None:
+            count = min(count, max(0, int(cap)))
         records = [
             {
                 "platform": platform,
