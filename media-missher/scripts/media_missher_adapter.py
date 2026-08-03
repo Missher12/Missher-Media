@@ -40,6 +40,8 @@ RUNTIME_OWNER_MARKER = ".media-missher-owner.json"
 RUNTIME_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
 RELEASE_MARKER = ".media-missher-release"
 INSTALL_LOCK = ".media-missher-install.lock"
+SOURCE_TREE_MARKER = ".media-missher-source-tree"
+SOURCE_TREE_IDENTITY = b"media-missher-source-v1\n"
 MAX_RELEASE_ID_BYTES = 128
 _RELEASE_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
@@ -315,13 +317,22 @@ def _read_owned_private_file(
 
 
 def _development_skill_root() -> bool:
-    repository = SKILL_ROOT.parent
-    return (
-        SKILL_ROOT.name == "media-missher"
-        and (repository / ".git").exists()
-        and (repository / "tests").is_dir()
-        and (repository / "runtime").is_dir()
-    )
+    if SKILL_ROOT.name != "media-missher" or os.path.lexists(SKILL_ROOT / RELEASE_MARKER):
+        return False
+    marker = SKILL_ROOT.parent / SOURCE_TREE_MARKER
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        marker_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(marker_stat.st_mode):
+            return False
+        payload = os.read(descriptor, len(SOURCE_TREE_IDENTITY) + 1)
+        return payload == SOURCE_TREE_IDENTITY
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _validate_runtime_owner(home: Path) -> None:
@@ -408,31 +419,32 @@ def _runtime_lease(layout: RuntimeLayout, *, timeout: float):
     descriptor: int | None = None
     acquired = False
     try:
-        descriptor = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        opened = os.fstat(descriptor)
-        if not os.path.samestat(expected, opened):
-            raise _RuntimeLeaseError("installation lock changed while being opened")
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except BlockingIOError as exc:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise _RuntimeLeaseError(
-                        "installation lock remained exclusive until the lease timeout"
-                    ) from exc
-                time.sleep(min(0.01, remaining))
-        release = _validate_release_set(layout)
+        try:
+            descriptor = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            opened = os.fstat(descriptor)
+            if not os.path.samestat(expected, opened):
+                raise _RuntimeLeaseError("installation lock changed while being opened")
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError as exc:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise _RuntimeLeaseError(
+                            "installation lock remained exclusive until the lease timeout"
+                        ) from exc
+                    time.sleep(min(0.01, remaining))
+            release = _validate_release_set(layout)
+        except _RuntimeLeaseError:
+            raise
+        except OSError as exc:
+            raise _RuntimeLeaseError(
+                f"installation lock is unavailable: {type(exc).__name__}"
+            ) from exc
         yield release
-    except _RuntimeLeaseError:
-        raise
-    except OSError as exc:
-        raise _RuntimeLeaseError(
-            f"installation lock is unavailable: {type(exc).__name__}"
-        ) from exc
     finally:
         if descriptor is not None:
             try:

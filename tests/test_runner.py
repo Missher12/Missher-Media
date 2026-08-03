@@ -429,6 +429,40 @@ def test_run_collection_holds_lease_through_child_and_validation(
     assert validation_saw_lease is True
 
 
+def test_collection_business_oserror_is_not_reclassified_as_lease_failure(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    failure = OSError("synthetic evidence read failure")
+
+    def fail_validation(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(adapter, "validate_run", fail_validation)
+
+    with pytest.raises(OSError, match="synthetic evidence read failure") as raised:
+        run_collection_request(
+            CollectionRequest(
+                platforms=("weibo",),
+                count=1,
+                platform_uids={"weibo": "weibo-user"},
+            ),
+            layout=layout,
+            data_root=tmp_path,
+            preflight_runner=ok_preflight,
+            execution_timeout=5,
+        )
+
+    assert raised.value is failure
+    assert len(list(tmp_path.glob("run-*"))) == 1
+    descriptor = os.open(layout.home / ".media-missher-install.lock", os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
 def test_run_collection_converts_only_after_validation(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(

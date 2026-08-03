@@ -134,6 +134,67 @@ def test_installed_codex_skill_must_match_runtime_release(
     assert report["checks"]["release"] is (expected_status == "ok")
 
 
+def test_repository_skill_marker_skip_requires_dedicated_source_marker(fake_engine_root):
+    layout = make_runtime_layout(fake_engine_root)
+
+    report = run_preflight(layout, live=False)
+
+    assert report["status"] == "ok"
+    assert (adapter.SKILL_ROOT.parent / ".media-missher-source-tree").read_text(
+        encoding="ascii"
+    ) == "media-missher-source-v1\n"
+
+
+def test_custom_install_root_cannot_impersonate_repository_for_marker_skip(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    custom_parent = tmp_path / "custom-install"
+    custom_parent.mkdir()
+    (custom_parent / ".git").write_text("synthetic\n", encoding="utf-8")
+    (custom_parent / "tests").mkdir()
+    (custom_parent / "runtime").mkdir()
+    custom_skill = custom_parent / "media-missher"
+    custom_skill.mkdir()
+    monkeypatch.setattr(adapter, "SKILL_ROOT", custom_skill)
+
+    report = run_preflight(layout, live=False)
+
+    assert report["status"] == "failed"
+    assert report["checks"] == {"runtime_lease": True, "release": False}
+    assert any("installed Codex skill" in error for error in report["errors"])
+
+
+@pytest.mark.parametrize("skill_marker_kind", ["mismatch", "broken-symlink"])
+def test_source_marker_never_hides_an_existing_skill_release_marker(
+    fake_engine_root, tmp_path, monkeypatch, skill_marker_kind
+):
+    layout = make_runtime_layout(fake_engine_root)
+    source_parent = tmp_path / "source-like-install"
+    source_parent.mkdir()
+    (source_parent / ".git").write_text("synthetic\n", encoding="utf-8")
+    (source_parent / "tests").mkdir()
+    (source_parent / "runtime").mkdir()
+    (source_parent / ".media-missher-source-tree").write_text(
+        "media-missher-source-v1\n", encoding="ascii"
+    )
+    custom_skill = source_parent / "media-missher"
+    custom_skill.mkdir()
+    marker = custom_skill / ".media-missher-release"
+    if skill_marker_kind == "mismatch":
+        marker.write_text("different-release\n", encoding="ascii")
+        marker.chmod(0o600)
+    else:
+        marker.symlink_to(source_parent / "missing-release-target")
+    monkeypatch.setattr(adapter, "SKILL_ROOT", custom_skill)
+
+    report = run_preflight(layout, live=False)
+
+    assert report["status"] == "failed"
+    assert report["checks"] == {"runtime_lease": True, "release": False}
+    assert any("release" in error for error in report["errors"])
+
+
 def test_preflight_rejects_noncanonical_layout_before_release_lookup(
     fake_engine_root, tmp_path
 ):
@@ -367,9 +428,10 @@ def test_system_python_39_compiles_and_runs_runtime_lease(fake_engine_root, tmp_
             "-c",
             (
                 "import json,sys; sys.path.insert(0, sys.argv[1]); "
-                "from media_missher_adapter import resolve_runtime_layout,run_preflight; "
-                "layout=resolve_runtime_layout(environ={'MEDIA_MISSHER_HOME':sys.argv[2]}); "
-                "print(json.dumps(run_preflight(layout, live=False)))"
+                "import media_missher_adapter as adapter; "
+                "layout=adapter.resolve_runtime_layout("
+                "environ={'MEDIA_MISSHER_HOME':sys.argv[2]}); "
+                "print(json.dumps(adapter.run_preflight(layout, live=False)))"
             ),
             str(adapter_path.parent),
             str(layout.home),
