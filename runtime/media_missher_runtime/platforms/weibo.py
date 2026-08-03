@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from html import unescape
+from html import escape, unescape
 from html.parser import HTMLParser
 from numbers import Real
 from typing import Any
@@ -57,10 +57,9 @@ class WeiboCollector:
         if not getattr(self.browser, "allow_navigation", False):
             _require_open_creator_target(page, target)
         await _raise_for_page_challenge(page)
-        if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_creator_while(page, lambda: self._navigate_and_check(page, target, _WEIBO_HOSTS))
-        else:
-            response = await _capture_creator_while(page, _noop)
+        if not getattr(self.browser, "allow_navigation", False):
+            raise PreconditionError("Weibo creator collection requires authorized navigation/reload")
+        response = await _capture_creator_while(page, lambda: self._navigate_and_check(page, target, _WEIBO_HOSTS))
         return await self._collect_creator_pages(page, response)
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
@@ -342,10 +341,6 @@ async def _scroll_and_check(page: Any) -> None:
     await _raise_for_page_challenge(page)
 
 
-async def _noop() -> None:
-    return None
-
-
 def _raise_for_navigation_status(response: Any) -> None:
     status = getattr(response, "status", None)
     if isinstance(status, int) and classify_response(status=status).stop_all:
@@ -511,9 +506,9 @@ class _SafeMarkup(HTMLParser):
         for key, value in attrs:
             lowered = key.casefold()
             text = value or ""
-            if lowered.startswith("on") or lowered in {"href", "src", "action", "formaction", "style"}:
+            if re.search(r"(?:token|secret|password|passwd|credential|cookie|auth)", text, re.I):
                 continue
-            if lowered in {"value", "name", "id", "data-token", "data-auth"} and re.search(r"(?:token|secret|password|passwd|credential|cookie|auth)", text, re.I):
+            if lowered.startswith("on") or lowered in {"href", "src", "action", "formaction", "style"}:
                 continue
             if lowered in {"class", "title", "alt", "aria-label"}:
                 safe_attrs.append((lowered, text))
@@ -529,7 +524,7 @@ class _SafeMarkup(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if not self.drop_depth:
-            self.parts.append(unescape(data))
+            self.parts.append(escape(data, quote=False))
 
 
 def _escape_attr(value: str) -> str:

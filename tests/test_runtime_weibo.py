@@ -68,12 +68,14 @@ class Page:
     challenge: str = ""
     challenge_on_goto: bool = False
     listener_active: bool = False
+    listener_count: int = 0
     gotos: list[str] = field(default_factory=list)
     evaluations: list[str] = field(default_factory=list)
     scrolls: int = 0
 
     def expect_response(self, predicate: Any, **kwargs: Any) -> Waiter:
         assert kwargs["timeout"] == 10_000
+        self.listener_count += 1
         return Waiter(self, predicate)
 
     async def goto(self, url: str, **kwargs: Any) -> None:
@@ -186,6 +188,28 @@ def test_html_strip_and_sanitized_raw_markup_are_bounded_and_safe() -> None:
         assert forbidden not in (raw or "").casefold()
 
 
+def test_sanitized_raw_markup_escapes_entity_decoded_markup_as_text() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import sanitize_raw_html
+
+    raw = sanitize_raw_html("&lt;img src=x onerror=alert(1)&gt;")
+
+    assert raw == "&lt;img src=x onerror=alert(1)&gt;"
+    assert "<img" not in (raw or "")
+
+
+def test_sanitized_raw_markup_drops_secret_markers_from_every_retained_attribute() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import sanitize_raw_html
+
+    raw = sanitize_raw_html(
+        '<div title="token-value" class="secret-card" aria-label="cookie-value">'
+        '<img alt="password-value" title="safe-label"></div>'
+    )
+
+    assert raw == '<div><img title="safe-label"></div>'
+    for marker in ("token", "secret", "password", "cookie"):
+        assert marker not in (raw or "").casefold()
+
+
 def test_creator_capture_navigation_and_count_rules_do_not_construct_api_requests() -> None:
     from runtime.media_missher_runtime.platforms.weibo import collect_creator
 
@@ -200,17 +224,36 @@ def test_creator_capture_navigation_and_count_rules_do_not_construct_api_request
     assert capped.scrolls == 1
 
 
-def test_creator_passive_mode_requires_exact_open_target_and_listener_is_cleaned_on_timeout_or_challenge() -> None:
+def test_creator_passive_mode_requires_authorized_navigation_without_listener_or_scroll() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import collect_creator
+
+    page = Page(url="https://weibo.com/u/creator", responses=[_creator(_post("never"))])
+    with pytest.raises(PreconditionError, match="authorized navigation/reload"):
+        _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="creator"), Browser(page, allow_navigation=False)))
+
+    assert page.listener_count == 0
+    assert page.scrolls == 0
+    assert len(page.responses) == 1
+
+
+def test_creator_passive_mode_still_validates_exact_target_before_navigation_requirement() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import collect_creator
+
+    page = Page(url="https://weibo.com/u/other", responses=[_creator(_post("never"))])
+    with pytest.raises(PreconditionError, match="matching Weibo creator"):
+        _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="creator"), Browser(page, allow_navigation=False)))
+
+    assert page.listener_count == 0
+    assert page.scrolls == 0
+
+
+def test_creator_challenge_is_rejected_before_navigation_or_listener() -> None:
     from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, collect_creator
 
-    open_page = Page(url="https://weibo.com/u/creator", responses=[_creator(_post("open"))])
-    assert _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="creator"), Browser(open_page, allow_navigation=False)))[0]["native_id"] == "MBopen"
-    with pytest.raises(PreconditionError):
-        _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="creator"), Browser(Page(url="https://weibo.com/u/other"), allow_navigation=False)))
     challenged = Page(responses=[_creator(_post("never"))], challenge="challenge-selector")
     with pytest.raises(CollectionStopped):
         _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="creator"), Browser(challenged)))
-    assert challenged.gotos == [] and not challenged.listener_active
+    assert challenged.gotos == [] and challenged.listener_count == 0 and not challenged.listener_active
 
 
 def test_creator_risk_nonjson_ok_and_no_progress_are_controlled() -> None:
