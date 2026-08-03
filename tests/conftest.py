@@ -7,6 +7,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "media-missher" / "scripts"
+FAKE_ENGINE = REPO / "tests" / "fake_engine.py"
 sys.path.insert(0, str(SCRIPTS))
 
 
@@ -33,12 +34,17 @@ def fake_engine_root(tmp_path):
     interpreter = root / "engine" / ".venv" / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     interpreter.symlink_to(Path(sys.executable).resolve())
-    entrypoint = root / "scripts" / "scrape_all.py"
-    entrypoint.parent.mkdir(parents=True)
-    entrypoint.write_text(
-        "import argparse\n"
-        "parser = argparse.ArgumentParser()\n"
-        "parser.parse_args()\n",
-        encoding="utf-8",
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    source = FAKE_ENGINE.read_text(encoding="utf-8") if FAKE_ENGINE.exists() else (
+        "import argparse\nparser = argparse.ArgumentParser()\nparser.parse_args()\n"
     )
+    for name in (
+        "scrape_all.py",
+        "scrape_bilibili.py",
+        "scrape_xhs.py",
+        "scrape_douyin.py",
+        "scrape_weibo.py",
+    ):
+        (scripts / name).write_text(source, encoding="utf-8")
     return root
