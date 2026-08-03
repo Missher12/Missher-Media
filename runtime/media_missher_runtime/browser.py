@@ -12,7 +12,7 @@ except ImportError:  # pragma: no cover - exercised when a real browser is confi
 
 
 _HOSTS = {
-    "bilibili": frozenset({"bilibili.com", "www.bilibili.com"}),
+    "bilibili": frozenset({"bilibili.com", "www.bilibili.com", "space.bilibili.com", "search.bilibili.com", "api.bilibili.com", "t.bilibili.com"}),
     "xhs": frozenset({"xiaohongshu.com", "www.xiaohongshu.com"}),
     "douyin": frozenset({"douyin.com", "www.douyin.com"}),
     "weibo": frozenset({"weibo.com", "www.weibo.com"}),
@@ -33,9 +33,10 @@ class PageJson:
 class BrowserSession:
     _playwright: Any
     _browser: Any
+    allow_navigation: bool = False
 
     @classmethod
-    async def connect(cls, cdp_url: str) -> "BrowserSession":
+    async def connect(cls, cdp_url: str, *, allow_navigation: bool = False) -> "BrowserSession":
         factory = async_playwright
         if factory is None:
             from playwright.async_api import async_playwright as factory
@@ -48,7 +49,7 @@ class BrowserSession:
             except BaseException:
                 pass
             raise
-        return cls(playwright, browser)
+        return cls(playwright, browser, allow_navigation=allow_navigation)
 
     def require_page(self, platform: str) -> Any:
         hosts = _HOSTS.get(platform)
@@ -77,6 +78,15 @@ class BrowserSession:
             url,
         )
         return PageJson(status=int(result["status"]), payload=result["json"])
+
+    async def navigate(self, page: Any, url: str, *, allowed_hosts: tuple[str, ...]) -> Any:
+        """Navigate only when the collection invocation explicitly authorized it."""
+        if not self.allow_navigation:
+            raise PreconditionError("browser navigation is not authorized")
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname not in set(allowed_hosts):
+            raise PreconditionError("navigation URL must use an exact allowlisted host")
+        return await page.goto(url, wait_until="domcontentloaded")
 
     async def close(self) -> None:
         await self._playwright.stop()

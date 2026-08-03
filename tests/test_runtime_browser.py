@@ -139,3 +139,28 @@ def test_close_disconnects_without_closing_any_page_or_context() -> None:
     assert remote.closed is False
     assert playwright.stopped is True
     assert page.url == "https://weibo.com/"
+
+
+def test_navigation_requires_explicit_opt_in_and_an_exact_allowlisted_host() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class NavigationPage:
+        url = "https://www.bilibili.com/"
+
+        def __init__(self) -> None:
+            self.gotos: list[str] = []
+
+        async def goto(self, url: str, **kwargs: object) -> str:
+            self.gotos.append(url)
+            return url
+
+    page = NavigationPage()
+    disabled = BrowserSession(FakePlaywright(FakeBrowser([])), FakeBrowser([]))
+    with pytest.raises(PreconditionError, match="authorized"):
+        _run(disabled.navigate(page, "https://space.bilibili.com/synthetic/dynamic", allowed_hosts=("space.bilibili.com",)))
+
+    enabled = BrowserSession(FakePlaywright(FakeBrowser([])), FakeBrowser([]), allow_navigation=True)
+    assert _run(enabled.navigate(page, "https://space.bilibili.com/synthetic/dynamic", allowed_hosts=("space.bilibili.com",))) == "https://space.bilibili.com/synthetic/dynamic"
+    with pytest.raises(PreconditionError, match="exact allowlisted"):
+        _run(enabled.navigate(page, "https://space.bilibili.com.invalid/synthetic", allowed_hosts=("space.bilibili.com",)))
+    assert page.gotos == ["https://space.bilibili.com/synthetic/dynamic"]
