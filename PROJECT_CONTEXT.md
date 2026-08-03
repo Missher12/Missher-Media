@@ -40,6 +40,24 @@ The runtime home uses `.media-missher-owner.json` to prove installer ownership a
 
 Neither skill contains a platform implementation, dependency environment, user data, or personal absolute path.
 
+## Standalone use
+
+Installed skills are optional. The repository adapter is the supported no-skill entrypoint and invokes the shared Python 3.11-or-newer runtime:
+
+```bash
+python3 tools/install_media_missher.py --runtime-only
+python3 media-missher/scripts/preflight.py --profile "$PROFILE_PATH" --live --json
+python3 media-missher/scripts/run_collection.py \
+  --profile "$PROFILE_PATH" \
+  --platform bilibili,xhs,douyin,weibo \
+  --count 1 \
+  --allow-navigation \
+  --no-feishu \
+  --json-summary
+```
+
+Do not invoke `runtime/scripts/*.py` with a system Python older than 3.11. The repository adapter selects the owned shared virtual environment and does not import either installed skill or a replaced source tree.
+
 ## Safety contract
 
 Multi-platform creator work runs sequentially. Count `0` requires `--collect-as-much-as-safe` and remains bounded by page caps. The runtime stops on platform risk, lock, block, cooldown, or documented HTTP signals.
@@ -68,13 +86,15 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-The current source baseline passes 528 standard tests with one environment-dependent skip and 529 tests with Playwright installed. Packaging, security, active-residual, and OpenClaw-focused checks pass 44 tests. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, and the Codex skill validator accepts the package.
+The current source baseline passes 547 standard tests with one environment-dependent skip and 548 tests with Playwright installed. All tests run with sockets disabled. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, and the Codex skill validator accepts the package.
 
 ## Live acceptance
 
-Live acceptance is a separate authorized stage. A pre-fix count-`1` sequential run completed Bilibili, Douyin, and Weibo. Xiaohongshu reached its creator card and produced a fresh official detail response, but the response observer rejected that exact API host and reported `detail-capture-timeout`. The observer now accepts that one exact detail-response host without expanding browser navigation permissions; expected note ID and `current_time` freshness validation remain unchanged.
+Live acceptance is a separate authorized stage. Sequential count-`1` runs proved one current record for every platform with no timeout or risk stop. Bilibili, Douyin, and Weibo completed. Xiaohongshu matched the expected note, consumed a fresh official detail response, and passed detail/current-time validation, but its API omitted one required metric while the current modal rendered that metric later.
 
-The fix passes focused and full offline suites and is installed in the isolated acceptance packages. Staged live preflight passes all 14 Codex checks and all 19 OpenClaw checks. A post-fix four-platform live run is still required before active-skill cutover or recovery of replaced directories.
+The runtime now supplements only required metrics missing a fresh source, never overwrites an API value, and condition-polls the current modal with the same count parser for at most three seconds. Placeholder text remains unaccepted, ordinary timeout remains incomplete, and a risk signal still stops immediately. A real-CDP `about:blank` smoke test proved delayed placeholder-to-number rendering with zero network requests. The final fix passes focused and full offline suites and is installed in the isolated acceptance packages. Staged live preflight passes all 14 Codex checks and all 19 OpenClaw checks.
+
+One post-final-fix four-platform live run is still required before active-skill cutover or recovery of replaced directories. Do not treat the prior four-platform count as complete evidence because its Xiaohongshu record was intentionally rejected as incomplete.
 
 Before cutover, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. Then run one sequential count-`1` creator collection across all four platforms. The runtime controller checks selected pages and visible login state before creating output.
 
