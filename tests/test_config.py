@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from media_missher_adapter import (
+    CollectionRequest,
     ConfigurationError,
     RuntimeLayout,
     parse_non_negative_int,
@@ -71,6 +72,16 @@ def test_runtime_layout_is_frozen(tmp_path):
 
     with pytest.raises(FrozenInstanceError):
         layout.home = tmp_path / "replacement"
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None])
+def test_navigation_authorization_requires_an_explicit_boolean(value):
+    with pytest.raises(ConfigurationError, match="navigation authorization"):
+        CollectionRequest(
+            platforms=("weibo",),
+            search="topic",
+            allow_navigation=value,
+        )
 
 
 def test_data_root_has_private_home_default(tmp_path, monkeypatch):

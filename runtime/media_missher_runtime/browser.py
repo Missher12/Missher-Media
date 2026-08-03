@@ -17,6 +17,31 @@ _HOSTS = {
     "douyin": frozenset({"douyin.com", "www.douyin.com"}),
     "weibo": frozenset({"weibo.com", "www.weibo.com", "s.weibo.com"}),
 }
+_LOGGED_OUT_SELECTORS = {
+    "bilibili": (
+        ".header-login-entry",
+        ".login-panel-popover",
+        "[class*='login-entry']",
+    ),
+    "xhs": (
+        ".login-container",
+        ".login-btn",
+        "[class*='login-container']",
+    ),
+    "douyin": (
+        "[data-e2e='login-button']",
+        "[data-e2e='login-panel']",
+        "[class*='login-button']",
+    ),
+    "weibo": (
+        "[node-type='loginBtn']",
+        ".gn_login",
+        "[action-type='login']",
+    ),
+}
+_LOGIN_PATH_SEGMENTS = frozenset(
+    {"login", "login.php", "signin", "signin.php", "passport"}
+)
 
 
 class PreconditionError(RuntimeError):
@@ -60,6 +85,36 @@ class BrowserSession:
                 if urlparse(page.url).hostname in hosts:
                     return page
         raise PreconditionError(f"Open/authenticated {platform} page is required".lower())
+
+    async def require_authenticated_page(self, platform: str) -> Any:
+        """Return an open platform page unless it is clearly logged out."""
+        page = self.require_page(platform)
+        path_segments = {
+            segment.casefold()
+            for segment in urlparse(page.url).path.split("/")
+            if segment
+        }
+        if path_segments.intersection(_LOGIN_PATH_SEGMENTS):
+            raise PreconditionError(f"{platform} page is clearly logged out")
+        logged_out = await page.evaluate(
+            """({selectors}) => selectors.some((selector) =>
+                Array.from(document.querySelectorAll(selector)).some((element) => {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && Number(style.opacity || '1') !== 0
+                        && rect.width > 0
+                        && rect.height > 0;
+                })
+            )""",
+            {"selectors": list(_LOGGED_OUT_SELECTORS[platform])},
+        )
+        if not isinstance(logged_out, bool):
+            raise PreconditionError(f"{platform} authentication check did not return a boolean")
+        if logged_out:
+            raise PreconditionError(f"{platform} page is clearly logged out")
+        return page
 
     async def page_json(self, page: Any, url: str) -> PageJson:
         page_origin = urlparse(page.url)

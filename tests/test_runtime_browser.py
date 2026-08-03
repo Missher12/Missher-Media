@@ -20,9 +20,11 @@ class FakePage:
     url: str
     result: object = None
     evaluated: str | None = None
+    evaluated_argument: object = None
 
-    async def evaluate(self, script: str, url: str) -> object:
+    async def evaluate(self, script: str, argument: object = None) -> object:
         self.evaluated = script
+        self.evaluated_argument = argument
         return self.result
 
 
@@ -164,3 +166,76 @@ def test_navigation_requires_explicit_opt_in_and_an_exact_allowlisted_host() -> 
     with pytest.raises(PreconditionError, match="exact allowlisted"):
         _run(enabled.navigate(page, "https://space.bilibili.com.invalid/synthetic", allowed_hosts=("space.bilibili.com",)))
     assert page.gotos == ["https://space.bilibili.com/synthetic/dynamic"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "login_url"),
+    [
+        ("bilibili", "https://www.bilibili.com/login"),
+        ("xhs", "https://www.xiaohongshu.com/login"),
+        ("douyin", "https://www.douyin.com/login"),
+        ("weibo", "https://weibo.com/login.php"),
+    ],
+)
+def test_authenticated_page_check_rejects_same_host_login_urls(
+    platform: str, login_url: str
+) -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    page = FakePage(login_url, False)
+    remote = FakeBrowser([page])
+    session = BrowserSession(FakePlaywright(remote), remote)
+
+    with pytest.raises(PreconditionError, match="logged out"):
+        _run(session.require_authenticated_page(platform))
+
+    assert page.evaluated is None
+
+
+@pytest.mark.parametrize(
+    ("platform", "page_url", "expected_selector"),
+    [
+        ("bilibili", "https://space.bilibili.com/1/dynamic", ".header-login-entry"),
+        ("xhs", "https://www.xiaohongshu.com/explore", ".login-container"),
+        ("douyin", "https://www.douyin.com/user/creator", "[data-e2e='login-button']"),
+        ("weibo", "https://weibo.com/u/1", "[node-type='loginBtn']"),
+    ],
+)
+def test_authenticated_page_check_rejects_explicit_visible_logged_out_markers(
+    platform: str, page_url: str, expected_selector: str
+) -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    page = FakePage(page_url, True)
+    remote = FakeBrowser([page])
+    session = BrowserSession(FakePlaywright(remote), remote)
+
+    with pytest.raises(PreconditionError, match="logged out"):
+        _run(session.require_authenticated_page(platform))
+
+    assert expected_selector in page.evaluated_argument["selectors"]
+    evaluated = page.evaluated or ""
+    assert "cookie" not in evaluated.lower()
+    assert "localstorage" not in evaluated.lower()
+    assert "sessionstorage" not in evaluated.lower()
+
+
+@pytest.mark.parametrize(
+    ("platform", "page_url"),
+    [
+        ("bilibili", "https://space.bilibili.com/1/dynamic"),
+        ("xhs", "https://www.xiaohongshu.com/explore"),
+        ("douyin", "https://www.douyin.com/user/creator"),
+        ("weibo", "https://weibo.com/u/1"),
+    ],
+)
+def test_authenticated_page_check_accepts_platform_pages_without_logged_out_markers(
+    platform: str, page_url: str
+) -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    page = FakePage(page_url, False)
+    remote = FakeBrowser([page])
+    session = BrowserSession(FakePlaywright(remote), remote)
+
+    assert _run(session.require_authenticated_page(platform)) is page

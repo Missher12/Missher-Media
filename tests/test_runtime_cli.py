@@ -8,6 +8,14 @@ from typing import Any
 import pytest
 
 
+def _run(coroutine: Any) -> Any:
+    try:
+        coroutine.send(None)
+    except StopIteration as completed:
+        return completed.value
+    raise AssertionError("fake coroutine unexpectedly suspended")
+
+
 class FakeDispatcher:
     def __init__(self, outcomes: dict[str, object] | None = None) -> None:
         self.outcomes = outcomes or {}
@@ -262,6 +270,34 @@ def test_invalid_routing_fails_before_dispatch(argv: list[str], tmp_path: Path) 
     assert not list(tmp_path.glob("run-*"))
 
 
+@pytest.mark.parametrize("timeout", ["nan", "inf"])
+def test_platform_timeout_rejects_non_finite_values_before_dispatch(
+    timeout: str, tmp_path: Path
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "search",
+                "--platform",
+                "weibo",
+                "--keyword",
+                "topic",
+                "--platform-timeout",
+                timeout,
+                "--output-dir",
+                str(tmp_path),
+            ],
+            dispatcher=dispatcher,
+        )
+
+    assert caught.value.code == 2
+    assert dispatcher.entered is False
+    assert not list(tmp_path.glob("run-*"))
+
+
 def test_legacy_json_only_aliases_remain_accepted_for_adapter_cutover(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.cli import main
 
@@ -294,3 +330,98 @@ def test_single_platform_shim_legacy_search_shape_accepts_max_uid_and_xhs_commen
     assert code == 0
     request = dispatcher.requests[0]
     assert request.platform == "xhs" and request.keyword == "synthetic topic" and request.count == 2
+
+
+@pytest.mark.parametrize(
+    ("navigation_flag", "expected"),
+    [([], False), (["--allow-navigation"], True)],
+)
+def test_runtime_cli_requires_explicit_navigation_authorization(
+    navigation_flag: list[str],
+    expected: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime import cli as module
+
+    constructed: list[tuple[str, bool]] = []
+
+    class CapturingDispatcher(FakeDispatcher):
+        def __init__(self, cdp_url: str, *, allow_navigation: bool = False) -> None:
+            super().__init__()
+            constructed.append((cdp_url, allow_navigation))
+
+    async def run_requests(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr(module, "RuntimeDispatcher", CapturingDispatcher)
+    monkeypatch.setattr(module, "_run_requests", run_requests)
+    monkeypatch.setattr(module.asyncio, "run", _run)
+
+    code = module.main(
+        [
+            "search",
+            "--platform",
+            "weibo",
+            "--keyword",
+            "topic",
+            "--cdp-url",
+            "http://127.0.0.1:9333",
+            *navigation_flag,
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 0
+    assert constructed == [("http://127.0.0.1:9333", expected)]
+
+
+def test_runtime_dispatcher_forwards_navigation_authorization_to_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime import cli as module
+
+    connected: list[tuple[str, bool]] = []
+
+    class Session:
+        async def close(self) -> None:
+            return None
+
+    async def connect(cdp_url: str, *, allow_navigation: bool = False) -> Session:
+        connected.append((cdp_url, allow_navigation))
+        return Session()
+
+    monkeypatch.setattr(module.BrowserSession, "connect", connect)
+    dispatcher = module.RuntimeDispatcher(
+        "http://127.0.0.1:9444", allow_navigation=True
+    )
+
+    _run(dispatcher.__aenter__())
+    _run(dispatcher.__aexit__())
+
+    assert connected == [("http://127.0.0.1:9444", True)]
+
+
+def test_runtime_dispatcher_preflight_requires_authenticated_pages_once_per_platform() -> None:
+    from runtime.media_missher_runtime.cli import RuntimeDispatcher
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    checked: list[str] = []
+
+    class Session:
+        async def require_authenticated_page(self, platform: str) -> object:
+            checked.append(platform)
+            return object()
+
+    dispatcher = RuntimeDispatcher("http://127.0.0.1:9222")
+    dispatcher.browser = Session()
+    requests = [
+        CollectionRequest(platform="weibo", count=1, uid="one"),
+        CollectionRequest(platform="weibo", count=2, uid="two"),
+        CollectionRequest(platform="xhs", count=1, uid="three"),
+    ]
+
+    _run(dispatcher.preflight(requests))
+
+    assert checked == ["weibo", "xhs"]

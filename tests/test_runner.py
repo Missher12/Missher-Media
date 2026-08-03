@@ -46,6 +46,8 @@ parser.add_argument("--complete", action="store_true")
 parser.add_argument("--bilibili-complete", action="store_true")
 parser.add_argument("--xhs-complete", action="store_true")
 parser.add_argument("--no-feishu", action="store_true")
+parser.add_argument("--allow-navigation", action="store_true")
+parser.add_argument("--cdp-url")
 parser.add_argument("--search")
 for platform in PLATFORMS:
     parser.add_argument(f"--{platform}-count", type=int)
@@ -112,6 +114,8 @@ if "xhs" in platforms:
 manifest_status = "risk-stopped" if mode == "manifest_risk" else "complete"
 if mode == "manifest_risk":
     statuses[platforms[-1]] = "risk-stopped"
+if mode == "manifest_invalid_platform_status":
+    statuses[platforms[-1]] = {}
 manifest = inner / "manifest.json"
 manifest.write_text(json.dumps({"counts": counts, "paths": paths, "platforms": statuses, "status": manifest_status}), encoding="utf-8")
 manifest.chmod(0o600)
@@ -299,7 +303,11 @@ def test_discover_current_json_rejects_invalid_xhs_checkpoint(tmp_path):
 def test_run_collection_returns_success_with_current_evidence(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(
-        CollectionRequest(platforms=("douyin",), count=1),
+        CollectionRequest(
+            platforms=("douyin",),
+            count=1,
+            platform_uids={"douyin": "douyin-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -314,7 +322,12 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
 def test_run_collection_converts_only_after_validation(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(
-        CollectionRequest(platforms=("weibo",), count=1, output_format="csv"),
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "weibo-user"},
+            output_format="csv",
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -331,7 +344,11 @@ def test_run_collection_converts_only_after_validation(fake_engine_root, tmp_pat
 def test_run_collection_uses_validated_count_for_partial_status(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(
-        CollectionRequest(platforms=("bilibili",), count=2),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=2,
+            platform_uids={"bilibili": "bilibili-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -346,7 +363,11 @@ def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     started = time.monotonic()
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -362,7 +383,11 @@ def test_run_collection_classifies_blocked_and_stops(fake_engine_root, tmp_path)
     layout = make_runtime_layout(fake_engine_root)
     started = time.monotonic()
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -377,7 +402,11 @@ def test_run_collection_classifies_blocked_and_stops(fake_engine_root, tmp_path)
 def test_run_collection_does_not_treat_unlocked_as_a_risk_signal(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -391,7 +420,11 @@ def test_run_collection_does_not_treat_unlocked_as_a_risk_signal(fake_engine_roo
 def test_run_collection_stops_before_directory_when_preflight_fails(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     summary = run_collection_request(
-        CollectionRequest(platforms=("weibo",), count=1),
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "weibo-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=lambda *_args, **_kwargs: {
@@ -409,7 +442,11 @@ def test_run_collection_returns_structured_failure_when_engine_disappears(fake_e
     layout = make_runtime_layout(fake_engine_root)
     layout.python.unlink()
     summary = run_collection_request(
-        CollectionRequest(platforms=("bilibili",), count=1),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            platform_uids={"bilibili": "bilibili-user"},
+        ),
         layout=layout,
         data_root=tmp_path / "runs",
         preflight_runner=ok_preflight,
@@ -423,7 +460,12 @@ def test_engine_command_uses_absolute_shared_runtime_paths(fake_engine_root, tmp
     layout = make_runtime_layout(fake_engine_root)
 
     command = build_engine_command(
-        CollectionRequest(platforms=("bilibili", "xhs"), count=2, xhs_complete=True),
+        CollectionRequest(
+            platforms=("bilibili", "xhs"),
+            count=2,
+            platform_uids={"bilibili": "bilibili-user", "xhs": "xhs-user"},
+            xhs_complete=True,
+        ),
         tmp_path,
         layout=layout,
     )
@@ -437,11 +479,91 @@ def test_engine_command_uses_absolute_shared_runtime_paths(fake_engine_root, tmp
     assert "--no-feishu" in command.argv
 
 
+def test_engine_command_forwards_exact_cdp_and_only_explicit_navigation(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+    passive = build_engine_command(
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "creator"},
+        ),
+        tmp_path,
+        layout=layout,
+        cdp_url="http://127.0.0.1:9333",
+    )
+    authorized = build_engine_command(
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "creator"},
+            allow_navigation=True,
+        ),
+        tmp_path,
+        layout=layout,
+        cdp_url="http://127.0.0.1:9444",
+    )
+
+    assert passive.argv[passive.argv.index("--cdp-url") + 1] == "http://127.0.0.1:9333"
+    assert "--allow-navigation" not in passive.argv
+    assert authorized.argv[authorized.argv.index("--cdp-url") + 1] == "http://127.0.0.1:9444"
+    assert "--allow-navigation" in authorized.argv
+
+
+def test_creator_without_uid_fails_before_preflight_or_output(fake_engine_root, tmp_path):
+    layout = make_runtime_layout(fake_engine_root)
+    preflight_called = False
+
+    def preflight(*_args, **_kwargs):
+        nonlocal preflight_called
+        preflight_called = True
+        return ok_preflight()
+
+    summary = run_collection_request(
+        CollectionRequest(platforms=("weibo",), count=1),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=preflight,
+    )
+
+    assert summary["status"] == "preflight-failed"
+    assert summary["run_dir"] is None
+    assert preflight_called is False
+    assert not list(tmp_path.glob("run-*"))
+    assert any("UID" in error for error in summary["errors"])
+
+
+def test_search_without_uid_still_reaches_preflight(fake_engine_root, tmp_path):
+    layout = make_runtime_layout(fake_engine_root)
+    preflight_called = False
+
+    def preflight(*_args, **_kwargs):
+        nonlocal preflight_called
+        preflight_called = True
+        return {"status": "failed", "checks": {}, "errors": ["synthetic"]}
+
+    summary = run_collection_request(
+        CollectionRequest(platforms=("weibo",), count=1, search="topic"),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=preflight,
+    )
+
+    assert summary["status"] == "preflight-failed"
+    assert preflight_called is True
+    assert not list(tmp_path.glob("run-*"))
+
+
 def test_nested_runtime_manifest_and_complete_xhs_report_are_diagnostics(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
 
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -459,7 +581,11 @@ def test_manifest_cannot_replace_missing_platform_data(fake_engine_root, tmp_pat
     layout = make_runtime_layout(fake_engine_root)
 
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -476,7 +602,11 @@ def test_manifest_risk_status_wins_over_partial_platform_data(fake_engine_root, 
     layout = make_runtime_layout(fake_engine_root)
 
     summary = run_collection_request(
-        CollectionRequest(platforms=("xhs",), count=1),
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "xhs-user"},
+        ),
         layout=layout,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
@@ -486,3 +616,27 @@ def test_manifest_risk_status_wins_over_partial_platform_data(fake_engine_root, 
 
     assert summary["status"] == "risk-stopped"
     assert [Path(path).name for path in summary["evidence"]] == ["xhs.json"]
+
+
+def test_malformed_manifest_platform_status_returns_structured_failure(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("weibo",),
+            count=1,
+            platform_uids={"weibo": "creator"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={
+            "MEDIA_MISSHER_FAKE_MODE": "manifest_invalid_platform_status"
+        },
+    )
+
+    assert summary["status"] == "partial"
+    assert any("invalid platform statuses" in error for error in summary["errors"])

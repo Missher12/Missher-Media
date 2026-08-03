@@ -179,6 +179,16 @@ def test_preflight_requires_playwright_import(fake_engine_root):
     assert report["checks"]["playwright"] is False
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf")])
+def test_preflight_rejects_non_finite_timeout_before_checks(
+    fake_engine_root, timeout
+):
+    layout = make_runtime_layout(fake_engine_root)
+
+    with pytest.raises(adapter.ConfigurationError, match="finite"):
+        run_preflight(layout, live=False, timeout=timeout)
+
+
 def test_preflight_cli_help_is_offline():
     script = Path(preflight.__file__).resolve()
     completed = subprocess.run(

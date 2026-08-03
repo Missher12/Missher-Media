@@ -26,6 +26,8 @@ def parser_for(script_name):
     parser.add_argument("--bilibili-complete", action="store_true")
     parser.add_argument("--xhs-complete", action="store_true")
     parser.add_argument("--no-feishu", action="store_true")
+    parser.add_argument("--allow-navigation", action="store_true")
+    parser.add_argument("--cdp-url")
     parser.add_argument("--search")
     for platform in PLATFORMS:
         parser.add_argument(f"--{platform}-count", type=int)

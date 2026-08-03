@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from media_missher_adapter import CollectionRequest, build_engine_command, resolve_runtime_layout
+from runtime.media_missher_runtime.cli import (
+    _normalize_legacy_argv,
+    _requests_from_args,
+    build_parser,
+)
 
 
 def make_runtime_layout(fake_engine_root):
@@ -66,3 +71,52 @@ def test_controller_help_matches_adapter_contract(fake_engine_root, tmp_path):
     )
     assert command.script == layout.current / "scripts" / "scrape_all.py"
     assert_help_accepts(command, layout)
+
+
+def test_controller_command_round_trips_through_runtime_parser(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+    command = build_engine_command(
+        CollectionRequest(
+            platforms=("weibo",),
+            count=2,
+            platform_uids={"weibo": "creator"},
+            allow_navigation=True,
+        ),
+        tmp_path,
+        layout=layout,
+        cdp_url="http://127.0.0.1:9333",
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(_normalize_legacy_argv(command.argv[2:]))
+    requests = _requests_from_args(parser, args)
+
+    assert args.cdp_url == "http://127.0.0.1:9333"
+    assert args.allow_navigation is True
+    assert [(request.platform, request.uid, request.count) for request in requests] == [
+        ("weibo", "creator", 2)
+    ]
+
+
+def test_search_command_round_trips_without_uid_or_navigation(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+    command = build_engine_command(
+        CollectionRequest(platforms=("xhs",), count=3, search="topic"),
+        tmp_path,
+        layout=layout,
+        cdp_url="http://127.0.0.1:9444",
+    )
+
+    parser = build_parser(fixed_platform="xhs")
+    args = parser.parse_args(_normalize_legacy_argv(command.argv[2:]))
+    requests = _requests_from_args(parser, args)
+
+    assert args.cdp_url == "http://127.0.0.1:9444"
+    assert args.allow_navigation is False
+    assert [(request.platform, request.uid, request.keyword) for request in requests] == [
+        ("xhs", None, "topic")
+    ]

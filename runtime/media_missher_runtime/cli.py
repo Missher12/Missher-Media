@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import secrets
 import sys
 import time
@@ -40,12 +41,15 @@ class RiskStop(RuntimeError):
 class RuntimeDispatcher:
     """Own one connection to the user's existing browser for a serial run."""
 
-    def __init__(self, cdp_url: str) -> None:
+    def __init__(self, cdp_url: str, *, allow_navigation: bool = False) -> None:
         self.cdp_url = cdp_url
+        self.allow_navigation = allow_navigation
         self.browser: BrowserSession | None = None
 
     async def __aenter__(self) -> "RuntimeDispatcher":
-        self.browser = await BrowserSession.connect(self.cdp_url, allow_navigation=True)
+        self.browser = await BrowserSession.connect(
+            self.cdp_url, allow_navigation=self.allow_navigation
+        )
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -56,7 +60,7 @@ class RuntimeDispatcher:
         if self.browser is None:
             raise RuntimeError("browser dispatcher is not connected")
         for platform in dict.fromkeys(request.platform for request in requests):
-            self.browser.require_page(platform)
+            await self.browser.require_authenticated_page(platform)
 
     async def collect(self, request: CollectionRequest) -> list[dict[str, Any]]:
         if self.browser is None:
@@ -84,13 +88,18 @@ def _non_negative_float(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("must be a number") from exc
-    if parsed < 0:
+    if not math.isfinite(parsed) or parsed < 0:
         raise argparse.ArgumentTypeError("must be non-negative")
     return parsed
 
 
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cdp-url", default=DEFAULT_CDP_URL, help="Existing Chrome CDP endpoint")
+    parser.add_argument(
+        "--allow-navigation",
+        action="store_true",
+        help="Explicitly authorize exact-host browser navigation for this run",
+    )
     parser.add_argument("--output-dir", "--output", dest="output_dir", type=Path, required=True, help="Private JSON output root")
     parser.add_argument("--format", choices=("json",), default="json", help="Runtime staging format (JSON only)")
     parser.add_argument("--no-feishu", action="store_true", help="Compatibility option; remote writes are always disabled")
@@ -303,7 +312,13 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
     args = parser.parse_args(_normalize_legacy_argv(values))
     requests = _requests_from_args(parser, args)
     injected = dispatcher is not None
-    active_dispatcher = dispatcher if injected else RuntimeDispatcher(args.cdp_url)
+    active_dispatcher = (
+        dispatcher
+        if injected
+        else RuntimeDispatcher(
+            args.cdp_url, allow_navigation=args.allow_navigation
+        )
+    )
     try:
         operation = _run_requests(
             requests,

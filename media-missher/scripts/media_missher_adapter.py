@@ -62,6 +62,7 @@ class CollectionRequest:
     platform_timeout: float = 300.0
     output_format: str = "json"
     collect_as_much_as_safe: bool = False
+    allow_navigation: bool = False
 
     def __post_init__(self):
         requested = tuple(dict.fromkeys(str(item).strip().lower() for item in self.platforms))
@@ -131,6 +132,8 @@ class CollectionRequest:
 
         if self.output_format not in {"json", "csv", "jsonl", "sqlite"}:
             raise ConfigurationError("output format must be json, csv, jsonl, or sqlite")
+        if not isinstance(self.allow_navigation, bool):
+            raise ConfigurationError("navigation authorization must be an explicit boolean")
 
 
 @dataclass(frozen=True)
@@ -264,6 +267,7 @@ def build_engine_command(
     staging_dir: Path,
     *,
     layout: RuntimeLayout,
+    cdp_url: str = DEFAULT_CDP_URL,
 ) -> EngineCommand:
     staging = Path(staging_dir).expanduser().resolve()
     if request.search:
@@ -303,6 +307,9 @@ def build_engine_command(
         if request.xhs_comments:
             argv.extend(("--xhs-comments", str(request.xhs_comments)))
         argv.append("--no-feishu")
+    argv.extend(("--cdp-url", str(cdp_url)))
+    if request.allow_navigation:
+        argv.append("--allow-navigation")
     argv.extend(("--format", "json", "--output", str(staging)))
     environment = {
         "MEDIA_MISSHER_HOME": str(layout.home),
@@ -940,7 +947,8 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
                     not isinstance(platforms_payload, dict)
                     or set(platforms_payload) != selected
                     or any(
-                        value not in allowed_platform_statuses
+                        not isinstance(value, str)
+                        or value not in allowed_platform_statuses
                         for value in platforms_payload.values()
                     )
                 ):
@@ -1060,6 +1068,25 @@ def run_collection_request(
     execution_timeout: float | None = None,
     command_environment: Mapping[str, str] | None = None,
 ) -> dict:
+    if not request.search:
+        missing_uids = [
+            platform
+            for platform in request.platforms
+            if platform not in request.platform_uids
+        ]
+        if missing_uids:
+            error = f"creator UID is required for: {', '.join(missing_uids)}"
+            return {
+                "status": "preflight-failed",
+                "run_dir": None,
+                "evidence": [],
+                "errors": [error],
+                "preflight": {
+                    "status": "failed",
+                    "checks": {"creator_uids": False},
+                    "errors": [error],
+                },
+            }
     runner = preflight_runner or run_preflight
     preflight_report = runner(
         layout,
@@ -1079,7 +1106,9 @@ def run_collection_request(
     run_dir = create_run_directory(data_root)
     started_ns = time.time_ns()
     try:
-        command = build_engine_command(request, run_dir, layout=layout)
+        command = build_engine_command(
+            request, run_dir, layout=layout, cdp_url=cdp_url
+        )
         if command_environment:
             command = command.with_environment(command_environment)
         if execution_timeout is None:
@@ -1212,8 +1241,14 @@ def run_preflight(
     timeout: float = 10.0,
     urlopen: Callable | None = None,
 ) -> dict:
-    if timeout <= 0:
-        raise ConfigurationError("timeout must be greater than zero")
+    if isinstance(timeout, bool):
+        raise ConfigurationError("timeout must be finite and greater than zero")
+    try:
+        timeout = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError("timeout must be finite and greater than zero") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ConfigurationError("timeout must be finite and greater than zero")
     if not isinstance(layout, RuntimeLayout):
         raise ConfigurationError("runtime layout is required")
     home = layout.home.expanduser().absolute()
