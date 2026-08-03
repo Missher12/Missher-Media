@@ -19,8 +19,8 @@ The external runtime includes work governed by the Non-Commercial Learning Licen
 - Branch: `codex/media-missher-implementation`
 - Design: completed in `docs/superpowers/specs/2026-08-03-media-missher-codex-skill-design.md`
 - Implementation plan: recorded in `docs/superpowers/plans/2026-08-03-media-missher-codex-skill.md`
-- Current phase: Task 1, standard skill scaffold and packaging gate
-- Verification status: packaging and official skill validation are the current gates; offline adapter and live verification remain pending
+- Current phase: Task 5, final skill instructions and security gates
+- Verification status: 89 offline tests pass; official skill validation, real-engine read-only preflight, four-platform schema compatibility, and independent Task 1–4 reviews pass. Live count-1 collection and installation remain pending.
 
 ## Known Constraint
 

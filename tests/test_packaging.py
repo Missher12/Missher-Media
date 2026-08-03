@@ -89,3 +89,4 @@ def test_skill_contains_no_bundled_engine_or_generated_artifacts():
         "openclaw.skill.json",
     }
     assert not forbidden.intersection(path.name for path in SKILL.rglob("*"))
+    assert all(path.is_file() for path in (SKILL / "scripts").iterdir())
