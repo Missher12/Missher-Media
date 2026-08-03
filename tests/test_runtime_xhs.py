@@ -150,6 +150,9 @@ class Page:
     close_click_error: bool = False
     modal_wait_error: bool = False
     challenge_on_close: bool = False
+    search_settlement_states: list[dict[str, Any]] = field(default_factory=list)
+    settlement_checks: int = 0
+    wait_timeouts: list[int] = field(default_factory=list)
 
     @property
     def keyboard(self) -> Keyboard:
@@ -178,6 +181,14 @@ class Page:
         self.evaluations.append(script)
         if "window.scrollTo" in script:
             return None
+        if "search settlement observation" in script:
+            self.events.append("search-settle")
+            self.settlement_checks += 1
+            if self.search_settlement_states:
+                return self.search_settlement_states.pop(0)
+            identifiers = sorted(card["note_id"] for card in self.cards if card.get("note_id"))
+            state = f"cards:{'|'.join(identifiers)}" if identifiers else "empty:search-no-result"
+            return {"risk_text": self.challenge, "state": state}
         if "comments-container" in script:
             return {"risk_text": self.challenge, "comments": [{"author": "A", "text": "hello", "date": "today", "liked": "1"}]}
         if "userPostedFeeds" in script:
@@ -203,6 +214,9 @@ class Page:
             if self.challenge_on_wait_timeout:
                 self.challenge = "challenge-selector"
             raise TimeoutError("synthetic wait timeout")
+
+    async def wait_for_timeout(self, milliseconds: int) -> None:
+        self.wait_timeouts.append(milliseconds)
 
 
 @dataclass
@@ -361,6 +375,21 @@ def test_detail_publish_time_after_server_current_time_is_rejected() -> None:
     assert record["date"] is None
 
 
+def test_detail_server_time_four_minutes_before_attempt_is_rejected() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    response = detail_response("one")
+    current_time = int((datetime.now(UTC) - timedelta(minutes=4)).timestamp() * 1000)
+    response.payload["data"]["current_time"] = current_time  # type: ignore[index]
+    response.payload["data"]["items"][0]["note_card"]["time"] = current_time - 1_000  # type: ignore[index]
+    page = Page(responses=[creator_response(note("one")), response], cards=[{"note_id": "one"}])
+
+    record = run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))[0]
+
+    assert record["detail_completed"] is False
+    assert record["engagement_fresh"] is False
+    assert record["engagement_observed_at"] is None
+
+
 def test_creator_listener_ignores_other_users_and_accepts_exact_query_or_post_uid() -> None:
     from runtime.media_missher_runtime.platforms.xhs import _is_creator_response, collect_creator
     wrong = creator_response(note("wrong"), uid="other")
@@ -425,8 +454,59 @@ def test_search_waits_for_semantic_settled_state_before_first_dom_read() -> None
     run(search(CollectionRequest(platform="xhs", count=1, keyword="term"), Browser(page)))
 
     assert page.events.index("search-settle") < page.events.index("read-search")
-    settle_script, _, timeout = next(item for item in page.wait_scripts if "search page settled" in item[0])
-    assert "challenge-selector" in settle_script and "暂无" in settle_script and timeout == 10_000
+    assert page.settlement_checks >= 2
+    settle_script = next(script for script in page.evaluations if "search settlement observation" in script)
+    assert "isVisible" in settle_script and "search-no-result" in settle_script
+    assert "skeleton" in settle_script and "loading" in settle_script
+    assert '[class*="empty"]' not in settle_script
+    assert ".no-result" not in settle_script and ".empty-result" not in settle_script
+
+
+def test_search_rejects_hidden_generic_or_loading_empty_state() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import SourceResponseError, search
+    unsettled = [{"risk_text": "", "state": None} for _ in range(40)]
+    page = Page(cards=[], search_settlement_states=unsettled)
+
+    with pytest.raises(SourceResponseError, match="did not settle"):
+        run(search(CollectionRequest(platform="xhs", count=1, keyword="term"), Browser(page)))
+
+    assert page.settlement_checks == 40
+    assert all(value == 250 for value in page.wait_timeouts)
+
+
+def test_search_requires_same_terminal_state_on_consecutive_checks() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import search
+    page = Page(
+        cards=[{"note_id": "one", "title": "T"}],
+        search_settlement_states=[
+            {"risk_text": "", "state": "empty:search-no-result"},
+            {"risk_text": "", "state": "cards:one"},
+            {"risk_text": "", "state": "cards:one"},
+        ],
+    )
+
+    records = run(search(CollectionRequest(platform="xhs", count=1, keyword="term"), Browser(page)))
+
+    assert [record["note_id"] for record in records] == ["one"]
+    assert page.settlement_checks == 3
+
+
+def test_detail_server_observation_preserves_same_second_millisecond_ordering() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _detail_server_observed_at
+    attempt_started_at = datetime(2026, 8, 3, 10, 20, 30, 500_000, tzinfo=UTC)
+    response_time = datetime(2026, 8, 3, 10, 20, 30, 600_000, tzinfo=UTC)
+    attempt_finished_at = datetime(2026, 8, 3, 10, 20, 30, 700_000, tzinfo=UTC)
+    payload = {"data": {"current_time": int(response_time.timestamp() * 1000)}}
+
+    observed_at = _detail_server_observed_at(
+        payload,
+        attempt_started_at=attempt_started_at,
+        attempt_finished_at=attempt_finished_at,
+    )
+
+    assert observed_at is not None
+    assert datetime.fromisoformat(observed_at) >= attempt_started_at
+    assert observed_at.endswith("+00:00") and ".600" in observed_at
 
 
 def test_complete_waits_for_exact_note_render_before_detail_listener() -> None:
@@ -463,8 +543,8 @@ def test_modal_cleanup_uses_modal_scoped_close_and_keyboard_fallback_for_playwri
     assert page.modal_waits == [{"state": "hidden", "timeout": 3_000}]
 
 
-def test_cleanup_challenge_does_not_mask_primary_detail_error() -> None:
-    from runtime.media_missher_runtime.platforms.xhs import SourceResponseError, collect_creator
+def test_cleanup_challenge_overrides_nonrisk_primary_detail_error() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
     bad_detail = Response({}, status=500, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
     page = Page(
         responses=[creator_response(note("one")), bad_detail],
@@ -472,7 +552,7 @@ def test_cleanup_challenge_does_not_mask_primary_detail_error() -> None:
         challenge_on_close=True,
     )
 
-    with pytest.raises(SourceResponseError, match="http-500"):
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
         run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))
 
     assert page.modal_visible is False

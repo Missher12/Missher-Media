@@ -38,7 +38,9 @@ _CHALLENGE_PHRASES = (
 )
 _RISK_WORDS = ("risk", "locked", "blocked", "cooldown", "challenge")
 _RISK_CODES = frozenset({461, 471, 999})
-_MAX_CLOCK_SKEW_SECONDS = 300
+_DETAIL_ATTEMPT_SKEW_SECONDS = 2
+_SEARCH_SETTLE_ATTEMPTS = 40
+_SEARCH_SETTLE_INTERVAL_MS = 250
 _MISSING = object()
 
 
@@ -153,16 +155,31 @@ class XhsCollector:
         record["detail_attempted"] = True
         primary_error: BaseException | None = None
         try:
+            attempt_started_at = datetime.now(UTC)
             response = await _capture_while(page, _is_detail_response, lambda: _click_note_and_check(page, note_id))
             payload = await _response_payload(response)
-            card = _detail_card(payload, note_id)
+            attempt_finished_at = datetime.now(UTC)
+            card = _detail_card(
+                payload,
+                note_id,
+                attempt_started_at=attempt_started_at,
+                attempt_finished_at=attempt_finished_at,
+            )
             if card is not None:
-                observed_at = _detail_server_observed_at(payload)
+                observed_at = _detail_server_observed_at(
+                    payload,
+                    attempt_started_at=attempt_started_at,
+                    attempt_finished_at=attempt_finished_at,
+                )
                 if observed_at is None:  # defensive: _detail_card already requires this
                     raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
                 _merge_detail(record, card, engagement_observed_at=observed_at)
                 record["detail_completed"] = True
-            elif _has_current_detail_time(payload):
+            elif _has_current_detail_time(
+                payload,
+                attempt_started_at=attempt_started_at,
+                attempt_finished_at=attempt_finished_at,
+            ):
                 # Keep a non-authoritative DOM observation useful, but never
                 # manufacture a publish time or mark it complete from HTML.
                 html = await _read_detail_html(page)
@@ -178,6 +195,8 @@ class XhsCollector:
         finally:
             try:
                 await _close_modal(page)
+            except CollectionStopped:
+                raise
             except BaseException:
                 if primary_error is None:
                     raise
@@ -415,11 +434,21 @@ def _base_record(note_id: str | None, kind: str | None, title: str | None, desc:
     }
 
 
-def _detail_card(payload: Mapping[str, Any], expected_id: str) -> Mapping[str, Any] | None:
+def _detail_card(
+    payload: Mapping[str, Any],
+    expected_id: str,
+    *,
+    attempt_started_at: datetime,
+    attempt_finished_at: datetime,
+) -> Mapping[str, Any] | None:
     data, items = _payload_collection(payload, "items")
     # `current_time` proves this response belongs to the active browser run.
     # Do not promote a payload without it to current/fresh detail data.
-    server_seconds = _detail_server_seconds(payload)
+    server_seconds = _detail_server_seconds(
+        payload,
+        attempt_started_at=attempt_started_at,
+        attempt_finished_at=attempt_finished_at,
+    )
     if server_seconds is None:
         return None
     for item in items:
@@ -432,8 +461,17 @@ def _detail_card(payload: Mapping[str, Any], expected_id: str) -> Mapping[str, A
     return None
 
 
-def _has_current_detail_time(payload: Mapping[str, Any]) -> bool:
-    return _detail_server_seconds(payload) is not None
+def _has_current_detail_time(
+    payload: Mapping[str, Any],
+    *,
+    attempt_started_at: datetime,
+    attempt_finished_at: datetime,
+) -> bool:
+    return _detail_server_seconds(
+        payload,
+        attempt_started_at=attempt_started_at,
+        attempt_finished_at=attempt_finished_at,
+    ) is not None
 
 
 def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement_observed_at: str) -> None:
@@ -556,22 +594,47 @@ async def _scroll_and_check(page: Any) -> None:
 
 
 async def _wait_for_search_settled(page: Any) -> None:
-    try:
-        await page.wait_for_function("""() => {
-            /* search page settled */
-            /* challenge-selector */
-            const body = document.body?.innerText || '';
-            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-            if (challenge || phrases.some((word) => body.includes(word))) return true;
-            if (document.querySelector('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')) return true;
-            const empty = document.querySelector('.feeds-page .empty, .feeds-page .no-result, .feeds-page .search-no-result, .feeds-page [class*="empty"]');
-            return Boolean(empty) || ['暂无内容','暂无搜索结果','没有找到'].some((word) => body.includes(word));
-        }""", timeout=10_000)
-    except PlaywrightTimeoutError as error:
-        await _raise_for_challenge(page)
-        raise SourceResponseError("Xiaohongshu search page did not settle") from error
-    await _raise_for_challenge(page)
+    prior_state: str | None = None
+    for attempt in range(_SEARCH_SETTLE_ATTEMPTS):
+        observation = await _read_search_settlement(page)
+        _raise_for_observation(observation)
+        state = _text(observation.get("state"))
+        if state is not None and state == prior_state:
+            return
+        prior_state = state
+        if attempt + 1 < _SEARCH_SETTLE_ATTEMPTS:
+            await page.wait_for_timeout(_SEARCH_SETTLE_INTERVAL_MS)
+    raise SourceResponseError("Xiaohongshu search page did not settle")
+
+
+async def _read_search_settlement(page: Any) -> Mapping[str, Any]:
+    value = await page.evaluate("""() => {
+        /* search settlement observation */
+        const body = document.body?.innerText || '';
+        const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
+        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
+        const risk_text = challenge ? 'challenge-selector' : (phrases.find((word) => body.includes(word)) || '');
+        const isVisible = (element) => {
+            if (!element) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+        };
+        const loading = Array.from(document.querySelectorAll(
+            '.feeds-page .search-layout__main .loading, .feeds-page .search-layout__main .loading-container, '
+            + '.feeds-page .search-layout__main .skeleton, .feeds-page .search-layout__main .skeleton-item'
+        )).some(isVisible);
+        if (loading) return {risk_text, state: null};
+        const noteIds = Array.from(document.querySelectorAll(
+            '.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]'
+        )).filter(isVisible).map((item) => item.getAttribute('data-note-id')).filter(Boolean).sort();
+        if (noteIds.length) return {risk_text, state: `cards:${noteIds.join('|')}`};
+        const terminalEmpty = Array.from(document.querySelectorAll(
+            '.feeds-page .search-layout__main .search-no-result'
+        )).find((element) => isVisible(element) && ['暂无搜索结果','未找到相关笔记','没有找到'].some((word) => (element.textContent || '').includes(word)));
+        return {risk_text, state: terminalEmpty ? 'empty:search-no-result' : null};
+    }""")
+    return value if isinstance(value, Mapping) else {"risk_text": "", "state": None}
 
 
 async def _wait_for_card_change(page: Any, note_ids: list[str]) -> None:
@@ -730,20 +793,36 @@ def _timestamp_seconds(value: object) -> float | None:
     return seconds
 
 
-def _detail_server_seconds(payload: Mapping[str, Any]) -> float | None:
+def _detail_server_seconds(
+    payload: Mapping[str, Any],
+    *,
+    attempt_started_at: datetime,
+    attempt_finished_at: datetime,
+) -> float | None:
     server_seconds = _timestamp_seconds(_mapping(payload.get("data")).get("current_time"))
     if server_seconds is None:
         return None
-    if abs(server_seconds - datetime.now(UTC).timestamp()) > _MAX_CLOCK_SKEW_SECONDS:
+    earliest = attempt_started_at.timestamp() - _DETAIL_ATTEMPT_SKEW_SECONDS
+    latest = attempt_finished_at.timestamp() + _DETAIL_ATTEMPT_SKEW_SECONDS
+    if latest < earliest or not earliest <= server_seconds <= latest:
         return None
     return server_seconds
 
 
-def _detail_server_observed_at(payload: Mapping[str, Any]) -> str | None:
-    server_seconds = _detail_server_seconds(payload)
+def _detail_server_observed_at(
+    payload: Mapping[str, Any],
+    *,
+    attempt_started_at: datetime,
+    attempt_finished_at: datetime,
+) -> str | None:
+    server_seconds = _detail_server_seconds(
+        payload,
+        attempt_started_at=attempt_started_at,
+        attempt_finished_at=attempt_finished_at,
+    )
     if server_seconds is None:
         return None
-    return datetime.fromtimestamp(server_seconds, UTC).replace(microsecond=0).isoformat()
+    return datetime.fromtimestamp(server_seconds, UTC).isoformat(timespec="milliseconds")
 
 
 def _observed_at() -> str:
