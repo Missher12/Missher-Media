@@ -42,7 +42,8 @@ def forbidden_terms() -> tuple[str, str]:
 
 
 def _matches(value: str, terms: tuple[str, str]) -> list[str]:
-    return [term for term in terms if term in value]
+    folded = value.casefold()
+    return [term for term in terms if term.casefold() in folded]
 
 
 def _finding(root: Path, path: Path, category: str, term: str) -> Finding:

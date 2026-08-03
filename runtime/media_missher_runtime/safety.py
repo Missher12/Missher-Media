@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any
 
 
@@ -39,7 +41,24 @@ class Pacer:
     jitter: Callable[[], float]
     base_seconds: float = 0.0
 
+    def __post_init__(self) -> None:
+        self.base_seconds = _finite_number("base_seconds", self.base_seconds)
+        if self.base_seconds < 0:
+            raise ValueError("base_seconds must be nonnegative")
+
     def pause(self) -> float:
-        duration = self.base_seconds + self.jitter()
+        jitter = _finite_number("jitter", self.jitter())
+        duration = self.base_seconds + jitter
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("duration must be finite and nonnegative")
         self.sleeper(duration)
         return duration
+
+
+def _finite_number(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be numeric and finite")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be numeric and finite")
+    return result

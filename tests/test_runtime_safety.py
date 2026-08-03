@@ -47,3 +47,37 @@ def test_pacer_uses_injected_sleeper_and_deterministic_jitter() -> None:
 
     assert pacer.pause() == 1.25
     assert pauses == [1.25]
+
+
+@pytest.mark.parametrize("base_seconds", (-1.0, float("nan"), float("inf"), "slow"))
+def test_pacer_rejects_invalid_base_seconds(base_seconds: object) -> None:
+    from runtime.media_missher_runtime.safety import Pacer
+
+    pauses: list[float] = []
+    with pytest.raises(ValueError, match="base_seconds"):
+        Pacer(sleeper=pauses.append, jitter=lambda: 0.0, base_seconds=base_seconds)  # type: ignore[arg-type]
+
+    assert pauses == []
+
+
+def test_pacer_rejects_a_negative_computed_delay_without_sleeping() -> None:
+    from runtime.media_missher_runtime.safety import Pacer
+
+    pauses: list[float] = []
+    pacer = Pacer(sleeper=pauses.append, jitter=lambda: -2.0, base_seconds=1.0)
+
+    with pytest.raises(ValueError, match="duration"):
+        pacer.pause()
+    assert pauses == []
+
+
+@pytest.mark.parametrize("jitter", (float("nan"), float("inf"), "late"))
+def test_pacer_rejects_nonfinite_or_nonnumeric_jitter_without_sleeping(jitter: object) -> None:
+    from runtime.media_missher_runtime.safety import Pacer
+
+    pauses: list[float] = []
+    pacer = Pacer(sleeper=pauses.append, jitter=lambda: jitter, base_seconds=1.0)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="jitter"):
+        pacer.pause()
+    assert pauses == []

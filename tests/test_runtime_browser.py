@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Coroutine
 
@@ -40,18 +41,21 @@ class FakeBrowser:
 
 
 class FakeChromium:
-    def __init__(self, browser: FakeBrowser) -> None:
+    def __init__(self, browser: FakeBrowser, failure: BaseException | None = None) -> None:
         self.browser = browser
+        self.failure = failure
         self.cdp_url: str | None = None
 
     async def connect_over_cdp(self, url: str) -> FakeBrowser:
         self.cdp_url = url
+        if self.failure is not None:
+            raise self.failure
         return self.browser
 
 
 class FakePlaywright:
-    def __init__(self, browser: FakeBrowser) -> None:
-        self.chromium = FakeChromium(browser)
+    def __init__(self, browser: FakeBrowser, failure: BaseException | None = None) -> None:
+        self.chromium = FakeChromium(browser, failure)
         self.stopped = False
 
     async def stop(self) -> None:
@@ -81,6 +85,21 @@ def test_connect_uses_existing_cdp_browser_without_launch(monkeypatch: pytest.Mo
     assert factory.started is True
     assert fake_playwright.chromium.cdp_url == "http://127.0.0.1:9222"
     assert session.require_page("bilibili") is fake_browser.contexts[0].pages[0]
+
+
+def test_connect_stops_playwright_and_preserves_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from runtime.media_missher_runtime import browser as module
+
+    failure = asyncio.CancelledError("cancelled")
+    fake_playwright = FakePlaywright(FakeBrowser([]), failure)
+    factory = FakeAsyncPlaywright(fake_playwright)
+    monkeypatch.setattr(module, "async_playwright", lambda: factory)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        _run(module.BrowserSession.connect("http://127.0.0.1:9222"))
+
+    assert caught.value is failure
+    assert fake_playwright.stopped is True
 
 
 def test_require_page_demands_an_open_authenticated_platform_page() -> None:

@@ -58,3 +58,28 @@ def test_scanner_detects_directory_names_and_directory_symlink_names_and_targets
         (f"linked-{first}", "symlink", first),
         (f"linked-{first}", "symlink", second),
     }
+
+
+def test_scanner_matches_paths_content_and_symlink_targets_case_insensitively(tmp_path: Path) -> None:
+    from tools.scan_active_residuals import scan_roots
+
+    first, second = _terms()
+    lower_first = first.lower()
+    mixed_second = second.swapcase()
+    (tmp_path / f"file-{lower_first}.txt").write_text("clear", encoding="utf-8")
+    (tmp_path / f"directory-{mixed_second}").mkdir()
+    (tmp_path / "text.txt").write_text(lower_first, encoding="utf-8")
+    (tmp_path / "script").write_text(f"#! /usr/bin/env {mixed_second}\n", encoding="utf-8")
+    (tmp_path / "pyvenv.cfg").write_text(f"home = {lower_first}\n", encoding="utf-8")
+    os.symlink(f"/tmp/{mixed_second}", tmp_path / "linked")
+
+    findings = scan_roots([tmp_path])
+
+    assert {(item.relative_path, item.category, item.term) for item in findings} == {
+        (f"file-{lower_first}.txt", "filename", first),
+        (f"directory-{mixed_second}", "dirname", second),
+        ("text.txt", "text", first),
+        ("script", "shebang", second),
+        ("pyvenv.cfg", "pyvenv", first),
+        ("linked", "symlink", second),
+    }

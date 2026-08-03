@@ -40,7 +40,14 @@ class BrowserSession:
         if factory is None:
             from playwright.async_api import async_playwright as factory
         playwright = await factory().start()
-        browser = await playwright.chromium.connect_over_cdp(cdp_url)
+        try:
+            browser = await playwright.chromium.connect_over_cdp(cdp_url)
+        except BaseException:
+            try:
+                await playwright.stop()
+            except BaseException:
+                pass
+            raise
         return cls(playwright, browser)
 
     def require_page(self, platform: str) -> Any:
