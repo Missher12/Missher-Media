@@ -84,7 +84,7 @@ class Page:
         if self.challenge_on_goto:
             self.challenge = "challenge-selector"
 
-    async def evaluate(self, script: str) -> Any:
+    async def evaluate(self, script: str, argument: Any = None) -> Any:
         self.evaluations.append(script)
         if "window.scrollTo" in script:
             self.scrolls += 1
@@ -101,15 +101,64 @@ class Page:
 class PhraseTimeoutPage(Page):
     timeout_after_gotos: int = 1
     timeout_challenge: str | None = None
-    waits: list[str] = field(default_factory=list)
+    waits: list[tuple[str, Any]] = field(default_factory=list)
 
     async def wait_for_function(self, script: str, **kwargs: Any) -> None:
         await super().wait_for_function(script, **kwargs)
-        self.waits.append(script)
+        self.waits.append((script, kwargs.get("arg")))
         if len(self.gotos) >= self.timeout_after_gotos:
             if self.timeout_challenge is not None:
                 self.challenge = self.timeout_challenge
             raise TimeoutError("synthetic hydration timeout")
+
+
+@dataclass
+class ChallengeDomPage(Page):
+    body_text: str = ""
+    ordinary_class: str = ""
+    hidden_challenge: bool = False
+    visible_challenge: str | None = None
+    visible_block_text: str = ""
+    has_normal_content: bool = False
+
+    async def evaluate(self, script: str, argument: Any = None) -> Any:
+        self.evaluations.append(script)
+        phrases = ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码")
+        if argument is None:
+            selector_match = (
+                bool(self.ordinary_class and "verify" in self.ordinary_class)
+                or self.hidden_challenge
+                or self.visible_challenge is not None
+            )
+            phrase = next((item for item in phrases if item in self.body_text), "")
+            return {"risk_text": "challenge-selector" if selector_match else phrase}
+
+        selectors = tuple(argument["challenge_selectors"])
+        blocking = tuple(argument["blocking_selectors"])
+        normal = tuple(argument["normal_content_selectors"])
+        assert tuple(argument["blocking_phrases"]) == phrases
+        assert "document.body" not in script
+        assert '[class*="verify"]' not in script
+        assert "if (!hasNormalContent)" in script
+        assert "container.innerText" in script
+        visibility_checked = "getComputedStyle" in script and "getBoundingClientRect" in script
+        wildcard_verify = any("verify" in selector and "*=" in selector for selector in selectors)
+        if self.ordinary_class and "verify" in self.ordinary_class and wildcard_verify:
+            return {"risk_text": "challenge-selector"}
+        if self.hidden_challenge and not visibility_checked:
+            return {"risk_text": "challenge-selector"}
+        expected = {
+            "geetest": ".geetest_panel",
+            "captcha": ".captcha",
+            "overlay": '[data-testid="challenge-page"]',
+        }
+        if self.visible_challenge is not None:
+            assert expected[self.visible_challenge] in selectors
+            return {"risk_text": "challenge-selector"}
+        phrase = next((item for item in phrases if item in self.visible_block_text), "")
+        if phrase and blocking and normal and not self.has_normal_content:
+            return {"risk_text": phrase}
+        return {"risk_text": ""}
 
 
 @dataclass
@@ -318,7 +367,7 @@ def test_search_initial_phrase_challenge_stops_when_hydration_wait_times_out(phr
 
     assert page.gotos == ["https://s.weibo.com/weibo?q=term"]
     assert len(page.evaluations) == 1
-    assert all(phrase in page.waits[0] for phrase in ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"))
+    assert page.waits[0][1]["blocking_phrases"] == ["请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"]
 
 
 def test_search_next_page_phrase_challenge_stops_after_wait_timeout_without_extra_parse_or_navigation() -> None:
@@ -334,3 +383,47 @@ def test_search_next_page_phrase_challenge_stops_after_wait_timeout_without_extr
 
     assert page.gotos == ["https://s.weibo.com/weibo?q=term", "https://s.weibo.com/weibo?q=term&page=2"]
     assert sum("card-wrap" in script for script in page.evaluations) == 1
+
+
+@pytest.mark.parametrize("phrase", ("风控", "验证码", "安全验证", "账号异常"))
+def test_ordinary_page_text_is_not_a_challenge(phrase: str) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import _raise_for_page_challenge
+
+    page = ChallengeDomPage(body_text=f"普通博文讨论{phrase}流程")
+
+    _run(_raise_for_page_challenge(page))
+
+
+@pytest.mark.parametrize(
+    "page",
+    (
+        ChallengeDomPage(ordinary_class="author_verify_badge"),
+        ChallengeDomPage(hidden_challenge=True),
+    ),
+    ids=("ordinary-_verify_-badge", "hidden-challenge"),
+)
+def test_ordinary_verify_badge_and_hidden_challenge_nodes_do_not_stop(page: ChallengeDomPage) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import _raise_for_page_challenge
+
+    _run(_raise_for_page_challenge(page))
+
+
+@pytest.mark.parametrize("kind", ("geetest", "captcha", "overlay"))
+def test_visible_explicit_challenge_nodes_still_stop(kind: str) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, _raise_for_page_challenge
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        _run(_raise_for_page_challenge(ChallengeDomPage(visible_challenge=kind)))
+
+
+def test_blocking_phrase_requires_a_visible_block_container_without_normal_feed() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, _raise_for_page_challenge
+
+    with pytest.raises(CollectionStopped, match="访问受限"):
+        _run(_raise_for_page_challenge(ChallengeDomPage(visible_block_text="访问受限")))
+
+    _run(
+        _raise_for_page_challenge(
+            ChallengeDomPage(visible_block_text="访问受限", has_normal_content=True)
+        )
+    )

@@ -27,6 +27,37 @@ _CREATOR_PATH = "/ajax/statuses/mymblog"
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _RISK_CODES = frozenset({461, 471, 999})
 _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"})
+_CHALLENGE_SELECTORS = (
+    ".geetest_panel",
+    ".geetest_holder",
+    "#geetest-wrap",
+    'iframe[src*="geetest"]',
+    ".captcha",
+    "#captcha",
+    '[data-testid="captcha"]',
+    'iframe[src*="captcha"]',
+    ".challenge-page",
+    "#challenge-page",
+    '[data-testid="challenge-page"]',
+    ".challenge-overlay",
+    "#challenge-overlay",
+    '[data-testid="challenge-overlay"]',
+)
+_BLOCKING_SELECTORS = _CHALLENGE_SELECTORS + (
+    "#pl_common_error",
+    ".m-error",
+    ".error-page",
+    '[data-testid="error-page"]',
+    ".access-denied",
+    '[data-testid="access-denied"]',
+)
+_NORMAL_CONTENT_SELECTORS = (
+    "#pl_feedlist_index .card-wrap[mid]",
+    ".card-wrap[mid]",
+    "article",
+    "[mid]",
+)
+_BLOCKING_PHRASES = ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码")
 _MAX_RAW_HTML = 4096
 _MISSING = object()
 
@@ -273,12 +304,9 @@ def _append_search_records(records: list[dict[str, Any]], seen: set[str], items:
 
 
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
+    challenge = await _read_page_challenge(page)
     result = await page.evaluate(
         """() => {
-            const bodyText = document.body?.innerText || '';
-            const challenge = document.querySelector('.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]');
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
-            const risk_text = challenge ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || '');
             const cards = Array.from(document.querySelectorAll('#pl_feedlist_index .card-wrap[mid]')).map((card) => {
                 const content = card.querySelector('.card-feed .content');
                 const full = content?.querySelector('[node-type="feed_list_content_full"]');
@@ -301,33 +329,92 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
                     source: card.querySelector('.from')?.textContent || null,
                 };
             });
-            return {risk_text, cards, next: document.querySelector('.m-page a.next')?.href || null};
+            return {cards, next: document.querySelector('.m-page a.next')?.href || null};
         }"""
     )
-    return result if isinstance(result, Mapping) else {"risk_text": "", "cards": [], "next": None}
+    if not isinstance(result, Mapping):
+        return {"risk_text": challenge, "cards": [], "next": None}
+    observed_risk = challenge or result.get("risk_text")
+    return {**result, "risk_text": observed_risk if isinstance(observed_risk, str) else ""}
+
+
+def _challenge_probe_options() -> dict[str, list[str]]:
+    return {
+        "challenge_selectors": list(_CHALLENGE_SELECTORS),
+        "blocking_selectors": list(_BLOCKING_SELECTORS),
+        "normal_content_selectors": list(_NORMAL_CONTENT_SELECTORS),
+        "blocking_phrases": list(_BLOCKING_PHRASES),
+    }
+
+
+async def _read_page_challenge(page: Any) -> str:
+    result = await page.evaluate(
+        """(options) => {
+            const visible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return !element.hidden
+                    && element.getAttribute('aria-hidden') !== 'true'
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || '1') !== 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const elements = (selectors) => selectors.flatMap((selector) =>
+                Array.from(document.querySelectorAll(selector))
+            );
+            if (elements(options.challenge_selectors).some(visible)) {
+                return {risk_text: 'challenge-selector'};
+            }
+            const hasNormalContent = elements(options.normal_content_selectors).some(visible);
+            if (!hasNormalContent) {
+                for (const container of elements(options.blocking_selectors)) {
+                    if (!visible(container)) continue;
+                    const text = container.innerText || container.textContent || '';
+                    const phrase = options.blocking_phrases.find((item) => text.includes(item));
+                    if (phrase) return {risk_text: phrase};
+                }
+            }
+            return {risk_text: ''};
+        }""",
+        _challenge_probe_options(),
+    )
+    text = _mapping(result).get("risk_text")
+    return text if isinstance(text, str) and text in _CHALLENGE_REASONS else ""
 
 
 async def _raise_for_page_challenge(page: Any) -> None:
-    result = await page.evaluate(
-        """() => {
-            const bodyText = document.body?.innerText || '';
-            const selector = document.querySelector('.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]');
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
-            return {risk_text: selector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || '')};
-        }"""
-    )
-    _raise_for_risk_observation(result)
+    _raise_for_risk_observation({"risk_text": await _read_page_challenge(page)})
 
 
 async def _wait_for_search_cards_or_challenge(page: Any) -> None:
     await page.wait_for_function(
-        """() => {
-            const bodyText = document.body?.innerText || '';
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
-            return document.querySelector('#pl_feedlist_index .card-wrap[mid]')
-                || document.querySelector('.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]')
-                || phrases.some((phrase) => bodyText.includes(phrase));
+        """(options) => {
+            const visible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return !element.hidden
+                    && element.getAttribute('aria-hidden') !== 'true'
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || '1') !== 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const elements = (selectors) => selectors.flatMap((selector) =>
+                Array.from(document.querySelectorAll(selector))
+            );
+            const card = document.querySelector('#pl_feedlist_index .card-wrap[mid]');
+            if (card || elements(options.challenge_selectors).some(visible)) return true;
+            if (elements(options.normal_content_selectors).some(visible)) return false;
+            return elements(options.blocking_selectors).some((container) => {
+                if (!visible(container)) return false;
+                const text = container.innerText || container.textContent || '';
+                return options.blocking_phrases.some((phrase) => text.includes(phrase));
+            });
         }""",
+        arg=_challenge_probe_options(),
         timeout=10_000,
     )
 
