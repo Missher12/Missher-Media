@@ -648,6 +648,21 @@ def create_run_directory(data_root: Path, *, now: datetime | None = None) -> Pat
     return run_dir.resolve()
 
 
+def _open_private_binary(path: Path):
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        return os.fdopen(descriptor, "wb")
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def execute_engine(
     command: EngineCommand,
     *,
@@ -693,7 +708,9 @@ def execute_engine(
             if _RISK_PATTERN.search(tail):
                 risk_detected.set()
 
-    with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
+    with _open_private_binary(stdout_path) as stdout, _open_private_binary(
+        stderr_path
+    ) as stderr:
         process = subprocess.Popen(
             list(command.argv),
             cwd=command.script.parent.parent,

@@ -212,6 +212,87 @@ def test_execute_engine_captures_evidence_and_never_creates_feishu(fake_engine_r
     assert "--no-feishu" in received
 
 
+def test_execute_engine_creates_private_logs_before_child_start(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    run_dir = create_run_directory(tmp_path)
+    command = build_engine_command(
+        CollectionRequest(platforms=("bilibili",), count=1),
+        run_dir,
+        layout=layout,
+    )
+    observed_modes = {}
+    real_popen = adapter.subprocess.Popen
+
+    def inspect_log_modes(*args, **kwargs):
+        for name in ("stdout.log", "stderr.log"):
+            observed_modes[name] = stat.S_IMODE((run_dir / name).stat().st_mode)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.subprocess, "Popen", inspect_log_modes)
+    previous_umask = os.umask(0o022)
+    try:
+        completed = execute_engine(command, timeout=5, run_dir=run_dir)
+    finally:
+        os.umask(previous_umask)
+
+    assert completed.returncode == 0
+    assert observed_modes == {"stdout.log": 0o600, "stderr.log": 0o600}
+
+
+def test_execute_engine_closes_raw_descriptor_when_fdopen_fails(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    run_dir = create_run_directory(tmp_path)
+    command = build_engine_command(
+        CollectionRequest(platforms=("bilibili",), count=1),
+        run_dir,
+        layout=layout,
+    )
+    captured_descriptors = []
+
+    def fail_fdopen(descriptor, *_args, **_kwargs):
+        captured_descriptors.append(descriptor)
+        raise RuntimeError("synthetic fdopen failure")
+
+    monkeypatch.setattr(adapter.os, "fdopen", fail_fdopen)
+
+    with pytest.raises(RuntimeError, match="synthetic fdopen failure"):
+        execute_engine(command, timeout=5, run_dir=run_dir)
+
+    assert len(captured_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured_descriptors[0])
+
+
+@pytest.mark.parametrize("occupied_kind", ["file", "symlink"])
+def test_execute_engine_refuses_occupied_log_paths(
+    fake_engine_root, tmp_path, occupied_kind
+):
+    layout = make_runtime_layout(fake_engine_root)
+    run_dir = create_run_directory(tmp_path)
+    command = build_engine_command(
+        CollectionRequest(platforms=("bilibili",), count=1),
+        run_dir,
+        layout=layout,
+    )
+    stdout_path = run_dir / "stdout.log"
+    if occupied_kind == "file":
+        protected_path = stdout_path
+    else:
+        protected_path = tmp_path / "protected.log"
+        stdout_path.symlink_to(protected_path)
+    protected_path.write_bytes(b"protected")
+
+    with pytest.raises(FileExistsError):
+        execute_engine(command, timeout=5, run_dir=run_dir)
+
+    assert protected_path.read_bytes() == b"protected"
+    assert not (run_dir / "stderr.log").exists()
+
+
 def test_execute_engine_times_out_only_its_child(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
     run_dir = create_run_directory(tmp_path)
