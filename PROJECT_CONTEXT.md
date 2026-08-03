@@ -23,7 +23,7 @@ The external runtime includes work governed by the Non-Commercial Learning Licen
 - Installed skill: `/Users/missher/.codex/skills/media-missher`
 - Verification command: `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-socket python -m pytest -q -p no:cacheprovider --disable-socket`. The final candidate passes 106 offline tests, official skill validation, special-character-path portability, real-engine live preflight, and staged reviews.
 - Live compatibility: Xiaohongshu, Douyin, and Weibo each produced and validated one current record in the sequential four-platform run. Bilibili produced and validated one complete current record after its required platform page was temporarily opened. Both runs had no Feishu artifacts, risk signal, or timeout; the temporary page was closed.
-- External runtime integrity: the source aggregate used for the installation gate was `31cf449f1db6f12dc1483672205d9ffc757612220f2f70b9aba41df8c865e75b` before and after installation, and no source file had a current-day modification time.
+- External runtime integrity: the source aggregate used for the installation gate was `d1aad006f1ce6f6030c57f08652dae1f9307ab38e801c12d1e806d963ea0e5f3` before and after installation, and no source file had a current-day modification time. This aggregate includes the engine's `cache` Python package while excluding only runtime virtual environments, bytecode caches, data, and Playwright artifacts.
 
 ## Known Constraint
 
