@@ -26,7 +26,7 @@ Read [commands](references/commands.md) before collection or installation. Read 
 2. Run `scripts/preflight.py --live`. Live preflight probes the existing CDP endpoint and checks the shared layout, release markers, Python, dependencies, and five entrypoints. It does not select platforms.
 3. Run `scripts/run_collection.py` once. The runtime controller checks each selected platform page and login state before creating output. A successful run creates one unique mode-`0700` directory and private mode-`0600` JSON artifacts.
 4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, `blocked`, or cooldown signals. Do not retry a risk stop.
-5. Validate only artifacts from that run and its recorded start time. Reject `latest`, reused directories, old artifacts, symlinks, exit codes, and console checkmarks as proof.
+5. Validate only artifacts from the current run and its recorded start time. Reject `latest`, reused directories, old artifacts, symlinks, exit codes, and console checkmarks as proof.
 6. Report counts, statuses, and absolute evidence paths. Limit samples to three metadata-only objects with platform and field count.
 
 ## Preserve safety controls
@@ -39,7 +39,7 @@ Read [commands](references/commands.md) before collection or installation. Read 
 
 ## Keep Feishu separate
 
-The runtime and adapter never read Feishu credentials, create Feishu artifacts, invoke a Feishu client, or perform a remote Feishu write. Local JSON validation is not a remote write. Any Feishu operation is a separate workflow that needs separate explicit authorization.
+The runtime and adapter never read Feishu credentials, create Feishu artifacts, invoke a Feishu client, or perform a remote Feishu write. Always pass `--no-feishu`; local JSON validation is not a remote write. Any Feishu operation is a separate workflow that needs separate explicit authorization.
 
 ## Report one status
 
