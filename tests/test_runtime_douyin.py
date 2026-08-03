@@ -171,6 +171,51 @@ def test_creator_exact_count_avoids_an_extra_scroll_and_count_zero_is_page_cappe
     assert len(unbounded.responses) == 1
 
 
+@pytest.mark.parametrize(("source", "cursor"), (("creator", None), ("creator", ""), ("search", None), ("search", "")))
+def test_empty_or_missing_cursor_exhausts_before_scrolling(source: str, cursor: object) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
+
+    if source == "creator":
+        payload = {"status_code": 0, "aweme_list": [_aweme("one")], "has_more": True, "max_cursor": cursor}
+        page = CapturePage(responses=[Response(payload), _creator(_aweme("never"), has_more=False)])
+        records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=2, uid="creator"), ProductionBrowser(page)))
+    else:
+        payload = {"status_code": 0, "data": [{"aweme_info": _aweme("one")}], "has_more": True, "cursor": cursor}
+        page = CapturePage(responses=[Response(payload, url="https://www.douyin.com/aweme/v1/web/general/search/single/"), _search(_aweme("never"), has_more=False)])
+        records = _run(search(CollectionRequest(platform="douyin", count=0, page_cap=2, keyword="term"), ProductionBrowser(page)))
+
+    assert [record["native_id"] for record in records] == ["one"]
+    assert not any("window.scrollTo" in script for script in page.evaluations)
+    assert len(page.responses) == 1
+
+
+@pytest.mark.parametrize("source", ("creator", "search"))
+def test_integer_has_more_one_collects_a_second_page_and_zero_does_not_scroll(source: str) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
+
+    if source == "creator":
+        first = Response({"status_code": 0, "aweme_list": [_aweme("one")], "has_more": 1, "max_cursor": 1})
+        second = Response({"status_code": 0, "aweme_list": [_aweme("two")], "has_more": 0, "max_cursor": 2})
+        page = CapturePage(responses=[first, second])
+        records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=3, uid="creator"), ProductionBrowser(page)))
+        exhausted = CapturePage(responses=[Response({"status_code": 0, "aweme_list": [_aweme("one")], "has_more": 0, "max_cursor": 1}), _creator(_aweme("never"))])
+        exhausted_records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=3, uid="creator"), ProductionBrowser(exhausted)))
+    else:
+        url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+        first = Response({"status_code": 0, "data": [{"aweme_info": _aweme("one")}], "has_more": 1, "cursor": 1}, url=url)
+        second = Response({"status_code": 0, "data": [{"aweme_info": _aweme("two")}], "has_more": 0, "cursor": 2}, url=url)
+        page = CapturePage(responses=[first, second])
+        records = _run(search(CollectionRequest(platform="douyin", count=0, page_cap=3, keyword="term"), ProductionBrowser(page)))
+        exhausted = CapturePage(responses=[Response({"status_code": 0, "data": [{"aweme_info": _aweme("one")}], "has_more": 0, "cursor": 1}, url=url), _search(_aweme("never"))])
+        exhausted_records = _run(search(CollectionRequest(platform="douyin", count=0, page_cap=3, keyword="term"), ProductionBrowser(exhausted)))
+
+    assert [record["native_id"] for record in records] == ["one", "two"]
+    assert sum("window.scrollTo" in script for script in page.evaluations) == 1
+    assert [record["native_id"] for record in exhausted_records] == ["one"]
+    assert not any("window.scrollTo" in script for script in exhausted.evaluations)
+    assert len(exhausted.responses) == 1
+
+
 def test_search_navigates_to_exact_host_and_uses_single_or_stream_responses() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 

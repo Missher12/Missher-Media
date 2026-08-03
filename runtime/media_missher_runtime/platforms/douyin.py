@@ -70,7 +70,7 @@ class DouyinCollector:
     async def _collect_pages(self, page: Any, response: Any, *, source: str) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         native_ids: set[str] = set()
-        prior_cursor: object = None
+        prior_cursor: object = _MISSING
         predicate = _is_creator_response if source == "creator" else _is_search_response
         for page_number in range(self.request.page_cap):
             await _raise_for_page_challenge(page)
@@ -88,7 +88,9 @@ class DouyinCollector:
                 break
             if added == 0 or not has_more or page_number + 1 >= self.request.page_cap:
                 break
-            if prior_cursor is not None and cursor == prior_cursor:
+            if _empty_cursor(cursor):
+                break
+            if prior_cursor is not _MISSING and cursor == prior_cursor:
                 break
             prior_cursor = cursor
             try:
@@ -195,10 +197,24 @@ def _page_items(payload: Mapping[str, Any], source: str) -> tuple[list[Mapping[s
     else:
         raw_items = [_mapping(item).get("aweme_info") for item in _items(payload.get("data"))]
         cursor = payload.get("cursor")
-    return [item for item in raw_items if isinstance(item, Mapping)], payload.get("has_more") is True, cursor
+    return [item for item in raw_items if isinstance(item, Mapping)], _has_more(payload.get("has_more")), cursor
 
 
 _MISSING = object()
+
+
+def _has_more(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if value is None:
+        return False
+    raise SourceResponseError("Douyin source has invalid has_more signal")
+
+
+def _empty_cursor(value: object) -> bool:
+    return value is None or isinstance(value, str) and not value.strip()
 
 
 def _append_records(
