@@ -155,6 +155,7 @@ class Page:
     settlement_checks: int = 0
     wait_timeouts: list[int] = field(default_factory=list)
     creator_dom_responses: list[Response] = field(default_factory=list)
+    creator_dom_url_override: str | None = None
 
     @property
     def keyboard(self) -> Keyboard:
@@ -195,16 +196,29 @@ class Page:
                 "document.body",
             ):
                 assert forbidden not in lowered
-            cards = [
-                {
-                    key: card.get(key)
-                    for key in ("note_id", "title", "author", "liked")
-                }
-                for card in self.cards
-                if card.get("visible", True)
-            ]
+            filters_hidden_children = (
+                "if (!isVisible(element)) continue;" in script
+                and "element?.innerText?.trim()" in script
+            )
+            cards = []
+            for card in self.cards:
+                if not card.get("visible", True):
+                    continue
+                hidden_fields = set(card.get("hidden_fields", ()))
+                cards.append(
+                    {
+                        key: (
+                            None
+                            if filters_hidden_children and key in hidden_fields
+                            else card.get(key)
+                        )
+                        for key in ("note_id", "title", "author", "liked")
+                    }
+                )
             self.responses.extend(self.creator_dom_responses)
             self.creator_dom_responses.clear()
+            if self.creator_dom_url_override is not None:
+                self.url = self.creator_dom_url_override
             return {"cards": cards}
         if "search settlement observation" in script:
             self.events.append("search-settle")
@@ -520,6 +534,54 @@ def test_initial_creator_timeout_uses_visible_target_dom_cards_without_sensitive
     assert "#userPostedFeeds" in fallback_script
     assert "data-note-id" in fallback_script
     assert "isVisible" in fallback_script
+
+
+def test_creator_timeout_rejects_redirect_during_dom_fallback() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CaptureTimeout, collect_creator
+
+    page = Page(
+        cards=[{"note_id": "wrong-page", "title": "Wrong page", "visible": True}],
+        creator_dom_url_override="https://www.xiaohongshu.com/user/profile/other",
+    )
+
+    with pytest.raises(CaptureTimeout) as timeout:
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u"),
+                Browser(page),
+            )
+        )
+
+    assert timeout.value.code == "creator-capture-timeout"
+
+
+def test_creator_dom_fallback_does_not_read_hidden_child_text() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        cards=[
+            {
+                "note_id": "visible-card",
+                "title": "Hidden title",
+                "author": "Hidden author",
+                "liked": "999",
+                "visible": True,
+                "hidden_fields": {"title", "author", "liked"},
+            }
+        ]
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u"),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["note_id"] == "visible-card"
+    assert record["title"] is None
+    assert record["author"] is None
+    assert record["liked"] is None
 
 
 @pytest.mark.parametrize(

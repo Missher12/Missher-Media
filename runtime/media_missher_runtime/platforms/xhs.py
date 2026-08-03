@@ -102,6 +102,8 @@ class XhsCollector:
                 raise CaptureTimeout("creator-capture-timeout") from error
             observation = await _read_creator_cards(page)
             await _raise_for_challenge(page)
+            if getattr(page, "url", "") != target:
+                raise CaptureTimeout("creator-capture-timeout") from error
             records = _creator_dom_records(
                 _as_sequence(observation.get("cards")), self.request.target_count
             )
@@ -637,7 +639,8 @@ async def _read_creator_cards(page: Any) -> Mapping[str, Any]:
         const text = (card, selectors) => {
             for (const selector of selectors) {
                 const element = card.querySelector(selector);
-                const value = element?.textContent?.trim();
+                if (!isVisible(element)) continue;
+                const value = element?.innerText?.trim();
                 if (value) return value;
             }
             return null;
