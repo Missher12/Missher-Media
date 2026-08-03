@@ -491,11 +491,12 @@ def test_search_requires_same_terminal_state_on_consecutive_checks() -> None:
     assert page.settlement_checks == 3
 
 
-def test_detail_server_observation_preserves_same_second_millisecond_ordering() -> None:
+def test_public_detail_observation_uses_attempt_completion_past_precise_run_start() -> None:
     from runtime.media_missher_runtime.platforms.xhs import _detail_server_observed_at
     attempt_started_at = datetime(2026, 8, 3, 10, 20, 30, 500_000, tzinfo=UTC)
     response_time = datetime(2026, 8, 3, 10, 20, 30, 600_000, tzinfo=UTC)
-    attempt_finished_at = datetime(2026, 8, 3, 10, 20, 30, 700_000, tzinfo=UTC)
+    precise_run_start = datetime(2026, 8, 3, 10, 20, 30, 600_500, tzinfo=UTC)
+    attempt_finished_at = datetime(2026, 8, 3, 10, 20, 30, 700_123, tzinfo=UTC)
     payload = {"data": {"current_time": int(response_time.timestamp() * 1000)}}
 
     observed_at = _detail_server_observed_at(
@@ -505,8 +506,9 @@ def test_detail_server_observation_preserves_same_second_millisecond_ordering() 
     )
 
     assert observed_at is not None
-    assert datetime.fromisoformat(observed_at) >= attempt_started_at
-    assert observed_at.endswith("+00:00") and ".600" in observed_at
+    assert datetime.fromisoformat(observed_at) >= precise_run_start
+    assert datetime.fromisoformat(observed_at) == attempt_finished_at
+    assert observed_at.endswith("+00:00") and ".700123" in observed_at
 
 
 def test_complete_waits_for_exact_note_render_before_detail_listener() -> None:

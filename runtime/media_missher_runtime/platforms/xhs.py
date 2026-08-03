@@ -822,7 +822,10 @@ def _detail_server_observed_at(
     )
     if server_seconds is None:
         return None
-    return datetime.fromtimestamp(server_seconds, UTC).isoformat(timespec="milliseconds")
+    # The server value proves freshness, while the public observation uses the
+    # precise local completion instant so it cannot precede this run's start
+    # merely because the server timestamp is millisecond-granular.
+    return attempt_finished_at.astimezone(UTC).isoformat(timespec="microseconds")
 
 
 def _observed_at() -> str:
