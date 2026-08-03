@@ -16,10 +16,10 @@ The external runtime includes work governed by the Non-Commercial Learning Licen
 
 ## Current State
 
-- Delivery branch: `codex/media-missher-skill` (implementation prepared in `codex/media-missher-implementation` for fast-forward merge)
+- Delivery branch: `codex/media-missher-skill`
 - Design: completed in `docs/superpowers/specs/2026-08-03-media-missher-codex-skill-design.md`
 - Implementation plan: recorded in `docs/superpowers/plans/2026-08-03-media-missher-codex-skill.md`
-- Current phase: final verification, installation, and independent whole-change review complete; only delivery-branch fast-forward merge remains.
+- Current phase: completed. The verified implementation is fast-forwarded onto the delivery branch and installed side by side with the external runtime.
 - Installed skill: `/Users/missher/.codex/skills/media-missher`
 - Verification command: `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-socket python -m pytest -q -p no:cacheprovider --disable-socket`. The final candidate passes 109 offline tests, official skill validation, special-character-path portability, real-engine live preflight, staged reviews, and an independent whole-change review.
 - Live compatibility: Xiaohongshu, Douyin, and Weibo each produced and validated one current record in the sequential four-platform run. Bilibili produced and validated one complete current record after its required platform page was temporarily opened. Both runs had no Feishu artifacts, risk signal, or timeout; the temporary page was closed.
