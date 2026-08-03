@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         platforms = parse_platforms(args.platform)
         platform_counts = {
             platform: value
-            for platform in platforms
+            for platform in PLATFORMS
             if (value := getattr(args, f"{platform}_count")) is not None
         }
         configured_uids = profile.get("platform_uids", {})
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             for platform, value in configured_uids.items()
             if platform in platforms and value is not None
         }
-        for platform in platforms:
+        for platform in PLATFORMS:
             value = getattr(args, f"{platform}_uid")
             if value is not None:
                 platform_uids[platform] = value

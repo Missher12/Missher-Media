@@ -114,3 +114,28 @@ def test_collection_cli_exposes_compatibility_options():
         "--json-summary",
     ):
         assert option in completed.stdout
+
+
+def test_collection_cli_rejects_override_for_unselected_platform(fake_engine_root, tmp_path):
+    script = Path(__file__).resolve().parents[1] / "media-missher" / "scripts" / "run_collection.py"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--engine-root",
+            str(fake_engine_root),
+            "--data-root",
+            str(tmp_path / "runs"),
+            "--platform",
+            "bilibili",
+            "--weibo-count",
+            "1",
+            "--json-summary",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 1
+    assert "selected platform" in completed.stdout

@@ -12,6 +12,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -131,11 +132,12 @@ class CompletedRun:
     stdout_path: Path
     stderr_path: Path
     timed_out: bool
+    risk_detected: bool
     duration_seconds: float
 
 
 def parse_non_negative_int(value: str | int) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ConfigurationError("value must be a non-negative integer")
     try:
         parsed = int(value)
@@ -295,7 +297,10 @@ def build_engine_command(
             argv.extend(("--xhs-comments", str(request.xhs_comments)))
         argv.append("--no-feishu")
     argv.extend(("--format", "json", "--output", str(staging)))
-    environment = {"PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+    }
     if "xhs" in request.platforms:
         environment["MEDIA_MISSHER_XHS_REPORT_DIR"] = str(staging)
     return EngineCommand(script=script, argv=tuple(argv), environment=environment)
@@ -330,40 +335,71 @@ def execute_engine(
     environment.update({str(key): str(value) for key, value in command.environment.items()})
     started = time.monotonic()
     timed_out = False
-    with stdout_path.open("x", encoding="utf-8") as stdout, stderr_path.open(
-        "x", encoding="utf-8"
-    ) as stderr:
+    risk_detected = threading.Event()
+
+    def terminate_process_group(process: subprocess.Popen, grace_seconds: float = 5.0):
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=grace_seconds)
+
+    def copy_and_monitor(stream, destination):
+        tail = ""
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                break
+            destination.write(chunk)
+            destination.flush()
+            tail = (tail + chunk.decode("utf-8", errors="replace"))[-1024:]
+            if _RISK_PATTERN.search(tail):
+                risk_detected.set()
+
+    with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
         process = subprocess.Popen(
             list(command.argv),
             cwd=command.script.parent.parent,
             env=environment,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             shell=False,
             start_new_session=True,
+            bufsize=0,
         )
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=5)
+        readers = (
+            threading.Thread(target=copy_and_monitor, args=(process.stdout, stdout), daemon=True),
+            threading.Thread(target=copy_and_monitor, args=(process.stderr, stderr), daemon=True),
+        )
+        for reader in readers:
+            reader.start()
+        deadline = started + timeout
+        while process.poll() is None:
+            if risk_detected.is_set():
+                terminate_process_group(process)
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                terminate_process_group(process)
+                break
+            time.sleep(0.02)
+        if process.poll() is None:
+            process.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=5)
     return CompletedRun(
         returncode=process.returncode,
         stdout_path=stdout_path.resolve(),
         stderr_path=stderr_path.resolve(),
         timed_out=timed_out,
+        risk_detected=risk_detected.is_set(),
         duration_seconds=time.monotonic() - started,
     )
 
@@ -435,7 +471,7 @@ def run_collection_request(
         errors.append("engine execution timed out")
     if completed.returncode != 0:
         errors.append(f"engine exited with status {completed.returncode}")
-    if _RISK_PATTERN.search(combined_log):
+    if completed.risk_detected or _RISK_PATTERN.search(combined_log):
         status = "risk-stopped"
     elif feishu_artifacts:
         status = "failed"

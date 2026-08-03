@@ -75,16 +75,18 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
 
 
 def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):
+    started = time.monotonic()
     summary = run_collection_request(
         CollectionRequest(platforms=("xhs",), count=1),
         engine_root=fake_engine_root,
         data_root=tmp_path,
         preflight_runner=ok_preflight,
         execution_timeout=5,
-        command_environment={"MEDIA_MISSHER_FAKE_MODE": "risk"},
+        command_environment={"MEDIA_MISSHER_FAKE_MODE": "risk_wait"},
     )
     assert summary["status"] == "risk-stopped"
     assert summary["evidence"] == []
+    assert time.monotonic() - started < 2
 
 
 def test_run_collection_stops_before_directory_when_preflight_fails(fake_engine_root, tmp_path):

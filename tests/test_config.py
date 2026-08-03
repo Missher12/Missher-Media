@@ -55,7 +55,7 @@ def test_parse_non_negative_int(value, expected):
     assert parse_non_negative_int(value) == expected
 
 
-@pytest.mark.parametrize("value", ["-1", -2, "not-an-int", True])
+@pytest.mark.parametrize("value", ["-1", -2, "not-an-int", True, 1.9])
 def test_parse_non_negative_int_rejects_invalid_values(value):
     with pytest.raises(ConfigurationError, match="non-negative integer"):
         parse_non_negative_int(value)

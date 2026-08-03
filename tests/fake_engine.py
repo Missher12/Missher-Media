@@ -43,6 +43,10 @@ def main():
     if mode == "risk":
         print("risk signal 471: synthetic stop", file=sys.stderr)
         return 75
+    if mode == "risk_wait":
+        print("risk signal 471: synthetic stop", file=sys.stderr, flush=True)
+        time.sleep(float(os.environ.get("MEDIA_MISSHER_FAKE_SLEEP", "5")))
+        return 75
     if mode == "fail":
         print("synthetic failure", file=sys.stderr)
         return 3
