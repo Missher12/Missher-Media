@@ -40,6 +40,7 @@ _CHALLENGE_PHRASES = (
 _RISK_WORDS = ("risk", "locked", "blocked", "cooldown", "challenge")
 _RISK_CODES = frozenset({461, 471, 999})
 _DETAIL_ATTEMPT_SKEW_SECONDS = 2
+_DETAIL_METRIC_WAIT_MS = 3_000
 _SEARCH_SETTLE_ATTEMPTS = 40
 _SEARCH_SETTLE_INTERVAL_MS = 250
 _REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected")
@@ -224,7 +225,9 @@ class XhsCollector:
                     raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
                 _merge_detail(record, card, engagement_observed_at=observed_at)
                 record["detail_completed"] = True
-                if _has_missing_required_metric(record):
+                missing_metrics = _missing_required_metrics(record)
+                if missing_metrics:
+                    await _wait_for_detail_metrics(page, missing_metrics)
                     html = await _read_detail_html(page)
                     _raise_for_observation(html)
                     _supplement_missing_detail_html(record, html)
@@ -604,8 +607,12 @@ def _merge_detail_html(record: dict[str, Any], observation: Mapping[str, Any]) -
         record["engagement_source"] = source
 
 
-def _has_missing_required_metric(record: Mapping[str, Any]) -> bool:
-    return any(not _has_fresh_detail_metric(record, field) for field in _REQUIRED_DETAIL_METRICS)
+def _missing_required_metrics(record: Mapping[str, Any]) -> list[str]:
+    return [
+        field
+        for field in _REQUIRED_DETAIL_METRICS
+        if not _has_fresh_detail_metric(record, field)
+    ]
 
 
 def _has_fresh_detail_metric(record: Mapping[str, Any], field: str) -> bool:
@@ -640,9 +647,7 @@ def _missing_completion(record: Mapping[str, Any]) -> list[str]:
         missing.append("engagement_fresh")
     if record.get("engagement_source") not in {"detail_api", "detail_html", "detail_cdp"}:
         missing.append("engagement_source")
-    for field in _REQUIRED_DETAIL_METRICS:
-        if not _has_fresh_detail_metric(record, field):
-            missing.append(field)
+    missing.extend(_missing_required_metrics(record))
     return missing
 
 
@@ -711,6 +716,32 @@ async def _read_detail_html(page: Any) -> Mapping[str, Any]:
         return {risk_text, metrics: {liked: count('.engage-bar .like-wrapper .count'), collected: count('.engage-bar .collect-wrapper .count'), comments: count('.engage-bar .chat-wrapper .count')}};
     }""")
     return value if isinstance(value, Mapping) else {"risk_text": "", "metrics": {}}
+
+
+async def _wait_for_detail_metrics(page: Any, missing_fields: list[str]) -> None:
+    try:
+        await page.wait_for_function("""(missing) => {
+            /* missing detail metrics rendered */
+            const body = document.body?.innerText || '';
+            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
+            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
+            if (challenge || phrases.some((word) => body.includes(word))) return true;
+            const modal = document.querySelector('.note-container');
+            if (!modal) return false;
+            const selectors = {
+                liked: '.engage-bar .like-wrapper .count',
+                comments: '.engage-bar .chat-wrapper .count',
+                collected: '.engage-bar .collect-wrapper .count',
+            };
+            return missing.every((field) => {
+                const selector = selectors[field];
+                const value = selector ? modal.querySelector(selector)?.textContent?.trim() : '';
+                return Boolean(value);
+            });
+        }""", arg=missing_fields, timeout=_DETAIL_METRIC_WAIT_MS)
+    except PlaywrightTimeoutError:
+        pass
+    await _raise_for_challenge(page)
 
 
 async def _read_comments(page: Any, limit: int) -> Mapping[str, Any]:
