@@ -40,7 +40,8 @@ _CHALLENGE_PHRASES = (
 _RISK_WORDS = ("risk", "locked", "blocked", "cooldown", "challenge")
 _RISK_CODES = frozenset({461, 471, 999})
 _DETAIL_ATTEMPT_SKEW_SECONDS = 2
-_DETAIL_METRIC_WAIT_MS = 3_000
+_DETAIL_METRIC_POLL_INTERVAL_MS = 250
+_DETAIL_METRIC_POLL_ATTEMPTS = 12
 _SEARCH_SETTLE_ATTEMPTS = 40
 _SEARCH_SETTLE_INTERVAL_MS = 250
 _REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected")
@@ -227,9 +228,7 @@ class XhsCollector:
                 record["detail_completed"] = True
                 missing_metrics = _missing_required_metrics(record)
                 if missing_metrics:
-                    await _wait_for_detail_metrics(page, missing_metrics)
-                    html = await _read_detail_html(page)
-                    _raise_for_observation(html)
+                    html = await _wait_for_detail_metrics(page, missing_metrics)
                     _supplement_missing_detail_html(record, html)
             elif _has_current_detail_time(
                 payload,
@@ -718,30 +717,21 @@ async def _read_detail_html(page: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {"risk_text": "", "metrics": {}}
 
 
-async def _wait_for_detail_metrics(page: Any, missing_fields: list[str]) -> None:
-    try:
-        await page.wait_for_function("""(missing) => {
-            /* missing detail metrics rendered */
-            const body = document.body?.innerText || '';
-            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-            if (challenge || phrases.some((word) => body.includes(word))) return true;
-            const modal = document.querySelector('.note-container');
-            if (!modal) return false;
-            const selectors = {
-                liked: '.engage-bar .like-wrapper .count',
-                comments: '.engage-bar .chat-wrapper .count',
-                collected: '.engage-bar .collect-wrapper .count',
-            };
-            return missing.every((field) => {
-                const selector = selectors[field];
-                const value = selector ? modal.querySelector(selector)?.textContent?.trim() : '';
-                return Boolean(value);
-            });
-        }""", arg=missing_fields, timeout=_DETAIL_METRIC_WAIT_MS)
-    except PlaywrightTimeoutError:
-        pass
-    await _raise_for_challenge(page)
+async def _wait_for_detail_metrics(
+    page: Any, missing_fields: list[str]
+) -> Mapping[str, Any]:
+    observation: Mapping[str, Any] = {"risk_text": "", "metrics": {}}
+    for attempt in range(_DETAIL_METRIC_POLL_ATTEMPTS + 1):
+        observation = await _read_detail_html(page)
+        _raise_for_observation(observation)
+        metrics = _mapping(observation.get("metrics"))
+        if all(parse_count(metrics.get(field)) is not None for field in missing_fields):
+            return observation
+        if attempt == _DETAIL_METRIC_POLL_ATTEMPTS:
+            return observation
+        await page.wait_for_timeout(_DETAIL_METRIC_POLL_INTERVAL_MS)
+        await _raise_for_challenge(page)
+    return observation  # pragma: no cover - the bounded loop always returns
 
 
 async def _read_comments(page: Any, limit: int) -> Mapping[str, Any]:

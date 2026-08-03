@@ -247,9 +247,8 @@ class Page:
     detail_dom_mutated: bool = False
     detail_validation_error: bool = False
     detail_metrics: dict[str, object] = field(default_factory=dict)
-    detail_metrics_after_wait: dict[str, object] | None = None
-    timeout_detail_metric_wait: bool = False
-    challenge_on_detail_metric_wait: bool = False
+    detail_metric_frames: list[dict[str, object]] = field(default_factory=list)
+    challenge_on_detail_metric_poll: bool = False
     detail_risk: str = ""
     locator_queries: list[str] = field(default_factory=list)
 
@@ -328,7 +327,7 @@ class Page:
         if "comments-container" in script:
             return {"risk_text": self.challenge, "comments": [{"author": "A", "text": "hello", "date": "today", "liked": "1"}]}
         if "engage-bar" in script:
-            return {"risk_text": self.detail_risk, "metrics": self.detail_metrics}
+            return {"risk_text": self.detail_risk or self.challenge, "metrics": self.detail_metrics}
         if "userPostedFeeds" in script:
             return {"risk_text": self.challenge, "cards": self.cards}
         if "feeds-page" in script:
@@ -346,13 +345,6 @@ class Page:
             should_timeout = self.timeout_note_render
         elif "unseen note card" in script:
             should_timeout = self.timeout_card_change
-        elif "missing detail metrics rendered" in script:
-            self.events.append("detail-metric-wait")
-            if self.detail_metrics_after_wait is not None:
-                self.detail_metrics = self.detail_metrics_after_wait
-            if self.challenge_on_detail_metric_wait:
-                self.challenge = "challenge-selector"
-            should_timeout = self.timeout_detail_metric_wait
         else:
             should_timeout = False
         if should_timeout:
@@ -362,6 +354,10 @@ class Page:
 
     async def wait_for_timeout(self, milliseconds: int) -> None:
         self.wait_timeouts.append(milliseconds)
+        if self.detail_metric_frames:
+            self.detail_metrics = self.detail_metric_frames.pop(0)
+        if self.challenge_on_detail_metric_poll:
+            self.challenge = "challenge-selector"
 
 
 @dataclass
@@ -490,6 +486,7 @@ def test_complete_supplements_only_missing_required_api_metric_from_open_modal()
         "collected": "detail_html",
         "shares": "detail_api",
     }
+    assert page.wait_timeouts == []
     assert sum("engage-bar" in script for script in page.evaluations) == 1
 
 
@@ -501,7 +498,8 @@ def test_complete_waits_for_delayed_required_modal_metric_render() -> None:
     page = Page(
         responses=[creator_response(note("one")), detail],
         cards=[{"note_id": "one"}],
-        detail_metrics_after_wait={"collected": "7"},
+        detail_metrics={"collected": "--"},
+        detail_metric_frames=[{"collected": "7"}],
     )
 
     record = run(
@@ -514,10 +512,8 @@ def test_complete_waits_for_delayed_required_modal_metric_render() -> None:
     assert record["complete"] is True
     assert record["collected"] == 7
     assert record["metric_sources"]["collected"] == "detail_html"
-    waits = [item for item in page.wait_scripts if "missing detail metrics rendered" in item[0]]
-    assert len(waits) == 1
-    assert waits[0][1] == ["collected"]
-    assert waits[0][2] == 3_000
+    assert page.wait_timeouts == [250]
+    assert sum("engage-bar" in script for script in page.evaluations) == 2
 
 
 def test_detail_metric_wait_timeout_reads_once_and_stays_incomplete() -> None:
@@ -528,7 +524,6 @@ def test_detail_metric_wait_timeout_reads_once_and_stays_incomplete() -> None:
     page = Page(
         responses=[creator_response(note("one")), detail],
         cards=[{"note_id": "one"}],
-        timeout_detail_metric_wait=True,
     )
 
     record = run(
@@ -540,8 +535,9 @@ def test_detail_metric_wait_timeout_reads_once_and_stays_incomplete() -> None:
 
     assert record["complete"] is False
     assert record["missing_fields"] == ["collected"]
-    assert sum("missing detail metrics rendered" in script for script, _, _ in page.wait_scripts) == 1
-    assert sum("engage-bar" in script for script in page.evaluations) == 1
+    assert page.wait_timeouts == [250] * 12
+    assert sum(page.wait_timeouts) == 3_000
+    assert sum("engage-bar" in script for script in page.evaluations) == len(page.wait_timeouts) + 1
 
 
 def test_detail_metric_wait_challenge_stops_before_dom_read_or_next_record() -> None:
@@ -552,7 +548,7 @@ def test_detail_metric_wait_challenge_stops_before_dom_read_or_next_record() -> 
     page = Page(
         responses=[creator_response(note("one"), note("two")), detail],
         cards=[{"note_id": "one"}, {"note_id": "two"}],
-        challenge_on_detail_metric_wait=True,
+        challenge_on_detail_metric_poll=True,
     )
 
     with pytest.raises(CollectionStopped, match="challenge-selector"):
@@ -564,7 +560,8 @@ def test_detail_metric_wait_challenge_stops_before_dom_read_or_next_record() -> 
         )
 
     assert page.clicked == ["one"]
-    assert not any("engage-bar" in script for script in page.evaluations)
+    assert page.wait_timeouts == [250]
+    assert sum("engage-bar" in script for script in page.evaluations) == 1
 
 
 def test_complete_replaces_stale_creator_metric_when_fresh_api_omits_it() -> None:
@@ -1347,7 +1344,25 @@ def test_endpoint_payload_requires_success_code_data_and_collection_shapes(sourc
         run(collect_creator(request, Browser(page)))
 
 
-@pytest.mark.parametrize("value, expected", [("2万", 20000), ("1.5亿", 150000000), ("0", 0), (None, None), ("NaN万", None), (float("inf"), None)])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("0", 0),
+        ("1,234", 1234),
+        ("1.2万", 12000),
+        ("2万", 20000),
+        ("1亿", 100000000),
+        ("1.5亿", 150000000),
+        (None, None),
+        ("", None),
+        ("--", None),
+        ("加载中", None),
+        ("-1", None),
+        ("NaN万", None),
+        ("Infinity", None),
+        (float("inf"), None),
+    ),
+)
 def test_count_parser_is_finite_and_localized(value: object, expected: object) -> None:
     from runtime.media_missher_runtime.platforms.xhs import parse_count
     assert parse_count(value) == expected
