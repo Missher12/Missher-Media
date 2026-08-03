@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Coroutine
 
 import pytest
@@ -104,12 +108,14 @@ class PhraseTimeoutPage(Page):
     waits: list[tuple[str, Any]] = field(default_factory=list)
 
     async def wait_for_function(self, script: str, **kwargs: Any) -> None:
+        from runtime.media_missher_runtime.platforms.weibo import PlaywrightTimeoutError
+
         await super().wait_for_function(script, **kwargs)
         self.waits.append((script, kwargs.get("arg")))
         if len(self.gotos) >= self.timeout_after_gotos:
             if self.timeout_challenge is not None:
                 self.challenge = self.timeout_challenge
-            raise TimeoutError("synthetic hydration timeout")
+            raise PlaywrightTimeoutError("synthetic hydration timeout")
 
 
 @dataclass
@@ -119,7 +125,6 @@ class ChallengeDomPage(Page):
     hidden_challenge: bool = False
     visible_challenge: str | None = None
     visible_block_text: str = ""
-    has_normal_content: bool = False
 
     async def evaluate(self, script: str, argument: Any = None) -> Any:
         self.evaluations.append(script)
@@ -135,11 +140,10 @@ class ChallengeDomPage(Page):
 
         selectors = tuple(argument["challenge_selectors"])
         blocking = tuple(argument["blocking_selectors"])
-        normal = tuple(argument["normal_content_selectors"])
         assert tuple(argument["blocking_phrases"]) == phrases
         assert "document.body" not in script
         assert '[class*="verify"]' not in script
-        assert "if (!hasNormalContent)" in script
+        assert "hasNormalContent" not in script
         assert "container.innerText" in script
         visibility_checked = "getComputedStyle" in script and "getBoundingClientRect" in script
         wildcard_verify = any("verify" in selector and "*=" in selector for selector in selectors)
@@ -156,7 +160,7 @@ class ChallengeDomPage(Page):
             assert expected[self.visible_challenge] in selectors
             return {"risk_text": "challenge-selector"}
         phrase = next((item for item in phrases if item in self.visible_block_text), "")
-        if phrase and blocking and normal and not self.has_normal_content:
+        if phrase and blocking:
             return {"risk_text": phrase}
         return {"risk_text": ""}
 
@@ -416,14 +420,86 @@ def test_visible_explicit_challenge_nodes_still_stop(kind: str) -> None:
         _run(_raise_for_page_challenge(ChallengeDomPage(visible_challenge=kind)))
 
 
-def test_blocking_phrase_requires_a_visible_block_container_without_normal_feed() -> None:
+def test_visible_blocking_phrase_stops_collection() -> None:
     from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, _raise_for_page_challenge
 
     with pytest.raises(CollectionStopped, match="访问受限"):
         _run(_raise_for_page_challenge(ChallengeDomPage(visible_block_text="访问受限")))
 
-    _run(
-        _raise_for_page_challenge(
-            ChallengeDomPage(visible_block_text="访问受限", has_normal_content=True)
-        )
+
+@pytest.mark.enable_socket
+def test_challenge_probe_uses_real_offline_dom_visibility() -> None:
+    async_api = pytest.importorskip("playwright.async_api")
+    configured = os.environ.get("MEDIA_MISSHER_TEST_BROWSER")
+    executable = Path(configured) if configured else Path(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     )
+    if not executable.is_file():
+        discovered = shutil.which("google-chrome") or shutil.which("chromium")
+        if discovered is None:
+            pytest.skip("an installed local Chromium browser is required")
+        executable = Path(discovered)
+
+    from runtime.media_missher_runtime.platforms.weibo import (
+        CollectionStopped,
+        _raise_for_page_challenge,
+    )
+
+    async def exercise() -> None:
+        async with async_api.async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                executable_path=str(executable), headless=True
+            )
+            page = await browser.new_page(viewport={"width": 800, "height": 600})
+            await page.route("**/*", lambda route: route.abort())
+
+            async def stopped(html: str) -> bool:
+                await page.set_content(html)
+                try:
+                    await _raise_for_page_challenge(page)
+                except CollectionStopped:
+                    return True
+                return False
+
+            box = "position:fixed;left:20px;top:20px;width:80px;height:40px"
+            observed = {}
+            observed["ordinary"] = await stopped(
+                f'<article class="author_verify_badge" style="{box}">普通正文讨论风控和验证码</article>'
+            )
+            observed["blocking-with-feed"] = await stopped(
+                f'<article style="{box}">正常 feed</article>'
+                f'<div class="error-page" style="{box}">访问受限</div>'
+            )
+            observed["visible-challenge"] = await stopped(
+                f'<div class="geetest_panel" style="{box}">验证</div>'
+            )
+
+            hidden_ancestors = (
+                ("hidden-parent", "hidden"),
+                ("display-none-parent", 'style="display:none"'),
+                ("visibility-hidden-parent", 'style="visibility:hidden"'),
+                ("transparent-parent", 'style="opacity:0"'),
+                ("aria-hidden-parent", 'aria-hidden="true"'),
+            )
+            for name, ancestor in hidden_ancestors:
+                observed[name] = await stopped(
+                    f'<div {ancestor}><div class="geetest_panel" style="{box}">验证</div></div>'
+                )
+            observed["offscreen"] = await stopped(
+                '<div class="geetest_panel" '
+                'style="position:absolute;left:20px;top:-1000px;width:80px;height:40px">验证</div>'
+            )
+            await browser.close()
+            assert observed == {
+                "ordinary": False,
+                "blocking-with-feed": True,
+                "visible-challenge": True,
+                "hidden-parent": False,
+                "display-none-parent": False,
+                "visibility-hidden-parent": False,
+                "transparent-parent": False,
+                "aria-hidden-parent": False,
+                "offscreen": False,
+            }
+
+    asyncio.run(exercise())

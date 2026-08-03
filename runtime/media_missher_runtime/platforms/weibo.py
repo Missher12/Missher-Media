@@ -51,12 +51,6 @@ _BLOCKING_SELECTORS = _CHALLENGE_SELECTORS + (
     ".access-denied",
     '[data-testid="access-denied"]',
 )
-_NORMAL_CONTENT_SELECTORS = (
-    "#pl_feedlist_index .card-wrap[mid]",
-    ".card-wrap[mid]",
-    "article",
-    "[mid]",
-)
 _BLOCKING_PHRASES = ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码")
 _MAX_RAW_HTML = 4096
 _MISSING = object()
@@ -342,7 +336,6 @@ def _challenge_probe_options() -> dict[str, list[str]]:
     return {
         "challenge_selectors": list(_CHALLENGE_SELECTORS),
         "blocking_selectors": list(_BLOCKING_SELECTORS),
-        "normal_content_selectors": list(_NORMAL_CONTENT_SELECTORS),
         "blocking_phrases": list(_BLOCKING_PHRASES),
     }
 
@@ -351,15 +344,27 @@ async def _read_page_challenge(page: Any) -> str:
     result = await page.evaluate(
         """(options) => {
             const visible = (element) => {
-                const style = window.getComputedStyle(element);
+                if (!element.isConnected) return false;
+                for (let current = element; current; current = current.parentElement) {
+                    const style = window.getComputedStyle(current);
+                    if (current.hidden
+                        || current.getAttribute('aria-hidden') === 'true'
+                        || style.display === 'none'
+                        || style.visibility === 'hidden'
+                        || style.visibility === 'collapse'
+                        || Number(style.opacity || '1') === 0) {
+                        return false;
+                    }
+                }
                 const rect = element.getBoundingClientRect();
-                return !element.hidden
-                    && element.getAttribute('aria-hidden') !== 'true'
-                    && style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && Number(style.opacity || '1') !== 0
-                    && rect.width > 0
-                    && rect.height > 0;
+                const width = window.innerWidth || document.documentElement.clientWidth;
+                const height = window.innerHeight || document.documentElement.clientHeight;
+                return rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < width
+                    && rect.top < height;
             };
             const elements = (selectors) => selectors.flatMap((selector) =>
                 Array.from(document.querySelectorAll(selector))
@@ -367,14 +372,11 @@ async def _read_page_challenge(page: Any) -> str:
             if (elements(options.challenge_selectors).some(visible)) {
                 return {risk_text: 'challenge-selector'};
             }
-            const hasNormalContent = elements(options.normal_content_selectors).some(visible);
-            if (!hasNormalContent) {
-                for (const container of elements(options.blocking_selectors)) {
-                    if (!visible(container)) continue;
-                    const text = container.innerText || container.textContent || '';
-                    const phrase = options.blocking_phrases.find((item) => text.includes(item));
-                    if (phrase) return {risk_text: phrase};
-                }
+            for (const container of elements(options.blocking_selectors)) {
+                if (!visible(container)) continue;
+                const text = container.innerText || container.textContent || '';
+                const phrase = options.blocking_phrases.find((item) => text.includes(item));
+                if (phrase) return {risk_text: phrase};
             }
             return {risk_text: ''};
         }""",
@@ -392,22 +394,33 @@ async def _wait_for_search_cards_or_challenge(page: Any) -> None:
     await page.wait_for_function(
         """(options) => {
             const visible = (element) => {
-                const style = window.getComputedStyle(element);
+                if (!element.isConnected) return false;
+                for (let current = element; current; current = current.parentElement) {
+                    const style = window.getComputedStyle(current);
+                    if (current.hidden
+                        || current.getAttribute('aria-hidden') === 'true'
+                        || style.display === 'none'
+                        || style.visibility === 'hidden'
+                        || style.visibility === 'collapse'
+                        || Number(style.opacity || '1') === 0) {
+                        return false;
+                    }
+                }
                 const rect = element.getBoundingClientRect();
-                return !element.hidden
-                    && element.getAttribute('aria-hidden') !== 'true'
-                    && style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && Number(style.opacity || '1') !== 0
-                    && rect.width > 0
-                    && rect.height > 0;
+                const width = window.innerWidth || document.documentElement.clientWidth;
+                const height = window.innerHeight || document.documentElement.clientHeight;
+                return rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < width
+                    && rect.top < height;
             };
             const elements = (selectors) => selectors.flatMap((selector) =>
                 Array.from(document.querySelectorAll(selector))
             );
             const card = document.querySelector('#pl_feedlist_index .card-wrap[mid]');
             if (card || elements(options.challenge_selectors).some(visible)) return true;
-            if (elements(options.normal_content_selectors).some(visible)) return false;
             return elements(options.blocking_selectors).some((container) => {
                 if (!visible(container)) return false;
                 const text = container.innerText || container.textContent || '';
