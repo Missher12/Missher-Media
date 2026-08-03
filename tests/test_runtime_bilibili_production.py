@@ -184,6 +184,22 @@ def test_search_uses_an_existing_search_page_without_navigation() -> None:
     assert browser.navigations == []
 
 
+def test_search_stops_immediately_when_open_page_reports_a_captcha_marker() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import CollectionStopped, search
+
+    class RiskSearchPage(CapturePage):
+        async def evaluate(self, script: str) -> Any:
+            self.evaluations.append(script)
+            if "bili-video-card" in script:
+                return {"risk_text": "captcha", "cards": [{"bvid": "BVnever", "title": "Never", "href": "/video/BVnever"}]}
+            return None
+
+    page = RiskSearchPage(url="https://search.bilibili.com/all")
+    with pytest.raises(CollectionStopped, match="captcha"):
+        _run(search(CollectionRequest(platform="bilibili", count=0, page_cap=3, keyword="synthetic"), ProductionBrowser(page, allow_navigation=False)))
+    assert len(page.evaluations) == 1
+
+
 def test_creator_deduplicates_before_count_truncation_across_captured_pages() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import collect_creator
 
@@ -191,6 +207,20 @@ def test_creator_deduplicates_before_count_truncation_across_captured_pages() ->
     records = _run(collect_creator(CollectionRequest(platform="bilibili", count=3, uid="synthetic-user"), ProductionBrowser(page)))
 
     assert [record["native_id"] for record in records] == ["one", "two", "three"]
+
+
+def test_creator_stops_without_consuming_a_third_page_when_a_page_adds_no_records() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(responses=[
+        _feed(_item("one"), has_more=True),
+        _feed(_item("one"), has_more=True),
+        _feed(_item("never"), has_more=False),
+    ])
+    records = _run(collect_creator(CollectionRequest(platform="bilibili", count=0, page_cap=3, uid="synthetic-user"), ProductionBrowser(page)))
+
+    assert [record["native_id"] for record in records] == ["one"]
+    assert len(page.responses) == 1
 
 
 def test_complete_reads_valid_video_data_sequentially_and_stops_on_detail_risk() -> None:
@@ -228,3 +258,17 @@ def test_complete_requires_a_structurally_valid_current_video_observation() -> N
     incomplete = _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True), ProductionBrowser(invalid_page)))
     assert incomplete[0]["detail_completed"] is False
     assert "detail" in incomplete[0]["missing_fields"]
+
+
+def test_complete_keeps_a_placeholder_detail_title_incomplete() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("first", bvid="BVdetail1"), has_more=False)],
+        details=[{"risk_text": "", "videoData": {"bvid": "BVdetail1", "title": "--", "pubdate": 1_700_000_010, "desc": "Desc", "stat": {"like": 3, "reply": 0, "share": 1, "favorite": 2}}}],
+    )
+    record = _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True), ProductionBrowser(page)))[0]
+
+    assert record["detail_completed"] is True
+    assert record["complete"] is False
+    assert record["missing_fields"] == ["title"]

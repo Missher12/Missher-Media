@@ -93,7 +93,9 @@ class BilibiliCollector:
         records: list[dict[str, Any]] = []
         native_ids: set[str] = set()
         for page_number in range(self.request.page_cap):
-            raw_records = await _read_search_cards(page)
+            observation = await _read_search_cards(page)
+            _raise_for_risk_observation(observation)
+            raw_records = [item for item in _items(observation.get("cards")) if isinstance(item, Mapping)]
             added = _append_search_records(records, native_ids, raw_records, self.request.keyword, self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
@@ -206,9 +208,11 @@ def _feed_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return data
 
 
-async def _read_search_cards(page: Any) -> list[Mapping[str, Any]]:
-    cards = await page.evaluate(
-        """() => Array.from(document.querySelectorAll('.bili-video-card, .bili-video-card__wrap'))
+async def _read_search_cards(page: Any) -> Mapping[str, Any]:
+    result = await page.evaluate(
+        """() => ({
+            risk_text: /captcha|risk|blocked|locked|cooldown/i.test(document.body?.innerText || '') ? 'risk-page' : '',
+            cards: Array.from(document.querySelectorAll('.bili-video-card, .bili-video-card__wrap'))
             .map((card) => {
                 const link = card.querySelector('a[href*="/video/"]');
                 const href = link?.getAttribute('href') || null;
@@ -216,9 +220,12 @@ async def _read_search_cards(page: Any) -> list[Mapping[str, Any]]:
                 const title = card.querySelector('[title]')?.getAttribute('title') || link?.textContent || null;
                 const description = card.querySelector('.bili-video-card__info')?.textContent || null;
                 return {bvid, title, href, description};
-            })"""
+            })
+        })"""
     )
-    return [item for item in _items(cards) if isinstance(item, Mapping)]
+    if isinstance(result, Mapping):
+        return result
+    return {"risk_text": "", "cards": result}
 
 
 async def _read_video_detail(page: Any) -> Mapping[str, Any]:
