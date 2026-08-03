@@ -30,10 +30,15 @@ _API_HOST = "api.bilibili.com"
 _FEED_PATH = "/x/polymer/web-dynamic/v1/feed/space"
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _PLACEHOLDER_TITLES = frozenset({"", "-", "--", "暂无标题", "untitled"})
+_CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控"})
 
 
 class CollectionStopped(RuntimeError):
     """A platform-wide risk response requires collection to stop immediately."""
+
+
+class SourceResponseError(RuntimeError):
+    """A browser-generated source response could not be consumed safely."""
 
 
 @dataclass(slots=True)
@@ -75,7 +80,7 @@ class BilibiliCollector:
                 break
             try:
                 response = await _capture_feed_while(page, lambda: _scroll(page))
-            except (TimeoutError, PlaywrightTimeoutError):
+            except PlaywrightTimeoutError:
                 break
         return records
 
@@ -87,6 +92,10 @@ class BilibiliCollector:
         page = self.browser.require_page("bilibili")
         if getattr(self.browser, "allow_navigation", False):
             await self._navigate(page, _search_page_url(self.request.keyword))
+            try:
+                await _wait_for_search_change(page, [])
+            except PlaywrightTimeoutError:
+                pass
         elif urlparse(page.url).hostname != "search.bilibili.com":
             raise PreconditionError("an open Bilibili search page is required when navigation is disabled")
 
@@ -102,6 +111,10 @@ class BilibiliCollector:
             if added == 0 or page_number + 1 >= self.request.page_cap:
                 break
             await _scroll(page)
+            try:
+                await _wait_for_search_change(page, sorted(native_ids))
+            except PlaywrightTimeoutError:
+                break
         return records
 
     async def _complete_record(self, page: Any, record: dict[str, Any]) -> None:
@@ -192,12 +205,23 @@ def _is_feed_response(response: Any) -> bool:
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:
-    payload = await response.json()
-    decision = classify_response(status=int(response.status), payload=payload, text=_response_text(payload))
+    status = getattr(response, "status", None)
+    if isinstance(status, bool) or not isinstance(status, int):
+        raise SourceResponseError("Bilibili source response has no numeric HTTP status")
+    decision = classify_response(status=status)
     if decision.stop_all:
         raise CollectionStopped(decision.reason or "risk response")
+    if not 200 <= status < 300:
+        raise SourceResponseError(f"Bilibili source returned http-{status}")
+    try:
+        payload = await response.json()
+    except Exception as error:
+        raise SourceResponseError("Bilibili source JSON decode failed") from error
     if not isinstance(payload, Mapping):
-        raise ValueError("Bilibili source returned a non-object payload")
+        raise SourceResponseError("Bilibili source returned a non-object JSON payload")
+    decision = classify_response(status=status, payload=payload, text=_response_text(payload))
+    if decision.stop_all:
+        raise CollectionStopped(decision.reason or "risk response")
     return payload
 
 
@@ -210,8 +234,15 @@ def _feed_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
     result = await page.evaluate(
-        """() => ({
-            risk_text: /captcha|risk|blocked|locked|cooldown/i.test(document.body?.innerText || '') ? 'risk-page' : '',
+        """() => {
+            const bodyText = document.body?.innerText || '';
+            const challengeSelector = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
+            );
+            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
+            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
+            return {
+            risk_text: challengeSelector ? 'challenge-selector' : phrase,
             cards: Array.from(document.querySelectorAll('.bili-video-card, .bili-video-card__wrap'))
             .map((card) => {
                 const link = card.querySelector('a[href*="/video/"]');
@@ -221,7 +252,8 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
                 const description = card.querySelector('.bili-video-card__info')?.textContent || null;
                 return {bvid, title, href, description};
             })
-        })"""
+            };
+        }"""
     )
     if isinstance(result, Mapping):
         return result
@@ -230,13 +262,45 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
 
 async def _read_video_detail(page: Any) -> Mapping[str, Any]:
     observation = await page.evaluate(
-        """() => ({
+        """() => {
+            const bodyText = document.body?.innerText || '';
+            const challengeSelector = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
+            );
+            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
+            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
+            return {
             videoData: window.__INITIAL_STATE__?.videoData || null,
-            risk_text: /captcha|risk|blocked|locked|cooldown/i.test(document.body?.innerText || '')
-                ? (document.body?.innerText || '').slice(0, 256) : ''
-        })"""
+            risk_text: challengeSelector ? 'challenge-selector' : phrase
+            };
+        }"""
     )
     return _mapping(observation)
+
+
+async def _wait_for_search_change(page: Any, previous_ids: list[str]) -> None:
+    await page.wait_for_function(
+        """(previousIds) => {
+            const bodyText = document.body?.innerText || '';
+            const challenge = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
+            ) || ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控']
+                .some((phrase) => bodyText.includes(phrase));
+            if (challenge) return true;
+            const ids = Array.from(document.querySelectorAll('.bili-video-card a[href*="/video/"], .bili-video-card__wrap a[href*="/video/"]'))
+                .map((link) => link.getAttribute('href')?.match(/\\/video\\/(BV[^/?#]+)/)?.[1])
+                .filter(Boolean);
+            const current = Array.from(new Set(ids)).sort();
+            const previous = Array.from(new Set(previousIds)).sort();
+            const changed = current.length !== previous.length || current.some((value, index) => value !== previous[index]);
+            const ended = Boolean(document.querySelector(
+                '.search-end, .vui_pagenation--btn-next[disabled], .vui_pagenation--btn-next.vui_button--disabled'
+            ));
+            return (current.length > 0 && changed) || ended;
+        }""",
+        arg=previous_ids,
+        timeout=10_000,
+    )
 
 
 async def _scroll(page: Any) -> None:
@@ -347,8 +411,8 @@ def _response_text(payload: object) -> str | None:
 
 def _raise_for_risk_observation(observation: Mapping[str, Any]) -> None:
     text = _response_text(observation)
-    if text is not None and "captcha" in text.casefold():
-        raise CollectionStopped("captcha")
+    if text in _CHALLENGE_REASONS or (text is not None and "captcha" in text.casefold()):
+        raise CollectionStopped(text or "captcha")
     decision = classify_response(status=200, payload=observation, text=text)
     if decision.stop_all:
         raise CollectionStopped(decision.reason or "risk response")

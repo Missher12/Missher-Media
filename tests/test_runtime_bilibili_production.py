@@ -19,11 +19,16 @@ def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
 
 @dataclass
 class Response:
-    payload: dict[str, Any]
+    payload: object
     status: int = 200
     url: str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+    json_error: Exception | None = None
+    json_calls: int = 0
 
-    async def json(self) -> dict[str, Any]:
+    async def json(self) -> object:
+        self.json_calls += 1
+        if self.json_error is not None:
+            raise self.json_error
         return self.payload
 
 
@@ -53,6 +58,7 @@ class CapturePage:
     evaluations: list[str] = field(default_factory=list)
     cards: list[list[dict[str, Any]]] = field(default_factory=list)
     details: list[dict[str, Any]] = field(default_factory=list)
+    waits: list[list[str]] = field(default_factory=list)
 
     def expect_response(self, predicate: Any, **kwargs: Any) -> ResponseWaiter:
         response = self.responses.pop(0)
@@ -70,6 +76,10 @@ class CapturePage:
         if "bili-video-card" in script:
             return self.cards.pop(0) if self.cards else []
         return None
+
+    async def wait_for_function(self, script: str, *, arg: list[str], timeout: int) -> None:
+        assert timeout == 10_000
+        self.waits.append(arg)
 
 
 @dataclass
@@ -89,6 +99,28 @@ class ProductionBrowser:
             raise PreconditionError("navigation")
         await page.goto(url)
         return self.navigation_result  # type: ignore[return-value]
+
+
+@dataclass
+class DelayedSearchPage(CapturePage):
+    card_states: list[list[dict[str, Any]]] = field(default_factory=list)
+    wait_outcomes: list[str] = field(default_factory=list)
+    state_index: int = 0
+    wait_args: list[list[str]] = field(default_factory=list)
+
+    async def evaluate(self, script: str) -> Any:
+        self.evaluations.append(script)
+        if "bili-video-card" in script:
+            return {"risk_text": "", "cards": self.card_states[self.state_index]}
+        return None
+
+    async def wait_for_function(self, script: str, *, arg: list[str], timeout: int) -> None:
+        assert timeout == 10_000
+        self.wait_args.append(arg)
+        outcome = self.wait_outcomes.pop(0)
+        if outcome == "timeout":
+            raise TimeoutError("synthetic timeout")
+        self.state_index += 1
 
 
 def _item(identifier: str, *, bvid: str | None = None, comment: object = {"count": 0}) -> dict[str, Any]:
@@ -146,6 +178,30 @@ def test_creator_stops_on_first_risk_response_without_scrolling() -> None:
     assert page.evaluations == []
 
 
+@pytest.mark.parametrize("status", (403, 429))
+def test_creator_classifies_risk_status_before_attempting_json(status: int) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import CollectionStopped, collect_creator
+
+    response = Response(None, status=status, json_error=AssertionError("json must not be called"))
+    page = CapturePage(responses=[response])
+
+    with pytest.raises(CollectionStopped, match=f"http-{status}"):
+        _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user"), ProductionBrowser(page)))
+    assert response.json_calls == 0
+
+
+def test_creator_reports_nonrisk_http_and_json_decode_failures_explicitly() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    server_error = Response({}, status=500)
+    with pytest.raises(RuntimeError, match="http-500"):
+        _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user"), ProductionBrowser(CapturePage(responses=[server_error]))))
+
+    invalid_json = Response(None, json_error=ValueError("synthetic decode"))
+    with pytest.raises(RuntimeError, match="decode"):
+        _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user"), ProductionBrowser(CapturePage(responses=[invalid_json]))))
+
+
 def test_creator_stops_on_risk_navigation_status_before_parsing_a_feed() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import CollectionStopped, collect_creator
 
@@ -172,6 +228,42 @@ def test_search_navigates_to_exact_allowlisted_host_and_paginates_count_zero() -
     assert len(page.evaluations) == 5
 
 
+def test_search_waits_for_initial_hydration_and_delayed_scrolled_cards() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import search
+
+    page = DelayedSearchPage(
+        card_states=[
+            [],
+            [{"bvid": "BVdelay1", "title": "One", "href": "/video/BVdelay1"}],
+            [
+                {"bvid": "BVdelay1", "title": "One", "href": "/video/BVdelay1"},
+                {"bvid": "BVdelay2", "title": "Two", "href": "/video/BVdelay2"},
+            ],
+        ],
+        wait_outcomes=["advance", "advance"],
+    )
+
+    records = _run(search(CollectionRequest(platform="bilibili", count=2, page_cap=3, keyword="delayed"), ProductionBrowser(page)))
+
+    assert [record["native_id"] for record in records] == ["BVdelay1", "BVdelay2"]
+    assert page.wait_args == [[], ["BVdelay1"]]
+
+
+def test_search_timeout_after_scroll_treats_unchanged_cards_as_exhausted() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import search
+
+    page = DelayedSearchPage(
+        url="https://search.bilibili.com/all",
+        card_states=[[{"bvid": "BVonly", "title": "Only", "href": "/video/BVonly"}]],
+        wait_outcomes=["timeout"],
+    )
+
+    records = _run(search(CollectionRequest(platform="bilibili", count=0, page_cap=3, keyword="synthetic"), ProductionBrowser(page, allow_navigation=False)))
+
+    assert [record["native_id"] for record in records] == ["BVonly"]
+    assert page.wait_args == [["BVonly"]]
+
+
 def test_search_uses_an_existing_search_page_without_navigation() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import search
 
@@ -191,13 +283,25 @@ def test_search_stops_immediately_when_open_page_reports_a_captcha_marker() -> N
         async def evaluate(self, script: str) -> Any:
             self.evaluations.append(script)
             if "bili-video-card" in script:
-                return {"risk_text": "captcha", "cards": [{"bvid": "BVnever", "title": "Never", "href": "/video/BVnever"}]}
+                return {"risk_text": "challenge-selector", "cards": [{"bvid": "BVnever", "title": "Never", "href": "/video/BVnever"}]}
             return None
 
     page = RiskSearchPage(url="https://search.bilibili.com/all")
-    with pytest.raises(CollectionStopped, match="captcha"):
+    with pytest.raises(CollectionStopped, match="challenge"):
         _run(search(CollectionRequest(platform="bilibili", count=0, page_cap=3, keyword="synthetic"), ProductionBrowser(page, allow_navigation=False)))
     assert len(page.evaluations) == 1
+
+
+def test_search_does_not_treat_ordinary_english_risk_text_as_a_challenge() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import search
+
+    page = CapturePage(url="https://search.bilibili.com/all", cards=[[
+        {"bvid": "BVordinary", "title": "Risk analysis", "description": "A normal discussion of risk", "href": "/video/BVordinary"},
+    ]])
+    record = _run(search(CollectionRequest(platform="bilibili", count=1, keyword="risk"), ProductionBrowser(page, allow_navigation=False)))[0]
+
+    assert record["native_id"] == "BVordinary"
+    assert record["title"] == "Risk analysis"
 
 
 def test_creator_deduplicates_before_count_truncation_across_captured_pages() -> None:
