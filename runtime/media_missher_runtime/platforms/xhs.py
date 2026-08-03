@@ -222,6 +222,10 @@ class XhsCollector:
                     raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
                 _merge_detail(record, card, engagement_observed_at=observed_at)
                 record["detail_completed"] = True
+                if _has_missing_required_metric(record):
+                    html = await _read_detail_html(page)
+                    _raise_for_observation(html)
+                    _supplement_missing_detail_html(record, html)
             elif _has_current_detail_time(
                 payload,
                 attempt_started_at=attempt_started_at,
@@ -596,6 +600,23 @@ def _merge_detail_html(record: dict[str, Any], observation: Mapping[str, Any]) -
         record["engagement_fresh"] = True
         record["engagement_observed_at"] = _observed_at()
         record["engagement_source"] = source
+
+
+def _has_missing_required_metric(record: Mapping[str, Any]) -> bool:
+    return any(record.get(field) is None for field in ("liked", "comments", "collected"))
+
+
+def _supplement_missing_detail_html(
+    record: dict[str, Any], observation: Mapping[str, Any]
+) -> None:
+    metrics = _mapping(observation.get("metrics"))
+    for field in ("liked", "comments", "collected"):
+        if record.get(field) is not None:
+            continue
+        value = parse_count(metrics.get(field))
+        if value is not None:
+            record[field] = value
+            record["metric_sources"][field] = "detail_html"
 
 
 def _missing_completion(record: Mapping[str, Any]) -> list[str]:

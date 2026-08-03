@@ -246,6 +246,8 @@ class Page:
     detail_dom_note_id_override: str | None = None
     detail_dom_mutated: bool = False
     detail_validation_error: bool = False
+    detail_metrics: dict[str, object] = field(default_factory=dict)
+    detail_risk: str = ""
     locator_queries: list[str] = field(default_factory=list)
 
     @property
@@ -322,6 +324,8 @@ class Page:
             return {"risk_text": self.challenge, "state": state}
         if "comments-container" in script:
             return {"risk_text": self.challenge, "comments": [{"author": "A", "text": "hello", "date": "today", "liked": "1"}]}
+        if "engage-bar" in script:
+            return {"risk_text": self.detail_risk, "metrics": self.detail_metrics}
         if "userPostedFeeds" in script:
             return {"risk_text": self.challenge, "cards": self.cards}
         if "feeds-page" in script:
@@ -443,6 +447,95 @@ def test_complete_uses_current_detail_response_and_modal_comments() -> None:
     assert record["date_precision"] == "second" and record["date_estimated"] is False
     assert record["comments_data"] == [{"author": "A", "text": "hello", "date": "today", "liked": 1}]
     assert record["metric_sources"] == {"liked": "detail_api", "comments": "detail_api", "collected": "detail_api", "shares": "detail_api"}
+
+
+def test_complete_supplements_only_missing_required_api_metric_from_open_modal() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    del detail.payload["data"]["items"][0]["note_card"]["interact_info"]["collected_count"]  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+        detail_metrics={"liked": "999", "comments": "888", "collected": "7"},
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is True
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert record["engagement_source"] == "detail_api"
+    assert record["engagement_observed_at"] is not None
+    assert record["liked"] == 0 and record["comments"] == 2
+    assert record["collected"] == 7 and record["shares"] == 4
+    assert record["metric_sources"] == {
+        "liked": "detail_api",
+        "comments": "detail_api",
+        "collected": "detail_html",
+        "shares": "detail_api",
+    }
+    assert sum("engage-bar" in script for script in page.evaluations) == 1
+
+
+def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    del detail.payload["data"]["items"][0]["note_card"]["interact_info"]["collected_count"]  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+        detail_metrics={"liked": "999", "comments": "888"},
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is False
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert record["engagement_source"] == "detail_api"
+    assert record["collected"] is None
+    assert record["missing_fields"] == ["collected"]
+    assert record["metric_sources"] == {
+        "liked": "detail_api",
+        "comments": "detail_api",
+        "shares": "detail_api",
+    }
+
+
+def test_missing_api_metric_modal_risk_stops_before_next_record() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
+
+    detail = detail_response("one")
+    del detail.payload["data"]["items"][0]["note_card"]["interact_info"]["collected_count"]  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one"), note("two")), detail],
+        cards=[{"note_id": "one"}, {"note_id": "two"}],
+        detail_metrics={"collected": "7"},
+        detail_risk="challenge-selector",
+    )
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=2, uid="u", complete=True),
+                Browser(page),
+            )
+        )
+
+    assert page.clicked == ["one"]
+    assert page.modal_visible is False
 
 
 def test_complete_captures_exact_edith_detail_response() -> None:
