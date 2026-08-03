@@ -1,50 +1,52 @@
 ---
 name: media-missher
-description: Operate and validate the locally installed Media@Missher collector for Bilibili, Xiaohongshu, Douyin, and Weibo. Use when a user asks to collect a specific number of posts, search a keyword, request complete Bilibili content or fresh Xiaohongshu engagement, validate a fresh run, or diagnose CDP, login, timeout, lock, or risk-cooldown failures. Keep code review read-only and require separate explicit authorization for any remote Feishu write.
+description: Operate and validate the shared Media@Missher runtime for Bilibili, Xiaohongshu, Douyin, and Weibo. Use for authorized creator collection, single-platform keyword search, complete Bilibili or Xiaohongshu evidence, fresh-run validation, and diagnosis of CDP, login, timeout, lock, cooldown, or risk failures. Keep review and planning read-only, and never perform a remote Feishu write.
 ---
 
 # Media@Missher
 
-Operate the external Media@Missher runtime through this skill's standard-library adapter. Do not copy, import, patch, replace, or delete the external engine.
+Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 
-## Route the request
+## Route each request
 
 - Keep code review, audit, explanation, and planning read-only. Do not collect data for those requests.
-- Require explicit authorization to collect, plus a count and a target platform, creator, UID, homepage, or keyword.
-- Prefer a user-supplied target over a private profile default. If a named target cannot be resolved uniquely, ask; never guess an ID.
-- Treat count `0` as valid only when the user explicitly requests “collect as much as safe”; it remains bounded by the engine safety cap.
-- Limit keyword search to exactly one platform. Reject search combined with complete mode.
-- Run multi-platform collection sequentially in one controller process. Never overlap collection processes, especially Xiaohongshu.
-- When complete mode is requested, run it once. Do not run an ordinary pass first.
+- Require explicit authorization to collect, plus a count and a selected platform, creator UID, homepage, or keyword.
+- Use a supplied target before a private profile value. Ask when a target is ambiguous. Never guess an ID.
+- Treat count `0` as valid only with an explicit collect-as-much-as-safe request. The runtime page cap still applies.
+- Limit keyword search to one platform. Reject search combined with complete mode.
+- Run selected platforms sequentially in one controller process. Never overlap Xiaohongshu with another collection.
+- Run complete mode once when requested. Do not collect an ordinary pass first.
+- Pass `--allow-navigation` only after explicit authorization for browser navigation during that collection or live acceptance run. Never use it for a read-only request.
 
-Read [references/commands.md](references/commands.md) before collection. Read [references/configuration.md](references/configuration.md) when resolving an engine, data root, CDP endpoint, private profile, or UID. Read [references/validation.md](references/validation.md) before accepting evidence. Read [references/troubleshooting.md](references/troubleshooting.md) after a preflight, login, timeout, lock, cooldown, or risk failure. Read [references/licensing.md](references/licensing.md) before copying, distributing, or licensing any component.
+Read [commands](references/commands.md) before collection or installation. Read [configuration](references/configuration.md) when resolving the shared home, output root, Chrome DevTools Protocol (CDP) endpoint, private profile, or creator UID. Read [validation](references/validation.md) before accepting evidence. Read [troubleshooting](references/troubleshooting.md) after a preflight, login, timeout, lock, cooldown, or risk failure. Read [licensing](references/licensing.md) before copying, distributing, or licensing a component.
 
 ## Collect safely
 
-1. Resolve configuration with CLI values taking precedence over environment values and the private mode-`0600` profile.
-2. Run `scripts/preflight.py`. For real collection, require live CDP preflight to pass without starting or restarting Chrome.
-3. Run `scripts/run_collection.py` once. It creates a unique private run directory, forces JSON staging, and applies `--no-feishu` to the multi-platform engine.
-4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, `blocked`, or cooldown signals. Accept no automatic retry after a risk stop.
-5. Validate only files from the current run and its recorded start time. Never accept `latest`, a reused directory, an old artifact, a symlink, an exit code, or a console checkmark as sufficient evidence.
-6. Report at most three metadata-only samples (platform and field count) plus absolute current-run evidence paths. Never echo collected content in a summary.
+1. Resolve configuration with command-line values before environment values and the private mode-`0600` profile.
+2. Run `scripts/preflight.py --live`. Live preflight probes the existing CDP endpoint and checks the shared layout, release markers, Python, dependencies, and five entrypoints. It does not select platforms.
+3. Run `scripts/run_collection.py` once. The runtime controller checks each selected platform page and login state before creating output. A successful run creates one unique mode-`0700` directory and private mode-`0600` JSON artifacts.
+4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, `blocked`, or cooldown signals. Do not retry a risk stop.
+5. Validate only artifacts from that run and its recorded start time. Reject `latest`, reused directories, old artifacts, symlinks, exit codes, and console checkmarks as proof.
+6. Report counts, statuses, and absolute evidence paths. Limit samples to three metadata-only objects with platform and field count.
 
-## Preserve platform controls
+## Preserve safety controls
 
-- Do not restart Chrome, replace cookies, change browser profiles, clear locks, clear risk state, clear checkpoints, rotate accounts, rotate network exits, or increase engine concurrency.
-- Do not bypass a captcha, inject stealth behavior, perform proxy rotation, use a proxy pool, defeat fingerprinting controls, or evade platform restrictions.
-- Preserve engine rate limits, jitter, page caps, low-resource mode, cooldowns, and sequential execution.
-- A non-risk failure may be retried once only after its concrete cause is fixed and preflight passes again.
+- Do not start, restart, terminate, or reprofile Chrome.
+- Do not replace cookies, clear locks, clear state, rotate accounts, rotate network exits, or increase concurrency.
+- Do not bypass a captcha, inject stealth behavior, use proxy rotation, defeat fingerprinting controls, or evade platform restrictions.
+- Preserve rate limits, jitter, page caps, timeouts, cooldowns, and sequential execution.
+- Retry one non-risk failure only after correcting its concrete cause and passing preflight again.
 
 ## Keep Feishu separate
 
-This skill never reads Feishu credentials, invokes a Feishu client, or performs a remote write. Local JSON staging is not a remote write. A remote Feishu operation is a separate workflow requiring separate explicit authorization.
+The runtime and adapter never read Feishu credentials, create Feishu artifacts, invoke a Feishu client, or perform a remote Feishu write. Local JSON validation is not a remote write. Any Feishu operation is a separate workflow that needs separate explicit authorization.
 
-## Report one final status
+## Report one status
 
-Use exactly one of:
+Use one status:
 
-- `success`: all requested counts and required completeness checks passed;
-- `partial`: current evidence exists but a count or completeness check failed;
-- `risk-stopped`: a risk, lock, or cooldown signal stopped the child process;
-- `preflight-failed`: the runtime or existing CDP session was unavailable before collection;
-- `failed`: no acceptable current-run evidence was produced.
+- `success`: every requested count and completeness check passed
+- `partial`: current evidence exists, but a count or completeness check failed
+- `risk-stopped`: a risk, lock, block, or cooldown signal stopped the run
+- `preflight-failed`: runtime, browser, login, page, or configuration checks failed before output creation
+- `failed`: the run produced no acceptable current evidence

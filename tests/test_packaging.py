@@ -10,6 +10,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SKILL = REPO / "media-missher"
 RUNTIME_SCRIPTS = REPO / "runtime" / "scripts"
+DOCUMENTATION = (
+    SKILL / "SKILL.md",
+    SKILL / "references" / "configuration.md",
+    SKILL / "references" / "commands.md",
+    SKILL / "references" / "troubleshooting.md",
+    SKILL / "references" / "validation.md",
+    SKILL / "references" / "licensing.md",
+    REPO / "PROJECT_CONTEXT.md",
+)
 
 
 def parse_skill_frontmatter(text):
@@ -133,3 +142,73 @@ def test_all_runtime_entrypoint_help_is_offline_and_has_no_removed_root_flag(scr
     assert creator_help.returncode == 0
     assert "--allow-navigation" in creator_help.stdout
     assert "--engine-root" not in creator_help.stdout
+
+
+def test_documentation_covers_shared_runtime_operations_and_recovery():
+    corpus = "\n".join(path.read_text(encoding="utf-8") for path in DOCUMENTATION)
+    required = (
+        "MEDIA_MISSHER_HOME",
+        "~/.local/share/media-missher",
+        "platform_uids",
+        "0600",
+        "0700",
+        "scrape_all.py",
+        "scrape_bilibili.py",
+        "scrape_xhs.py",
+        "scrape_douyin.py",
+        "scrape_weibo.py",
+        "scripts/preflight.py",
+        "--live",
+        "scripts/run_collection.py",
+        "--allow-navigation",
+        "scripts/validate_run.py",
+        "tools/install_media_missher.py",
+        "--runtime-only",
+        ".media-missher-owner.json",
+        ".media-missher-install.lock",
+        ".media-missher-release",
+        "previous-",
+        "timestamp",
+        "Trash",
+        "risk-stopped",
+        "--collect-as-much-as-safe",
+        "remote Feishu write",
+    )
+
+    for phrase in required:
+        assert phrase in corpus, f"documentation is missing {phrase!r}"
+
+
+def test_skill_preserves_read_only_requests_and_requires_collection_authorization():
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "Keep code review, audit, explanation, and planning read-only" in text
+    assert "Require explicit authorization to collect" in text
+    assert "--allow-navigation" in text
+    assert "separate explicit authorization" in text
+
+
+def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflight():
+    corpus = "\n".join(path.read_text(encoding="utf-8") for path in DOCUMENTATION)
+
+    assert "Live preflight probes the existing CDP endpoint" in corpus
+    assert (
+        "The runtime controller checks each selected platform page and login state "
+        "before creating output"
+    ) in corpus
+
+
+def test_project_context_records_clean_boundaries_and_pending_live_cutover():
+    text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
+
+    for phrase in (
+        "Source boundary",
+        "Runtime boundary",
+        "Adapter boundary",
+        "Live acceptance",
+        "Cutover",
+        "Current limitations",
+        "~/.codex/skills/media-missher",
+        "~/.openclaw/workspace/skills/media-missher",
+    ):
+        assert phrase in text

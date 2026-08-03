@@ -1,40 +1,59 @@
-# Configuration
+# Configure the shared runtime
 
-Configuration precedence is CLI, environment, then private profile.
+This reference defines the shared runtime layout, configuration precedence, private profile, and creator target requirements.
 
-## Environment
+## Resolve the runtime home
 
-- `MEDIA_MISSHER_ENGINE_ROOT`: external skill root containing `scripts/` and `engine/.venv/bin/python`.
-- `MEDIA_MISSHER_DATA_ROOT`: parent directory for unique private run directories.
-- `MEDIA_MISSHER_CDP_URL`: existing Chrome CDP base URL; default is local port `9222`.
-- `MEDIA_MISSHER_PROFILE_CONFIG`: path to a private JSON profile.
+`MEDIA_MISSHER_HOME` selects one shared home for the Codex and OpenClaw skills. When it is unset, both use `~/.local/share/media-missher`.
 
-Do not store secrets, IDs, browser state, or personal paths in the installable skill.
+The home contains these paths:
 
-## Private profile
+- `current/`: deployed source and five entrypoints
+- `venv/`: Python 3.11 or newer dependency environment
+- `state/`: mode-`0700` locks, checkpoints, cache, reports, and default `runs/`
 
-Place the profile outside the skill and repository. Set exact mode `0600`.
+The runtime installer writes mode-`0600` `.media-missher-owner.json` and `.media-missher-release` markers. The release value must match across `current/`, `venv/`, the Codex skill, and the OpenClaw skill. Installation holds `.media-missher-install.lock`; launchers take a shared lock before using a release.
+
+Preflight rejects missing or inconsistent markers, symlinked path components, a non-private state directory, an unwritable state directory, missing dependencies, broken entrypoints, and a timed-out install lock.
+
+## Apply configuration precedence
+
+Command-line values override environment values. Environment values override the private profile.
+
+Supported environment variables are:
+
+- `MEDIA_MISSHER_HOME`: shared runtime home
+- `MEDIA_MISSHER_DATA_ROOT`: parent for unique private run directories
+- `MEDIA_MISSHER_CDP_URL`: existing CDP endpoint, default `http://127.0.0.1:9222`
+- `MEDIA_MISSHER_PROFILE_CONFIG`: private profile path
+
+Do not place credentials, browser storage, cookies, or personal absolute paths in the installable skill.
+
+## Create a private profile
+
+Store the profile outside the repository and installed skills. Apply exact mode `0600` before using it:
 
 ```bash
-chmod 600 /secure/path/media-missher-profile.json
+chmod 600 "$PROFILE_PATH"
 ```
 
-Example structure using invented values:
+Use this structure with your own creator identifiers:
 
 ```json
 {
-  "engine_root": "/secure/path/external-media-runtime",
-  "data_root": "/secure/path/media-runs",
+  "data_root": "~/.local/share/media-missher/state/runs",
   "cdp_url": "http://127.0.0.1:9222",
   "platform_uids": {
-    "bilibili": "configured-bilibili-id",
-    "xhs": "configured-xhs-id",
-    "douyin": "configured-douyin-id",
-    "weibo": "configured-weibo-id"
+    "bilibili": "configured_bilibili_id",
+    "xhs": "configured_xhs_id",
+    "douyin": "configured_douyin_id",
+    "weibo": "configured_weibo_id"
   }
 }
 ```
 
-The adapter rejects a profile inside the repository or installed skill, a profile not using exact mode `0600`, an unknown platform, an empty target, a negative count, a fractional count, and a negative or non-finite timeout.
+Creator mode requires a non-empty `platform_uids` value for every selected platform. A command-line `--<platform>-uid` value overrides its profile value. Search mode needs a keyword and does not require a creator UID.
 
-The profile must not contain Feishu credentials. This skill does not read such credentials.
+The adapter rejects a profile inside the repository or installed skill. It also rejects permissions other than `0600`, unknown platforms, empty targets, negative or fractional counts, and negative or non-finite timeouts.
+
+The profile must not contain Feishu credentials. Media@Missher never performs a remote Feishu write.

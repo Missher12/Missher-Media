@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
+
+
+ACTIVE_DOCUMENTATION = (
+    Path("media-missher/SKILL.md"),
+    *tuple(sorted(Path("media-missher/references").glob("*.md"))),
+    Path("PROJECT_CONTEXT.md"),
+)
 
 
 def _terms() -> tuple[str, str]:
@@ -83,3 +91,18 @@ def test_scanner_matches_paths_content_and_symlink_targets_case_insensitively(tm
         ("pyvenv.cfg", "pyvenv", first),
         ("linked", "symlink", second),
     }
+
+
+def test_active_documentation_has_no_obsolete_root_api_or_personal_absolute_path() -> None:
+    first, second = _terms()
+    obsolete = (first, second, "MEDIA_MISSHER_ENGINE_ROOT", "--engine-root")
+    failures = []
+    for path in ACTIVE_DOCUMENTATION:
+        text = path.read_text(encoding="utf-8")
+        for term in obsolete:
+            if term.casefold() in text.casefold():
+                failures.append(f"{path}:{term}")
+        if re.search(r"/(?:Users|home)/[^/\s`]+", text):
+            failures.append(f"{path}:personal absolute path")
+
+    assert failures == []

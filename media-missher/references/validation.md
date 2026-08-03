@@ -1,37 +1,59 @@
-# Validation
+# Validate current-run evidence
 
-Accept only JSON files in the unique current run directory whose modification time is not older than the recorded start time. Reject symlinks, stale files, malformed JSON, unexpected top-level values, unknown platforms, and reused output.
+Validation accepts only artifacts from one unique run whose modification time is at or after its recorded start. It rejects symlinks, stale files, malformed JSON, duplicate manifest keys, unsafe paths, unknown platforms, and reused output.
 
-Require every counted record to contain its platform-native content identifier and a non-empty content link. Reject an error/status object even when its filename starts with a platform name. Deduplicate accepted records by native identifier, then compare each selected platform against its requested count. Preserve unknown values as `null`; never convert them to zero.
+## Validate the runtime manifest
 
-## Bilibili complete mode
+The manifest must contain exactly `counts`, `paths`, `platforms`, and `status`. Artifact names must be relative basenames inside the run directory. A platform marked `complete` must have its named JSON artifact.
 
-Every requested record must have:
+Accept only documented platform statuses: `complete`, `shortfall`, `incomplete`, `failed`, `risk-stopped`, and `not-run`. A risk status wins over partial evidence. A failed, shortfall, incomplete, or not-run platform prevents a success result.
 
-- `complete: true`;
-- a non-placeholder title;
-- a date;
-- non-null liked, comments, shares, and collected values.
+## Validate content records
 
-Describe engagement as the current API snapshot. Do not claim an unsupported field-level freshness time.
+Every counted record needs its platform-native content identifier and a non-empty content link. Reject an error or status object even when its filename resembles a platform artifact.
 
-## Xiaohongshu complete mode
+Deduplicate records by native identifier while preserving first-seen order. Compare each selected platform with its requested count. Preserve Python value types and nested values. Keep unknown values as `null`; never convert them to zero.
 
-Every requested record must have:
+## Validate Bilibili complete mode
 
-- `complete: true` and `detail_attempted: true`;
-- a non-estimated date;
-- non-null liked, comments, and collected values;
-- `engagement_fresh: true`;
-- a detail, HTML, or CDP source from this run;
-- an engagement observation time at or after the run start.
+Every requested Bilibili record must contain:
 
-A cache-only value, stale field, estimated day, failed detail attempt, lock, cooldown, or risk report cannot be called complete.
+- `complete: true`
+- A non-placeholder title
+- A date
+- Non-null liked, comments, shares, and collected values
 
-## Other platforms
+Describe engagement as the current API snapshot. Do not claim a field freshness time that the evidence does not support.
 
-Douyin and Weibo require current, parseable, deduplicated records meeting the requested count. Keep their native IDs and normalized content fields in raw or converted evidence.
+## Validate Xiaohongshu complete mode
 
-## Reporting
+Every requested Xiaohongshu record must contain:
 
-Return one of `success`, `partial`, `risk-stopped`, `preflight-failed`, or `failed`. Show no more than three metadata-only samples containing only the platform and field count; never echo collected content in a summary. Keep diagnostic reports separate from content evidence. Remove credential-like keys, personal account IDs, configured secret values, URL query strings, and full environment mappings. Always provide absolute current-run evidence paths.
+- `complete: true` and `detail_attempted: true`
+- A non-estimated date
+- Non-null liked, comments, and collected values
+- `engagement_fresh: true`
+- A detail, HTML, or CDP source from this run
+- An engagement observation time at or after the run start
+
+A cache-only value, stale field, estimated day, failed detail attempt, lock, cooldown, or risk report is not complete.
+
+## Validate Douyin and Weibo
+
+Douyin and Weibo require current, parseable, deduplicated records that meet the requested count. Preserve their native IDs, normalized fields, record order, and null-versus-zero values.
+
+## Report exact results
+
+Return one status: `success`, `partial`, `risk-stopped`, `preflight-failed`, or `failed`. Keep diagnostic reports separate from content evidence.
+
+Show no more than three metadata-only samples containing platform and field count. Never echo collected content, credentials, personal account IDs, browser state, configured secret values, URL query strings, or full environment mappings. Report absolute current-run evidence paths.
+
+The run directory must use mode `0700`; JSON and converted evidence must use mode `0600`. Confirm that no Feishu artifact exists and that Media@Missher made no remote Feishu write.
+
+## Accept a live run
+
+Run `scripts/preflight.py --live` before authorized live acceptance. It proves CDP endpoint reachability and shared layout health, not selected platform login state. The runtime controller checks selected pages and visible login state before output creation.
+
+If the acceptance collection needs exact-host navigation, pass `--allow-navigation` to `scripts/run_collection.py` only with explicit authorization. The offline `scripts/validate_run.py` command does not navigate.
+
+Accept cutover evidence only when every selected platform has the requested native record count, complete-mode fields pass, timestamps belong to the current run, and no risk stop or timeout occurred. Do not retry a risk stop.
