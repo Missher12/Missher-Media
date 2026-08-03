@@ -26,7 +26,7 @@ Read [references/commands.md](references/commands.md) before collection. Read [r
 3. Run `scripts/run_collection.py` once. It creates a unique private run directory, forces JSON staging, and applies `--no-feishu` to the multi-platform engine.
 4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, or cooldown signals. Accept no automatic retry after a risk stop.
 5. Validate only files from the current run and its recorded start time. Never accept `latest`, a reused directory, an old artifact, a symlink, an exit code, or a console checkmark as sufficient evidence.
-6. Report at most three redacted samples and absolute current-run evidence paths.
+6. Report at most three metadata-only samples (platform and field count) plus absolute current-run evidence paths. Never echo collected content in a summary.
 
 ## Preserve platform controls
 

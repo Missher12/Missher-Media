@@ -755,17 +755,16 @@ def _xhs_complete(record: Mapping, started_ns: int) -> bool:
 def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
     errors: list[str] = []
     evidence: list[str] = []
+    diagnostics: list[dict[str, str]] = []
     collected: dict[str, list[dict]] = {platform: [] for platform in request.platforms}
     risk_stopped = False
     for raw_path in paths:
         unresolved = Path(raw_path).expanduser()
         if unresolved.is_symlink():
             path = unresolved.absolute()
-            evidence.append(str(path))
             errors.append(f"stale or unsafe evidence: {path}")
             continue
         path = unresolved.resolve()
-        evidence.append(str(path))
         try:
             stat_result = path.stat()
         except OSError as exc:
@@ -783,6 +782,12 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
             status = str(payload.get("status", "")).lower().replace("_", "-")
             if status in {"risk", "risk-stopped", "locked", "cooldown"}:
                 risk_stopped = True
+                diagnostics.append({"path": str(path), "status": status})
+                continue
+            if {"status", "started_at", "finished_at", "final_items"}.issubset(payload):
+                diagnostics.append({"path": str(path), "status": status or "unknown"})
+                if status not in {"completed", "success", "ok"}:
+                    errors.append(f"diagnostic report has non-success status: {path}: {status}")
                 continue
             errors.append(f"unexpected top-level JSON object: {path}")
             continue
@@ -794,6 +799,7 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
         except ValueError as exc:
             errors.append(f"invalid records in {path}: {exc}")
             continue
+        evidence.append(str(path))
         for record in records:
             platform = _platform_from_record(record, path)
             if platform not in request.platforms:
@@ -828,6 +834,11 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
     records = normalize_records(
         [record for platform in request.platforms for record in deduplicated[platform]]
     )
+    samples = [
+        {"platform": platform, "field_count": len(record)}
+        for platform in request.platforms
+        for record in deduplicated[platform]
+    ][:3]
     if risk_stopped:
         status = "risk-stopped"
     elif not records:
@@ -841,6 +852,8 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
         "counts": counts,
         "records": records,
         "evidence": evidence,
+        "diagnostics": diagnostics,
+        "samples": samples,
         "errors": errors,
     }
 
@@ -916,7 +929,7 @@ def run_collection_request(
     else:
         status = validation["status"]
 
-    outputs = [str(path) for path in evidence] if request.output_format == "json" else []
+    outputs = list(validation["evidence"]) if request.output_format == "json" else []
     if (
         request.output_format != "json"
         and validation["records"]
@@ -936,14 +949,11 @@ def run_collection_request(
             errors.append(f"output conversion failed: {exc}")
             status = "partial" if validation["records"] else "failed"
 
-    validation_summary = {
-        key: value for key, value in validation.items() if key != "records"
-    }
-    validation_summary["samples"] = redact_for_summary(validation["records"][:3])
+    validation_summary = {key: value for key, value in validation.items() if key != "records"}
     return {
         "status": status,
         "run_dir": str(run_dir),
-        "evidence": [str(path) for path in evidence],
+        "evidence": list(validation["evidence"]),
         "outputs": outputs,
         "errors": errors,
         "returncode": completed.returncode,

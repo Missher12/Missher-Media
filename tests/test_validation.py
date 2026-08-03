@@ -149,6 +149,47 @@ def test_xhs_risk_report_classifies_risk_stopped(tmp_path):
     assert result["status"] == "risk-stopped"
 
 
+def test_completed_xhs_diagnostic_is_not_treated_as_content_evidence(tmp_path):
+    started_ns = time.time_ns() - 1_000_000
+    content = copy_fixture(tmp_path, "xhs_creator.json", started_ns=started_ns)
+    report = tmp_path / "media_missher_xhs_run_synthetic.json"
+    report.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "started_at": "2026-08-03T00:00:00Z",
+                "finished_at": "2026-08-03T00:00:01Z",
+                "final_items": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(report, ns=(started_ns + 1, started_ns + 1))
+
+    result = validate_run(
+        (report, content), CollectionRequest(platforms=("xhs",), count=1), started_ns
+    )
+
+    assert result["status"] == "success"
+    assert result["evidence"] == [str(content.resolve())]
+    assert result["diagnostics"] == [
+        {"path": str(report.resolve()), "status": "completed"}
+    ]
+
+
+def test_validation_samples_are_metadata_only(tmp_path):
+    started_ns = time.time_ns() - 1_000_000
+    path = copy_fixture(tmp_path, "xhs_creator.json", started_ns=started_ns)
+    result = validate_run(
+        (path,), CollectionRequest(platforms=("xhs",), count=1), started_ns
+    )
+
+    assert result["samples"] == [
+        {"platform": "xhs", "field_count": len(result["records"][0])}
+    ]
+    assert "synthetic" not in json.dumps(result["samples"], ensure_ascii=False)
+
+
 def test_validate_run_cli_help_is_offline():
     script = Path(__file__).resolve().parents[1] / "media-missher" / "scripts" / "validate_run.py"
     completed = subprocess.run(

@@ -13,7 +13,6 @@ from media_missher_adapter import (
     discover_current_json,
     parse_non_negative_int,
     parse_platforms,
-    redact_for_summary,
     validate_run,
     write_output,
 )
@@ -64,12 +63,13 @@ def main(argv: list[str] | None = None) -> int:
             "counts": {},
             "records": [],
             "evidence": [],
+            "diagnostics": [],
+            "samples": [],
             "errors": [str(exc)],
         }
         output_path = None
 
     printable = {key: value for key, value in result.items() if key != "records"}
-    printable["samples"] = redact_for_summary(result.get("records", [])[:3])
     if output_path is not None:
         printable["output"] = str(output_path)
     if args.json_summary:

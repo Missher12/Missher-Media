@@ -34,4 +34,4 @@ Douyin and Weibo require current, parseable, deduplicated records meeting the re
 
 ## Reporting
 
-Return one of `success`, `partial`, `risk-stopped`, `preflight-failed`, or `failed`. Show no more than three redacted samples. Remove credential-like keys, personal account IDs, configured secret values, URL query strings, and full environment mappings. Always provide absolute current-run evidence paths.
+Return one of `success`, `partial`, `risk-stopped`, `preflight-failed`, or `failed`. Show no more than three metadata-only samples containing only the platform and field count; never echo collected content in a summary. Keep diagnostic reports separate from content evidence. Remove credential-like keys, personal account IDs, configured secret values, URL query strings, and full environment mappings. Always provide absolute current-run evidence paths.
