@@ -57,8 +57,22 @@ def scan_roots(roots: Iterable[Path | str]) -> list[Finding]:
         if not root.exists():
             continue
         for directory, dirnames, filenames in os.walk(root, followlinks=False):
-            dirnames[:] = [name for name in dirnames if name.casefold() not in _SKIPPED_DIRECTORIES]
             base = Path(directory)
+            for name in dirnames:
+                path = base / name
+                if path.is_symlink():
+                    matched = set(_matches(name, terms)) | set(_matches(os.readlink(path), terms))
+                    for term in terms:
+                        if term in matched:
+                            findings.append(_finding(root, path, "symlink", term))
+                else:
+                    for term in _matches(name, terms):
+                        findings.append(_finding(root, path, "dirname", term))
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name.casefold() not in _SKIPPED_DIRECTORIES and not (base / name).is_symlink()
+            ]
             for name in filenames:
                 path = base / name
                 for term in _matches(name, terms):

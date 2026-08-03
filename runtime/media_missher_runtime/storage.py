@@ -31,6 +31,11 @@ class RunStore:
                 os.fsync(handle.fileno())
             os.replace(temporary_name, target)
             os.chmod(target, 0o600)
+            directory_descriptor = os.open(self.path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
         finally:
             if os.path.exists(temporary_name):
                 os.unlink(temporary_name)

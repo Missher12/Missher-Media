@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -41,3 +42,47 @@ def test_manifest_accepts_only_counts_status_and_path_metadata(tmp_path: Path) -
     }
     with pytest.raises(ValueError, match="manifest"):
         store.write_manifest(counts={}, status="complete", paths={}, extra="not allowed")
+
+
+def test_atomic_json_syncs_file_and_containing_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from runtime.media_missher_runtime import storage
+
+    store = storage.RunStore.create(tmp_path, "durable")
+    real_open = os.open
+    real_close = os.close
+    real_fsync = os.fsync
+    real_replace = os.replace
+    directory_descriptors: set[int] = set()
+    events: list[str] = []
+
+    def recording_open(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], flags: int, mode: int = 0o777) -> int:
+        descriptor = real_open(path, flags, mode)
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_descriptors.add(descriptor)
+            events.append("open-directory")
+        return descriptor
+
+    def recording_fsync(descriptor: int) -> None:
+        events.append("fsync-directory" if descriptor in directory_descriptors else "fsync-file")
+        real_fsync(descriptor)
+
+    def recording_replace(source: str | bytes | os.PathLike[str] | os.PathLike[bytes], target: str | bytes | os.PathLike[str] | os.PathLike[bytes]) -> None:
+        events.append("replace")
+        real_replace(source, target)
+
+    def recording_close(descriptor: int) -> None:
+        if descriptor in directory_descriptors:
+            events.append("close-directory")
+            directory_descriptors.remove(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(storage.os, "open", recording_open)
+    monkeypatch.setattr(storage.os, "fsync", recording_fsync)
+    monkeypatch.setattr(storage.os, "replace", recording_replace)
+    monkeypatch.setattr(storage.os, "close", recording_close)
+
+    store.write_json("durable.json", {"ready": True})
+
+    assert events.count("fsync-file") == 1
+    assert events[-3:] == ["open-directory", "fsync-directory", "close-directory"]
+    assert events.index("replace") < events.index("fsync-directory")

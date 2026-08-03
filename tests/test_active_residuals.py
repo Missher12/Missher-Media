@@ -38,3 +38,23 @@ def test_scanner_detects_active_file_names_text_symlinks_shebangs_and_pyvenv(tmp
         ("pyvenv.cfg", "pyvenv", second),
         ("linked", "symlink", first),
     }
+
+
+def test_scanner_detects_directory_names_and_directory_symlink_names_and_targets(tmp_path: Path) -> None:
+    from tools.scan_active_residuals import scan_roots
+
+    first, second = _terms()
+    root = tmp_path / "active"
+    root.mkdir()
+    (root / f"regular-{first}").mkdir()
+    external_target = tmp_path / f"external-{second}"
+    external_target.mkdir()
+    os.symlink(external_target, root / f"linked-{first}")
+
+    findings = scan_roots([root])
+
+    assert {(item.relative_path, item.category, item.term) for item in findings} == {
+        (f"regular-{first}", "dirname", first),
+        (f"linked-{first}", "symlink", first),
+        (f"linked-{first}", "symlink", second),
+    }

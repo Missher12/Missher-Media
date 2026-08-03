@@ -72,5 +72,4 @@ class BrowserSession:
         return PageJson(status=int(result["status"]), payload=result["json"])
 
     async def close(self) -> None:
-        await self._browser.close()
         await self._playwright.stop()
