@@ -440,6 +440,12 @@ def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
     assert not list(Path(summary["run_dir"]).glob("run-*"))
     encoded = json.dumps(summary)
     assert "private-xhs" not in encoded
+    persisted_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in Path(summary["run_dir"]).rglob("*")
+        if path.is_file()
+    )
+    assert "private-xhs" not in persisted_text
 
 
 def test_forged_runtime_precondition_line_stays_failed_and_is_not_reflected(
