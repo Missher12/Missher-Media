@@ -96,6 +96,21 @@ class Page:
 
 
 @dataclass
+class PhraseTimeoutPage(Page):
+    timeout_after_gotos: int = 1
+    timeout_challenge: str | None = None
+    waits: list[str] = field(default_factory=list)
+
+    async def wait_for_function(self, script: str, **kwargs: Any) -> None:
+        await super().wait_for_function(script, **kwargs)
+        self.waits.append(script)
+        if len(self.gotos) >= self.timeout_after_gotos:
+            if self.timeout_challenge is not None:
+                self.challenge = self.timeout_challenge
+            raise TimeoutError("synthetic hydration timeout")
+
+
+@dataclass
 class Browser:
     page: Page
     allow_navigation: bool = True
@@ -248,3 +263,31 @@ def test_search_passive_q_validation_complete_challenge_and_normal_risk_word() -
     blocked = Page(search_pages=[{"risk_text": "challenge-selector", "cards": [], "next": None}])
     with pytest.raises(CollectionStopped):
         _run(search(CollectionRequest(platform="weibo", count=1, keyword="term"), Browser(blocked)))
+
+
+@pytest.mark.parametrize("phrase", ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"))
+def test_search_initial_phrase_challenge_stops_when_hydration_wait_times_out(phrase: str) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, search
+
+    page = PhraseTimeoutPage(challenge=phrase)
+    with pytest.raises(CollectionStopped, match=phrase):
+        _run(search(CollectionRequest(platform="weibo", count=1, keyword="term"), Browser(page)))
+
+    assert page.gotos == ["https://s.weibo.com/weibo?q=term"]
+    assert len(page.evaluations) == 1
+    assert all(phrase in page.waits[0] for phrase in ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"))
+
+
+def test_search_next_page_phrase_challenge_stops_after_wait_timeout_without_extra_parse_or_navigation() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, search
+
+    page = PhraseTimeoutPage(
+        timeout_after_gotos=2,
+        timeout_challenge="风控",
+        search_pages=[{"risk_text": "", "cards": [{"mid": "one", "text": "one"}], "next": "https://s.weibo.com/weibo?q=term&page=2"}],
+    )
+    with pytest.raises(CollectionStopped, match="风控"):
+        _run(search(CollectionRequest(platform="weibo", count=0, page_cap=3, keyword="term"), Browser(page)))
+
+    assert page.gotos == ["https://s.weibo.com/weibo?q=term", "https://s.weibo.com/weibo?q=term&page=2"]
+    assert sum("card-wrap" in script for script in page.evaluations) == 1

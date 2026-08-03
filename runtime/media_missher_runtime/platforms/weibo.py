@@ -106,6 +106,7 @@ class WeiboCollector:
                 _require_open_search_target(page, self.request.keyword)
                 await _wait_for_search_cards_or_challenge(page)
         except PlaywrightTimeoutError:
+            await _raise_for_page_challenge(page)
             return []
         await _raise_for_page_challenge(page)
 
@@ -125,6 +126,7 @@ class WeiboCollector:
             try:
                 await self._navigate_and_wait_search(page, next_url)
             except PlaywrightTimeoutError:
+                await _raise_for_page_challenge(page)
                 break
             await _raise_for_page_challenge(page)
         return records
@@ -320,7 +322,13 @@ async def _raise_for_page_challenge(page: Any) -> None:
 
 async def _wait_for_search_cards_or_challenge(page: Any) -> None:
     await page.wait_for_function(
-        """() => document.querySelector('#pl_feedlist_index .card-wrap[mid]') || document.querySelector('.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]')""",
+        """() => {
+            const bodyText = document.body?.innerText || '';
+            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
+            return document.querySelector('#pl_feedlist_index .card-wrap[mid]')
+                || document.querySelector('.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]')
+                || phrases.some((phrase) => bodyText.includes(phrase));
+        }""",
         timeout=10_000,
     )
 
