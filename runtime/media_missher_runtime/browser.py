@@ -15,7 +15,7 @@ _HOSTS = {
     "bilibili": frozenset({"bilibili.com", "www.bilibili.com", "space.bilibili.com", "search.bilibili.com", "api.bilibili.com", "t.bilibili.com"}),
     "xhs": frozenset({"xiaohongshu.com", "www.xiaohongshu.com"}),
     "douyin": frozenset({"douyin.com", "www.douyin.com"}),
-    "weibo": frozenset({"weibo.com", "www.weibo.com"}),
+    "weibo": frozenset({"weibo.com", "www.weibo.com", "s.weibo.com"}),
 }
 
 
