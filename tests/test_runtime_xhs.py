@@ -483,6 +483,84 @@ def test_complete_supplements_only_missing_required_api_metric_from_open_modal()
     assert sum("engage-bar" in script for script in page.evaluations) == 1
 
 
+def test_complete_replaces_stale_creator_metric_when_fresh_api_omits_it() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    del detail.payload["data"]["items"][0]["note_card"]["interact_info"]["liked_count"]  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one", liked=123)), detail],
+        cards=[{"note_id": "one"}],
+        detail_metrics={"liked": "7"},
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is True
+    assert record["liked"] == 7
+    assert record["metric_sources"]["liked"] == "detail_html"
+    assert record["comments"] == 2 and record["collected"] == 3
+    assert record["metric_sources"]["comments"] == "detail_api"
+    assert record["metric_sources"]["collected"] == "detail_api"
+    assert record["engagement_source"] == "detail_api"
+    assert sum("engage-bar" in script for script in page.evaluations) == 1
+
+
+def test_complete_rejects_stale_creator_metric_when_api_and_modal_omit_it() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    del detail.payload["data"]["items"][0]["note_card"]["interact_info"]["liked_count"]  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one", liked=123)), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is False
+    assert record["liked"] == 123
+    assert record["missing_fields"] == ["liked"]
+    assert "liked" not in record["metric_sources"]
+    assert record["engagement_source"] == "detail_api"
+
+
+@pytest.mark.parametrize("field", ("liked", "comments", "collected"))
+def test_completion_requires_fresh_source_for_each_required_metric(field: str) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _missing_completion
+
+    record = {
+        "note_id": "one",
+        "title": "Detail title",
+        "date": "2026-08-04T00:00:00+00:00",
+        "date_precision": "second",
+        "detail_attempted": True,
+        "engagement_fresh": True,
+        "engagement_source": "detail_api",
+        "liked": 1,
+        "comments": 2,
+        "collected": 3,
+        "metric_sources": {
+            "liked": "detail_api",
+            "comments": "detail_api",
+            "collected": "detail_api",
+        },
+    }
+    del record["metric_sources"][field]
+
+    assert _missing_completion(record) == [field]
+
+
 def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
 

@@ -42,6 +42,8 @@ _RISK_CODES = frozenset({461, 471, 999})
 _DETAIL_ATTEMPT_SKEW_SECONDS = 2
 _SEARCH_SETTLE_ATTEMPTS = 40
 _SEARCH_SETTLE_INTERVAL_MS = 250
+_REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected")
+_FRESH_DETAIL_METRIC_SOURCES = frozenset({"detail_api", "detail_html"})
 _MISSING = object()
 
 
@@ -603,15 +605,20 @@ def _merge_detail_html(record: dict[str, Any], observation: Mapping[str, Any]) -
 
 
 def _has_missing_required_metric(record: Mapping[str, Any]) -> bool:
-    return any(record.get(field) is None for field in ("liked", "comments", "collected"))
+    return any(not _has_fresh_detail_metric(record, field) for field in _REQUIRED_DETAIL_METRICS)
+
+
+def _has_fresh_detail_metric(record: Mapping[str, Any], field: str) -> bool:
+    source = _mapping(record.get("metric_sources")).get(field)
+    return record.get(field) is not None and source in _FRESH_DETAIL_METRIC_SOURCES
 
 
 def _supplement_missing_detail_html(
     record: dict[str, Any], observation: Mapping[str, Any]
 ) -> None:
     metrics = _mapping(observation.get("metrics"))
-    for field in ("liked", "comments", "collected"):
-        if record.get(field) is not None:
+    for field in _REQUIRED_DETAIL_METRICS:
+        if _has_fresh_detail_metric(record, field):
             continue
         value = parse_count(metrics.get(field))
         if value is not None:
@@ -633,8 +640,8 @@ def _missing_completion(record: Mapping[str, Any]) -> list[str]:
         missing.append("engagement_fresh")
     if record.get("engagement_source") not in {"detail_api", "detail_html", "detail_cdp"}:
         missing.append("engagement_source")
-    for field in ("liked", "comments", "collected"):
-        if record.get(field) is None:
+    for field in _REQUIRED_DETAIL_METRICS:
+        if not _has_fresh_detail_metric(record, field):
             missing.append(field)
     return missing
 
