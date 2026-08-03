@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from numbers import Real
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PreconditionError
 from ..models import CollectionRequest
@@ -27,6 +28,17 @@ _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问
 _RISK_CODES = frozenset({461, 471, 999})
 _CONTENT_QUERY_KEYS = frozenset({"keyword", "q", "uid", "sec_uid"})
 _AWEME_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_SENSITIVE_URL_VALUE = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec)",
+    re.IGNORECASE,
+)
+_SENSITIVE_URL_KEY = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|"
+    r"xsec|signature|expires?|expiry|auth[_-]?key|"
+    r"(?:^|[_-])auth(?:[_-]|$)|(?:^|[_-])sign(?:[_-]|$))",
+    re.IGNORECASE,
+)
 
 
 class CollectionStopped(RuntimeError):
@@ -238,9 +250,20 @@ def _page_items(payload: Mapping[str, Any], source: str) -> tuple[list[Mapping[s
         raw_items = _items(payload.get("aweme_list"))
         cursor = payload.get("max_cursor")
     else:
-        raw_items = [_mapping(item).get("aweme_info") for item in _items(payload.get("data"))]
-        cursor = payload.get("cursor")
+        raw_items = [_unwrap_search_aweme(item) for item in _items(payload.get("data"))]
+        cursor = payload.get("cursor", payload.get("offset"))
     return [item for item in raw_items if isinstance(item, Mapping)], _has_more(payload.get("has_more")), cursor
+
+
+def _unwrap_search_aweme(value: object) -> Mapping[str, Any] | None:
+    item = _mapping(value)
+    aweme = item.get("aweme_info")
+    if isinstance(aweme, Mapping):
+        return aweme
+    mix_items = _items(_mapping(item.get("aweme_mix_info")).get("mix_items"))
+    if mix_items and isinstance(mix_items[0], Mapping):
+        return mix_items[0]
+    return item if _safe_aweme_id(item.get("aweme_id")) is not None else None
 
 
 _MISSING = object()
@@ -293,7 +316,8 @@ def parse_aweme_item(item: Mapping[str, Any], *, observed_at: str | None = None)
     statistics = _mapping(item.get("statistics"))
     video = _mapping(item.get("video"))
     duration = item.get("duration", video.get("duration"))
-    published = _date(item.get("create_time"))
+    publish_time = _publish_time(item.get("create_time"))
+    published = _date(publish_time)
     link = _video_link(aweme_id)
     return {
         "platform": "douyin",
@@ -312,7 +336,22 @@ def parse_aweme_item(item: Mapping[str, Any], *, observed_at: str | None = None)
         "native_id": aweme_id,
         "url": link,
         "author": _text(author.get("nickname")),
+        "author_avatar": _first_safe_media_url(
+            author.get("avatar_thumb"),
+            author.get("avatar_medium"),
+            author.get("avatar_larger"),
+        ),
+        "cover": _first_safe_media_url(
+            video.get("cover"),
+            video.get("dynamic_cover"),
+            video.get("origin_cover"),
+            item.get("cover"),
+        ),
         "published_at": published,
+        "publish_time": publish_time,
+        "publish_date": _publish_date(publish_time),
+        "date_precision": "second" if publish_time is not None else None,
+        "date_source": "api" if publish_time is not None else None,
         "observed_at": observed_at or _observed_at(),
     }
 
@@ -372,6 +411,55 @@ def _safe_aweme_id(value: object) -> str | None:
     return text if isinstance(text, str) and _AWEME_ID_PATTERN.fullmatch(text) else None
 
 
+def _first_media_url(value: object) -> str | None:
+    if isinstance(value, str):
+        return _safe_content_url(value)
+    media = _mapping(value)
+    for candidate in _items(media.get("url_list")):
+        if (url := _safe_content_url(candidate)) is not None:
+            return url
+    for field in ("url", "uri"):
+        if (url := _safe_content_url(media.get(field))) is not None:
+            return url
+    return None
+
+
+def _first_safe_media_url(*values: object) -> str | None:
+    for value in values:
+        if (url := _first_media_url(value)) is not None:
+            return url
+    return None
+
+
+def _safe_content_url(value: object) -> str | None:
+    text = _text(value)
+    if text is None or len(text) > 8192:
+        return None
+    if text.startswith("//"):
+        text = f"https:{text}"
+    try:
+        parsed = urlparse(text)
+        valid_origin = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return None
+    if not valid_origin:
+        return None
+    query = urlencode(
+        [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _SENSITIVE_URL_KEY.search(key) and not _SENSITIVE_URL_VALUE.search(item)
+        ],
+        doseq=True,
+    )
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
+
+
 def _metric(value: object) -> int | float | None:
     if isinstance(value, bool) or not isinstance(value, Real):
         return None
@@ -384,16 +472,32 @@ def _metric(value: object) -> int | float | None:
 
 
 def _date(value: object) -> str | None:
-    if isinstance(value, bool) or not isinstance(value, Real):
-        return value if isinstance(value, str) and value else None
-    if not isinstance(value, int):
-        try:
-            if not math.isfinite(value):
-                return None
-        except (OverflowError, TypeError, ValueError):
-            return None
+    seconds = _publish_time(value)
+    if seconds is None:
+        return None
     try:
-        return datetime.fromtimestamp(value, UTC).isoformat()
+        return datetime.fromtimestamp(seconds, UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _publish_time(value: object) -> int | None:
+    seconds = _int_like(value)
+    if not isinstance(seconds, int) or seconds <= 0:
+        return None
+    try:
+        datetime.fromtimestamp(seconds, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return seconds
+
+
+def _publish_date(value: object) -> str | None:
+    seconds = _publish_time(value)
+    if seconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, _CHINA_TIMEZONE).strftime("%Y-%m-%d")
     except (OverflowError, OSError, ValueError):
         return None
 

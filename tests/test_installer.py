@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import pwd
 import shlex
@@ -141,6 +142,56 @@ def test_upgrade_keeps_unique_previous_releases_for_all_three_targets(tmp_path: 
     assert third.openclaw_previous is not None and third.openclaw_previous != second.openclaw_previous
 
 
+def test_upgrade_moves_prior_skills_outside_discovery_roots_into_private_recovery(
+    tmp_path: Path,
+) -> None:
+    from tools.scan_active_residuals import scan_roots
+
+    first = _install(tmp_path)
+    obsolete_term = "".join(("Media", "Crawler"))
+    for skill in (first.codex_current, first.openclaw_current):
+        legacy_engine = skill / "engine"
+        legacy_engine.mkdir()
+        legacy_engine.joinpath("legacy.py").write_text(
+            f"old skill from {obsolete_term}\n", encoding="utf-8"
+        )
+
+    upgraded = _install(tmp_path)
+
+    codex_root = tmp_path / "codex-skills"
+    openclaw_root = tmp_path / "openclaw-skills"
+    assert {path.name for path in codex_root.iterdir()} == {"media-missher"}
+    assert {path.name for path in openclaw_root.iterdir()} == {"media-missher"}
+    assert upgraded.codex_previous is not None
+    assert upgraded.openclaw_previous is not None
+    assert codex_root not in upgraded.codex_previous.parents
+    assert openclaw_root not in upgraded.openclaw_previous.parents
+
+    recovery = tmp_path / "runtime-home" / "recovery"
+    assert upgraded.codex_previous.parent == recovery / "codex"
+    assert upgraded.openclaw_previous.parent == recovery / "openclaw"
+    assert upgraded.codex_previous.joinpath("engine", "legacy.py").is_file()
+    assert upgraded.openclaw_previous.joinpath("engine", "legacy.py").is_file()
+    assert scan_roots((codex_root, openclaw_root)) == []
+    assert {finding.term for finding in scan_roots((recovery,))} == {obsolete_term}
+    for private_directory in (recovery, recovery / "codex", recovery / "openclaw"):
+        assert stat.S_IMODE(private_directory.stat().st_mode) == 0o700
+
+
+def test_upgrade_restores_exact_private_modes_on_existing_recovery_directories(
+    tmp_path: Path,
+) -> None:
+    _install(tmp_path)
+    recovery = tmp_path / "runtime-home" / "recovery"
+    for private_directory in (recovery, recovery / "codex", recovery / "openclaw"):
+        private_directory.chmod(0o755)
+
+    _install(tmp_path)
+
+    for private_directory in (recovery, recovery / "codex", recovery / "openclaw"):
+        assert stat.S_IMODE(private_directory.stat().st_mode) == 0o700
+
+
 def test_executor_failure_does_not_rotate_any_existing_current(tmp_path: Path) -> None:
     first = _install(tmp_path)
     for target in (first.current, first.codex_current, first.openclaw_current):
@@ -216,6 +267,15 @@ def test_rotation_failure_restores_every_prior_current(tmp_path: Path) -> None:
 
     for target in targets:
         assert target.joinpath("old-marker").is_file()
+    assert {path.name for path in (tmp_path / "codex-skills").iterdir()} == {
+        "media-missher"
+    }
+    assert {path.name for path in (tmp_path / "openclaw-skills").iterdir()} == {
+        "media-missher"
+    }
+    recovery = tmp_path / "runtime-home" / "recovery"
+    assert list((recovery / "codex").iterdir()) == []
+    assert list((recovery / "openclaw").iterdir()) == []
 
 
 def test_rollback_restores_every_old_target_before_collecting_cleanup_failures(tmp_path: Path) -> None:
@@ -466,6 +526,31 @@ def test_installer_cli_exposes_runtime_only_safety_gate() -> None:
     assert completed.returncode == 0
     assert "--runtime-only" in completed.stdout
     assert "--python" in completed.stdout
+
+
+def test_installer_cli_reports_exact_current_and_recovery_paths(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    import tools.install_media_missher as installer
+
+    _install(tmp_path)
+    result = _install(tmp_path)
+    monkeypatch.setattr(installer, "install", lambda **_kwargs: result)
+
+    assert installer.main([]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "current": str(result.current),
+        "previous": str(result.previous),
+        "venv": str(result.venv),
+        "venv_previous": str(result.venv_previous),
+        "state": str(result.state),
+        "codex_current": str(result.codex_current),
+        "codex_previous": str(result.codex_previous),
+        "openclaw_current": str(result.openclaw_current),
+        "openclaw_previous": str(result.openclaw_previous),
+    }
 
 
 def test_system_python_bootstrap_discovers_a_python311_runtime() -> None:

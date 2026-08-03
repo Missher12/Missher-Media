@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from numbers import Real
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PageJson, PreconditionError
 from ..models import CollectionRequest
@@ -31,6 +34,13 @@ _FEED_PATH = "/x/polymer/web-dynamic/v1/feed/space"
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _PLACEHOLDER_TITLES = frozenset({"", "-", "--", "暂无标题", "untitled"})
 _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控"})
+_CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_MAX_TITLE_CHARS = 100
+_MAX_DESC_CHARS = 20_000
+_SENSITIVE_URL_PART = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec|auth|signature|sign|expires?|expiry)",
+    re.IGNORECASE,
+)
 
 
 class CollectionStopped(RuntimeError):
@@ -119,8 +129,11 @@ class BilibiliCollector:
 
     async def _complete_record(self, page: Any, record: dict[str, Any]) -> None:
         detail_received = False
+        detail_attempted = False
         bvid = record.get("bvid")
-        if isinstance(bvid, str) and bvid and getattr(self.browser, "allow_navigation", False):
+        detail_required = isinstance(bvid, str) and bool(bvid)
+        if detail_required and getattr(self.browser, "allow_navigation", False):
+            detail_attempted = True
             await self._navigate(page, _video_page_url(bvid))
             observation = await _read_video_detail(page)
             _raise_for_risk_observation(observation)
@@ -128,10 +141,17 @@ class BilibiliCollector:
             if _valid_video_data(video_data, bvid):
                 _merge_video_detail(record, video_data)
                 detail_received = True
-        missing = _missing_completion_fields(record, detail_received)
-        record["detail_completed"] = detail_received
+        missing = _missing_completion_fields(
+            record,
+            detail_received,
+            detail_required=detail_required,
+        )
+        record["detail_attempted"] = detail_attempted
+        record["detail_source"] = "detail_api" if detail_received else "list_api"
+        record["detail_completed"] = detail_received or not detail_required
         record["complete"] = not missing
         record["missing_fields"] = missing
+        record["quality_score"] = _quality_score(record)
 
     async def _navigate(self, page: Any, url: str) -> None:
         response = await self.browser.navigate(page, url, allowed_hosts=_BILIBILI_HOSTS)
@@ -155,42 +175,317 @@ def parse_creator_item(item: Mapping[str, Any], *, observed_at: str | None = Non
     dynamic = _mapping(modules.get("module_dynamic"))
     author_module = _mapping(modules.get("module_author"))
     module_stats = _mapping(modules.get("module_stat"))
-    archive = _mapping(_mapping(dynamic.get("major")).get("archive"))
+    major = _mapping(dynamic.get("major"))
+    archive = _mapping(major.get("archive"))
     archive_stats = _mapping(archive.get("stat"))
     dynamic_id = _text(item.get("id_str"))
     bvid = _text(archive.get("bvid"))
-    dynamic_text = _text(_mapping(dynamic.get("desc")).get("text"))
-    title = _text(archive.get("title")) or dynamic_text
-    desc = _text(archive.get("desc")) or dynamic_text
-    published = _date(author_module.get("pub_ts"))
+    content = _extract_creator_content(item)
+    published_value = author_module.get("pub_ts")
+    normalized_publish = _normalize_publish_time(author_module)
+    publish_time = normalized_publish["publish_time"]
+    display_date = _text(author_module.get("pub_time"))
+    published = _date(published_value) or display_date
     liked = _metric(module_stats, "like", fallback=archive_stats.get("like"))
     comments = _metric(module_stats, "comment", fallback=module_stats.get("reply", archive_stats.get("reply")))
     shares = _metric(module_stats, "forward", fallback=archive_stats.get("share"))
     collected = _metric(module_stats, "favorite", fallback=archive_stats.get("favorite"))
     link = _creator_link(dynamic_id, bvid)
     native_id = dynamic_id or bvid
-    return {
-        "platform": "bilibili", "type": "video" if bvid else "dynamic", "dynamic_id": dynamic_id, "bvid": bvid,
-        "title": title, "desc": desc, "link": link, "date": published,
-        "date_precision": "second" if published is not None else None,
+    record = {
+        "platform": "bilibili", "type": "video" if bvid else "dynamic", "native_type": _text(item.get("type")),
+        "dynamic_id": dynamic_id, "bvid": bvid,
+        "title": content["title"], "desc": content["desc"],
+        "title_source": content["title_source"], "content_source": content["content_source"],
+        "title_status": "placeholder" if _is_placeholder_title(content["title"]) else "source",
+        "link": link, "date": published, "publish_time": publish_time,
+        "publish_date": normalized_publish["publish_date"],
+        "date_source": normalized_publish["date_source"],
+        "date_precision": normalized_publish["date_precision"],
         "liked": liked, "comments": comments, "shares": shares, "collected": collected,
         "id": native_id, "native_id": native_id, "url": link, "author": _text(author_module.get("name")),
-        "published_at": published, "detail_completed": False, "observed_at": observed_at or _observed_at(),
+        "author_avatar": _safe_content_url(author_module.get("face")),
+        "cover": _major_cover(major), "image_count": _major_image_count(major),
+        "published_at": published, "detail_attempted": False, "detail_source": "list_api",
+        "detail_completed": False, "observed_at": observed_at or _observed_at(),
     }
+    record["quality_score"] = _quality_score(record)
+    return record
 
 
 def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str | None = None) -> dict[str, Any]:
     bvid = _text(item.get("bvid")) or _bvid_from_href(item.get("href") or item.get("arcurl"))
     link = _search_link(bvid, item.get("href") or item.get("arcurl"))
-    published = _date(item.get("pubdate") if "pubdate" in item else item.get("date"))
+    normalized_publish = _normalize_search_publish(item)
+    display_date = _search_display_date(item.get("date"))
+    published = _date(item.get("pubdate")) if normalized_publish["date_source"] == "api_pubdate" else display_date
+    description = _clean_text(item.get("description")) or _clean_text(item.get("desc"))
     return {
         "platform": "bilibili", "type": "video", "bvid": bvid, "native_id": bvid,
-        "title": _clean_text(item.get("title")), "desc": _clean_text(item.get("description")) or _clean_text(item.get("desc")),
-        "link": link, "date": published, "liked": _metric(item, "like"), "comments": _metric(item, "review", fallback=item.get("comment")),
+        "title": _clean_text(item.get("title")), "desc": description, "description": description,
+        "play": _display_metric(item.get("play")), "duration": _search_duration(item.get("duration")),
+        "tag": _clean_text(item.get("tag")),
+        "link": link, "date": published, "publish_time": normalized_publish["publish_time"],
+        "publish_date": normalized_publish["publish_date"], "date_source": normalized_publish["date_source"],
+        "date_precision": normalized_publish["date_precision"],
+        "liked": _metric(item, "like"), "comments": _metric(item, "review", fallback=item.get("comment")),
         "shares": _metric(item, "share"), "collected": _metric(item, "favorite"), "search_keyword": keyword,
         "id": bvid, "url": link, "author": _text(item.get("author")), "published_at": published,
         "detail_completed": False, "observed_at": observed_at or _observed_at(),
     }
+
+
+def _extract_creator_content(item: Mapping[str, Any], *, depth: int = 0) -> dict[str, str | None]:
+    modules = _mapping(item.get("modules"))
+    dynamic = _mapping(modules.get("module_dynamic"))
+    major_content = _major_content(_mapping(dynamic.get("major")))
+
+    desc = None
+    content_source = None
+    for value, source in (
+        (dynamic.get("desc"), "api-module-dynamic-desc"),
+        (modules.get("module_desc"), "api-module-desc"),
+        (item.get("desc"), "api-item-desc"),
+    ):
+        desc = _description_text(value)
+        if desc is not None:
+            content_source = source
+            break
+    if desc is None and major_content["desc"] is not None:
+        desc = major_content["desc"]
+        content_source = major_content["content_source"]
+
+    native_type = _text(item.get("type")) or ""
+    if "DYNAMIC_TYPE_FORWARD" in native_type and depth < 2:
+        origin = _mapping(item.get("orig") or item.get("origin"))
+        origin_content = _extract_creator_content(origin, depth=depth + 1)
+        origin_text = origin_content["desc"] or origin_content["title"]
+        origin_author = _text(_mapping(_mapping(origin.get("modules")).get("module_author")).get("name"))
+        origin_desc = None
+        if origin_text is not None:
+            prefix = f"转发{origin_author}" if origin_author else "转发动态"
+            origin_desc = f"{prefix}：{origin_text}"
+        if desc is not None:
+            return {
+                "title": _title_from_description(desc),
+                "desc": _limit_description(f"{desc}\n{origin_desc}" if origin_desc else desc),
+                "title_source": "api-forward-comment",
+                "content_source": "api-forward-comment+origin" if origin_desc else "api-forward-comment",
+            }
+        if origin_desc is not None:
+            return {
+                "title": _title_from_description(origin_desc),
+                "desc": _limit_description(origin_desc),
+                "title_source": "api-forward-origin",
+                "content_source": "api-forward-origin",
+            }
+
+    title = major_content["title"]
+    title_source = major_content["title_source"]
+    if title is None and desc is not None:
+        title = _title_from_description(desc)
+        title_source = content_source
+    return {
+        "title": title,
+        "desc": desc,
+        "title_source": title_source,
+        "content_source": content_source,
+    }
+
+
+def _major_content(major: Mapping[str, Any]) -> dict[str, str | None]:
+    for key in (
+        "archive",
+        "draw",
+        "article",
+        "opus",
+        "common",
+        "pgc",
+        "music",
+        "courses",
+        "medialist",
+        "live_rcmd",
+    ):
+        block = _mapping(major.get(key))
+        if not block:
+            continue
+        if key == "live_rcmd":
+            live = _live_content(block)
+            if live["title"] is not None:
+                return live
+            continue
+        title = None
+        title_source = None
+        for field in ("title", "name"):
+            title = _title_from_description(_description_text(block.get(field)))
+            if title is not None:
+                title_source = f"api-major-{key}-{field}"
+                break
+        desc = None
+        content_source = None
+        for field in ("summary", "desc", "intro"):
+            desc = _description_text(block.get(field))
+            if desc is not None:
+                content_source = f"api-major-{key}-{field}"
+                break
+        if title is not None or desc is not None:
+            if title is None:
+                title = _title_from_description(desc)
+                title_source = content_source
+            return {
+                "title": title,
+                "desc": desc,
+                "title_source": title_source,
+                "content_source": content_source,
+            }
+    return {"title": None, "desc": None, "title_source": None, "content_source": None}
+
+
+def _live_content(block: Mapping[str, Any]) -> dict[str, str | None]:
+    raw = block.get("content")
+    if isinstance(raw, str):
+        if len(raw) > 100_000:
+            return {
+                "title": None,
+                "desc": None,
+                "title_source": None,
+                "content_source": None,
+            }
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, RecursionError):
+            payload = None
+    else:
+        payload = raw
+    data = _mapping(payload)
+    info = _mapping(data.get("live_play_info")) or data
+    for field in ("title", "room_name"):
+        if (title := _title_from_description(info.get(field))) is not None:
+            return {
+                "title": title,
+                "desc": None,
+                "title_source": f"api-major-live_rcmd-{field}",
+                "content_source": None,
+            }
+    return {
+        "title": None,
+        "desc": None,
+        "title_source": None,
+        "content_source": None,
+    }
+
+
+def _description_text(value: object) -> str | None:
+    if isinstance(value, str):
+        lines = [
+            re.sub(r"[ \t\f\v]+", " ", line).strip()
+            for line in value.replace("\r", "\n").split("\n")
+        ]
+        return _limit_description("\n".join(line for line in lines if line))
+    if not isinstance(value, Mapping):
+        return None
+    for field in ("text", "orig_text"):
+        if (text := _description_text(value.get(field))) is not None:
+            return text
+    nodes = _items(value.get("rich_text_nodes"))
+    if nodes:
+        parts: list[str] = []
+        for node in nodes:
+            raw_text = _mapping(node).get("text")
+            if isinstance(raw_text, str):
+                parts.append(raw_text)
+        return _description_text("".join(parts))
+    return None
+
+
+def _title_from_description(value: object) -> str | None:
+    text = _description_text(value)
+    title = re.sub(r"\s+", " ", text).strip() if text else None
+    return title[:_MAX_TITLE_CHARS] if title else None
+
+
+def _limit_description(value: str) -> str | None:
+    value = value.strip()
+    return value[:_MAX_DESC_CHARS] if value else None
+
+
+def _major_image_items(major: Mapping[str, Any]) -> list[Any] | None:
+    draw = _mapping(major.get("draw"))
+    if "items" in draw:
+        return _items(draw.get("items")) if _is_sequence(draw.get("items")) else None
+    for key in ("opus", "common", "pgc", "article", "archive", "music", "courses", "medialist"):
+        block = _mapping(major.get(key))
+        for field in ("pics", "images"):
+            if field in block:
+                return _items(block.get(field)) if _is_sequence(block.get(field)) else None
+    return None
+
+
+def _major_image_count(major: Mapping[str, Any]) -> int | None:
+    images = _major_image_items(major)
+    return len(images) if images is not None else None
+
+
+def _major_cover(major: Mapping[str, Any]) -> str | None:
+    for key in (
+        "archive",
+        "opus",
+        "common",
+        "pgc",
+        "article",
+        "draw",
+        "music",
+        "courses",
+        "medialist",
+        "live_rcmd",
+    ):
+        block = _mapping(major.get(key))
+        for field in ("cover", "pic", "cover_url"):
+            if (url := _safe_content_url(block.get(field))) is not None:
+                return url
+    for image in _major_image_items(major) or []:
+        if (url := _image_url(image)) is not None:
+            return url
+    return None
+
+
+def _image_url(value: object) -> str | None:
+    if isinstance(value, str):
+        return _safe_content_url(value)
+    image = _mapping(value)
+    for field in ("src", "url", "url_default", "url_pre"):
+        if (url := _safe_content_url(image.get(field))) is not None:
+            return url
+    return None
+
+
+def _safe_content_url(value: object) -> str | None:
+    text = _text(value)
+    if text is None or len(text) > 8192:
+        return None
+    if text.startswith("//"):
+        text = f"https:{text}"
+    try:
+        parsed = urlparse(text)
+        valid_origin = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return None
+    if not valid_origin:
+        return None
+    query = urlencode(
+        [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _SENSITIVE_URL_PART.search(key) and not _SENSITIVE_URL_PART.search(item)
+        ],
+        doseq=True,
+    )
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
 
 
 async def _capture_feed_while(page: Any, action: Any) -> Any:
@@ -245,12 +540,41 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
             risk_text: challengeSelector ? 'challenge-selector' : phrase,
             cards: Array.from(document.querySelectorAll('.bili-video-card, .bili-video-card__wrap'))
             .map((card) => {
+                const text = (...selectors) => {
+                    for (const selector of selectors) {
+                        const value = card.querySelector(selector)?.textContent?.trim();
+                        if (value) return value;
+                    }
+                    return null;
+                };
                 const link = card.querySelector('a[href*="/video/"]');
                 const href = link?.getAttribute('href') || null;
                 const bvid = href?.match(/\\/video\\/(BV[^/?#]+)/)?.[1] || null;
                 const title = card.querySelector('[title]')?.getAttribute('title') || link?.textContent || null;
-                const description = card.querySelector('.bili-video-card__info')?.textContent || null;
-                return {bvid, title, href, description};
+                const description = text('.bili-video-card__info--desc', '.bili-video-card__desc');
+                const play = text(
+                    '.bili-video-card__stats--item:first-child',
+                    '.bili-video-card__stats .bili-video-card__stats--item:first-child'
+                );
+                const duration = text(
+                    '.bili-video-card__stats__duration',
+                    '.bili-video-card__stats--duration',
+                    '.bili-video-card__duration'
+                );
+                const visibleTags = Array.from(card.querySelectorAll(
+                    '.bili-video-card__info--tag, .bili-video-card__tag'
+                )).map((node) => node.textContent?.trim()).filter(Boolean);
+                const tag = visibleTags.length ? Array.from(new Set(visibleTags)).join(',') : null;
+                const author = text(
+                    '.bili-video-card__info--author',
+                    '.bili-video-card__info--owner a',
+                    '.bili-video-card__info--owner span:first-child'
+                );
+                const date = text(
+                    '.bili-video-card__info--date',
+                    '.bili-video-card__info--owner span:last-child'
+                );
+                return {bvid, title, href, description, play, duration, tag, author, date};
             })
             };
         }"""
@@ -361,6 +685,10 @@ def _items(value: object) -> list[Any]:
     return list(value) if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)) else []
 
 
+def _is_sequence(value: object) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
 def _text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
@@ -377,10 +705,216 @@ def _metric(mapping: Mapping[str, Any], name: str, *, fallback: object = None) -
     return value if isinstance(value, Real) and not isinstance(value, bool) else None
 
 
+def _display_metric(value: object) -> int | float | None:
+    if isinstance(value, Real) and not isinstance(value, bool):
+        try:
+            numeric = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return value if math.isfinite(numeric) and numeric >= 0 else None
+    text = _text(value)
+    if text is None or len(text) > 40:
+        return None
+    text = re.sub(r"(?:次播放|播放次数|播放)$", "", text.replace(",", "")).strip()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([万亿]?)(?:\+)?", text)
+    if match is None:
+        return None
+    multiplier = {"": 1, "万": 10_000, "亿": 100_000_000}[match.group(2)]
+    numeric = float(match.group(1)) * multiplier
+    if not math.isfinite(numeric):
+        return None
+    return int(numeric) if numeric.is_integer() else numeric
+
+
+def _search_duration(value: object) -> str | None:
+    text = _text(value)
+    if text is None or len(text) > 16:
+        return None
+    return text if re.fullmatch(r"\d{1,3}:[0-5]\d(?::[0-5]\d)?", text) else None
+
+
+def _search_display_date(value: object) -> str | None:
+    text = _clean_text(value)
+    if text is None:
+        return None
+    text = re.sub(r"^[\s·•|]+", "", text).strip()
+    return text[:80] if text else None
+
+
+def _normalize_search_publish(item: Mapping[str, Any]) -> dict[str, int | str | None]:
+    seconds = _timestamp_seconds(item.get("pubdate"))
+    if seconds is not None:
+        try:
+            value = datetime.fromtimestamp(seconds, _CHINA_TIMEZONE)
+        except (OSError, OverflowError, ValueError):
+            value = None
+        if value is not None:
+            return _publish_result(value, source="api_pubdate", precision="second")
+
+    raw = _search_display_date(item.get("date"))
+    if raw is None:
+        return _publish_result()
+    match = re.fullmatch(
+        r"(\d{4})(?:年|[-./])(\d{1,2})(?:月|[-./])(\d{1,2})(?:日)?(?:\s+(\d{1,2}):(\d{2}))?",
+        raw,
+    )
+    if match is None:
+        return _publish_result()
+    try:
+        value = datetime(
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+            int(match.group(4) or 0),
+            int(match.group(5) or 0),
+            tzinfo=_CHINA_TIMEZONE,
+        )
+    except ValueError:
+        return _publish_result()
+    return _publish_result(
+        value,
+        source="search_dom",
+        precision="minute" if match.group(4) else "day",
+    )
+
+
 def _date(value: object) -> str | None:
-    if isinstance(value, bool) or not isinstance(value, Real):
+    seconds = _timestamp_seconds(value)
+    if seconds is None:
         return value if isinstance(value, str) and value else None
-    return datetime.fromtimestamp(value, UTC).isoformat()
+    try:
+        return datetime.fromtimestamp(seconds, UTC).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _timestamp_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        seconds = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    seconds = seconds / 1000 if seconds >= 1_000_000_000_000 else seconds
+    try:
+        datetime.fromtimestamp(seconds, UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
+    return seconds
+
+
+def _timestamp_millis(value: object) -> int | None:
+    seconds = _timestamp_seconds(value)
+    return int(seconds * 1000) if seconds is not None else None
+
+
+def _publish_date(value: object) -> str | None:
+    seconds = _timestamp_seconds(value)
+    if seconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, _CHINA_TIMEZONE).strftime("%Y-%m-%d")
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _publish_result(
+    value: datetime | None = None,
+    *,
+    source: str | None = None,
+    precision: str | None = None,
+) -> dict[str, int | str | None]:
+    if value is None:
+        return {
+            "publish_time": None,
+            "publish_date": None,
+            "date_source": None,
+            "date_precision": None,
+        }
+    value = value.astimezone(_CHINA_TIMEZONE)
+    return {
+        "publish_time": int(value.timestamp() * 1000),
+        "publish_date": value.strftime("%Y-%m-%d"),
+        "date_source": source,
+        "date_precision": precision,
+    }
+
+
+def _normalize_publish_time(
+    author: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, int | str | None]:
+    seconds = _timestamp_seconds(author.get("pub_ts"))
+    if seconds is not None:
+        try:
+            value = datetime.fromtimestamp(seconds, _CHINA_TIMEZONE)
+        except (OSError, OverflowError, ValueError):
+            value = None
+        if value is not None:
+            return _publish_result(value, source="api_pub_ts", precision="second")
+
+    raw = (_text(author.get("pub_time")) or "")[:80]
+    if not raw:
+        return _publish_result()
+    current = now or datetime.now(_CHINA_TIMEZONE)
+    current = current.replace(tzinfo=_CHINA_TIMEZONE) if current.tzinfo is None else current.astimezone(_CHINA_TIMEZONE)
+
+    bare_relative = re.fullmatch(r"(今天|昨天)", raw)
+    if bare_relative:
+        day_offset = 0 if bare_relative.group(1) == "今天" else 1
+        value = (current - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return _publish_result(value, source="display_parse", precision="day")
+
+    relative = re.fullmatch(r"(今天|昨天)\s*(\d{1,2}):(\d{2})", raw)
+    if relative:
+        day_offset = 0 if relative.group(1) == "今天" else 1
+        try:
+            value = (current - timedelta(days=day_offset)).replace(
+                hour=int(relative.group(2)),
+                minute=int(relative.group(3)),
+                second=0,
+                microsecond=0,
+            )
+        except ValueError:
+            return _publish_result()
+        return _publish_result(value, source="display_parse", precision="minute")
+
+    full_date = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?", raw)
+    if full_date:
+        try:
+            value = datetime(
+                int(full_date.group(1)),
+                int(full_date.group(2)),
+                int(full_date.group(3)),
+                int(full_date.group(4) or 0),
+                int(full_date.group(5) or 0),
+                tzinfo=_CHINA_TIMEZONE,
+            )
+        except ValueError:
+            return _publish_result()
+        return _publish_result(value, source="display_parse", precision="minute" if full_date.group(4) else "day")
+
+    month_day = re.fullmatch(r"(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?", raw)
+    if month_day:
+        try:
+            value = datetime(
+                current.year,
+                int(month_day.group(1)),
+                int(month_day.group(2)),
+                int(month_day.group(3) or 0),
+                int(month_day.group(4) or 0),
+                tzinfo=_CHINA_TIMEZONE,
+            )
+            if value > current + timedelta(days=1):
+                value = value.replace(year=current.year - 1)
+        except ValueError:
+            return _publish_result()
+        return _publish_result(value, source="display_parse", precision="minute" if month_day.group(3) else "day")
+
+    return _publish_result()
 
 
 def _creator_link(dynamic_id: str | None, bvid: str | None) -> str | None:
@@ -419,23 +953,41 @@ def _raise_for_risk_observation(observation: Mapping[str, Any]) -> None:
 
 
 def _valid_video_data(data: Mapping[str, Any], expected_bvid: str) -> bool:
-    return data.get("bvid") == expected_bvid and all(key in data for key in ("title", "pubdate", "desc", "stat")) and isinstance(data.get("stat"), Mapping)
+    return (
+        data.get("bvid") == expected_bvid
+        and _text(data.get("title")) is not None
+        and _timestamp_seconds(data.get("pubdate")) is not None
+        and isinstance(data.get("desc"), str)
+        and isinstance(data.get("stat"), Mapping)
+    )
 
 
 def _merge_video_detail(record: dict[str, Any], data: Mapping[str, Any]) -> None:
     stat = _mapping(data.get("stat"))
-    record["title"] = _text(data.get("title"))
-    record["desc"] = _text(data.get("desc"))
-    record["date"] = _date(data.get("pubdate"))
+    record["title"] = _title_from_description(data.get("title"))
+    record["desc"] = _description_text(data.get("desc"))
+    published_value = data.get("pubdate")
+    record["date"] = _date(published_value)
     record["date_precision"] = "second" if record["date"] is not None else None
+    record["publish_time"] = _timestamp_millis(published_value)
+    record["publish_date"] = _publish_date(published_value)
+    record["date_source"] = "detail_api" if record["publish_time"] is not None else None
     record["published_at"] = record["date"]
+    record["title_source"] = "detail_api"
+    record["content_source"] = "detail_api"
+    record["title_status"] = "placeholder" if _is_placeholder_title(record["title"]) else "source"
     record["liked"] = _metric(stat, "like")
     record["comments"] = _metric(stat, "reply")
     record["shares"] = _metric(stat, "share")
     record["collected"] = _metric(stat, "favorite")
 
 
-def _missing_completion_fields(record: Mapping[str, Any], detail_received: bool) -> list[str]:
+def _missing_completion_fields(
+    record: Mapping[str, Any],
+    detail_received: bool,
+    *,
+    detail_required: bool = True,
+) -> list[str]:
     missing: list[str] = []
     if not _text(record.get("native_id")):
         missing.append("native_id")
@@ -443,12 +995,36 @@ def _missing_completion_fields(record: Mapping[str, Any], detail_received: bool)
         missing.append("title")
     if record.get("date") is None:
         missing.append("date")
-    if not detail_received:
+    if detail_required and not detail_received:
         missing.append("detail")
     for field in ("liked", "comments", "shares", "collected"):
         if record.get(field) is None:
             missing.append(field)
     return missing
+
+
+def _has_media(record: Mapping[str, Any]) -> bool:
+    image_count = record.get("image_count")
+    return bool(record.get("cover")) or (
+        isinstance(image_count, Real)
+        and not isinstance(image_count, bool)
+        and image_count > 0
+    )
+
+
+def _quality_score(record: Mapping[str, Any]) -> int:
+    score = 0
+    if not _is_placeholder_title(record.get("title")):
+        score += 1
+    if record.get("date") is not None:
+        score += 1
+    if isinstance(record.get("liked"), Real) and not isinstance(record.get("liked"), bool) and record["liked"] > 0:
+        score += 1
+    if isinstance(record.get("comments"), Real) and not isinstance(record.get("comments"), bool) and record["comments"] > 0:
+        score += 1
+    if _has_media(record):
+        score += 1
+    return score
 
 
 def _is_placeholder_title(value: object) -> bool:

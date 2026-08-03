@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Coroutine
 
 import pytest
@@ -21,11 +21,20 @@ class FakePage:
     result: object = None
     evaluated: str | None = None
     evaluated_argument: object = None
+    waits: list[float] = field(default_factory=list)
 
     async def evaluate(self, script: str, argument: object = None) -> object:
         self.evaluated = script
         self.evaluated_argument = argument
         return self.result
+
+    async def wait_for_timeout(self, milliseconds: float) -> None:
+        self.waits.append(milliseconds)
+
+
+@dataclass
+class FakeResponse:
+    status: int
 
 
 @dataclass
@@ -143,6 +152,459 @@ def test_close_disconnects_without_closing_any_page_or_context() -> None:
     assert page.url == "https://weibo.com/"
 
 
+def test_authorized_authentication_uses_and_closes_only_a_temporary_platform_page() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    class TemporaryPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(
+                "about:blank",
+                {"logged_out": False, "challenge": False, "ready": True},
+            )
+            self.gotos: list[tuple[str, object]] = []
+            self.closed = False
+
+        async def goto(self, url: str, **kwargs: object) -> object:
+            self.gotos.append((url, kwargs.get("wait_until")))
+            self.url = url
+            return FakeResponse(200)
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    class TemporaryContext(FakeContext):
+        def __init__(self, pages: list[FakePage]) -> None:
+            super().__init__(pages)
+            self.created: list[TemporaryPage] = []
+
+        async def new_page(self) -> TemporaryPage:
+            page = TemporaryPage()
+            self.pages.append(page)
+            self.created.append(page)
+            return page
+
+    existing = FakePage("https://www.bilibili.com/video/existing", False)
+    context = TemporaryContext([existing])
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    playwright = FakePlaywright(remote)
+    session = BrowserSession(playwright, remote, allow_navigation=True)
+
+    prepared = _run(session.require_authenticated_page("bilibili"))
+
+    assert prepared is context.created[0]
+    assert session.require_page("bilibili") is prepared
+    assert context.created[0].gotos == [
+        ("https://www.bilibili.com/", "domcontentloaded")
+    ]
+
+    _run(session.close())
+
+    assert context.created[0].closed is True
+    assert existing.url == "https://www.bilibili.com/video/existing"
+    assert playwright.stopped is True
+
+
+def test_authorized_temporary_page_is_cleaned_up_when_authentication_fails() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class LoggedOutPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(
+                "about:blank",
+                {"logged_out": True, "challenge": False, "ready": True},
+            )
+            self.closed = False
+
+        async def goto(self, url: str, **_kwargs: object) -> object:
+            self.url = url
+            return FakeResponse(200)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[LoggedOutPage] = []
+
+        async def new_page(self) -> LoggedOutPage:
+            page = LoggedOutPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    playwright = FakePlaywright(remote)
+    session = BrowserSession(playwright, remote, allow_navigation=True)
+
+    with pytest.raises(PreconditionError, match="logged out"):
+        _run(session.require_authenticated_page("xhs"))
+
+    _run(session.close())
+
+    assert context.pages[0].closed is True
+    assert playwright.stopped is True
+
+
+def test_authorized_page_uses_the_unique_context_that_already_has_the_platform() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    class TemporaryPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(
+                "about:blank",
+                {"logged_out": False, "challenge": False, "ready": True},
+            )
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse:
+            self.url = url
+            return FakeResponse(200)
+
+        async def close(self) -> None:
+            return None
+
+    class Context(FakeContext):
+        def __init__(self, pages: list[FakePage]) -> None:
+            super().__init__(pages)
+            self.created: list[TemporaryPage] = []
+
+        async def new_page(self) -> TemporaryPage:
+            page = TemporaryPage()
+            self.pages.append(page)
+            self.created.append(page)
+            return page
+
+    unrelated = Context([FakePage("https://example.test/")])
+    authenticated = Context(
+        [
+            FakePage(
+                "https://weibo.com/u/private",
+                {"logged_out": False, "challenge": False, "ready": True},
+            )
+        ]
+    )
+    remote = FakeBrowser([])
+    remote.contexts = [unrelated, authenticated]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    prepared = _run(session.require_authenticated_page("weibo"))
+
+    assert unrelated.created == []
+    assert authenticated.created == [prepared]
+
+
+def test_authorized_page_fails_closed_when_multiple_contexts_are_ambiguous() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class Context(FakeContext):
+        async def new_page(self) -> FakePage:
+            raise AssertionError("an ambiguous context must not be selected")
+
+    remote = FakeBrowser([])
+    remote.contexts = [
+        Context([FakePage("https://one.example/")]),
+        Context([FakePage("https://two.example/")]),
+    ]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(PreconditionError, match="ambiguous"):
+        _run(session.require_authenticated_page("xhs"))
+
+
+def test_close_attempts_every_temporary_page_and_preserves_cancellation() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    cancellation = asyncio.CancelledError("cancelled cleanup")
+
+    class ClosingPage:
+        def __init__(self, failure: BaseException | None = None) -> None:
+            self.failure = failure
+            self.attempted = False
+
+        async def close(self) -> None:
+            self.attempted = True
+            if self.failure is not None:
+                raise self.failure
+
+        def is_closed(self) -> bool:
+            return False
+
+    remaining = ClosingPage()
+    cancelled = ClosingPage(cancellation)
+    remote = FakeBrowser([])
+    playwright = FakePlaywright(remote)
+    session = BrowserSession(playwright, remote, allow_navigation=True)
+    session._temporary_pages.extend([remaining, cancelled])
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        _run(session.close())
+
+    assert caught.value is cancellation
+    assert cancelled.attempted is True
+    assert remaining.attempted is True
+    assert playwright.stopped is True
+
+
+def test_close_attempts_every_temporary_page_and_preserves_cleanup_error() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    failure = RuntimeError("close failed")
+
+    class ClosingPage:
+        def __init__(self, error: BaseException | None = None) -> None:
+            self.error = error
+            self.attempted = False
+
+        async def close(self) -> None:
+            self.attempted = True
+            if self.error is not None:
+                raise self.error
+
+        def is_closed(self) -> bool:
+            return False
+
+    remaining = ClosingPage()
+    failed = ClosingPage(failure)
+    remote = FakeBrowser([])
+    playwright = FakePlaywright(remote)
+    session = BrowserSession(playwright, remote, allow_navigation=True)
+    session._temporary_pages.extend([remaining, failed])
+
+    with pytest.raises(RuntimeError) as caught:
+        _run(session.close())
+
+    assert caught.value is failure
+    assert failed.attempted is True
+    assert remaining.attempted is True
+    assert playwright.stopped is True
+
+
+def test_authorized_authentication_detects_a_delayed_logged_out_marker() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class DelayedPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__("about:blank")
+            self.observations = [
+                {"logged_out": False, "challenge": False, "ready": True},
+                {"logged_out": False, "challenge": False, "ready": True},
+                {"logged_out": True, "challenge": False, "ready": True},
+            ]
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse:
+            self.url = url
+            return FakeResponse(200)
+
+        async def evaluate(self, script: str, argument: object = None) -> object:
+            self.evaluated = script
+            self.evaluated_argument = argument
+            return self.observations.pop(0)
+
+        async def close(self) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[DelayedPage] = []
+
+        async def new_page(self) -> DelayedPage:
+            page = DelayedPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(PreconditionError, match="logged out"):
+        _run(session.require_authenticated_page("douyin"))
+
+    assert context.pages[0].waits == [250, 250]
+
+
+@pytest.mark.parametrize(
+    "redirect_url",
+    [
+        "https://passport.example.test/login",
+        "https://www.douyin.com/login",
+    ],
+)
+def test_authorized_authentication_rejects_a_delayed_redirect(
+    redirect_url: str,
+) -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class RedirectingPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(
+                "about:blank",
+                {"logged_out": False, "challenge": False, "ready": True},
+            )
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse:
+            self.url = url
+            return FakeResponse(200)
+
+        async def wait_for_timeout(self, milliseconds: float) -> None:
+            await super().wait_for_timeout(milliseconds)
+            self.url = redirect_url
+
+        async def close(self) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[RedirectingPage] = []
+
+        async def new_page(self) -> RedirectingPage:
+            page = RedirectingPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(PreconditionError):
+        _run(session.require_authenticated_page("douyin"))
+
+    assert context.pages[0].waits == [250]
+
+
+def test_authentication_probe_does_not_scan_normal_content_text_for_risk_phrases() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    page = FakePage(
+        "https://www.xiaohongshu.com/explore",
+        {"logged_out": False, "challenge": False, "ready": True},
+    )
+    remote = FakeBrowser([page])
+    session = BrowserSession(FakePlaywright(remote), remote)
+
+    assert _run(session.require_authenticated_page("xhs")) is page
+
+    evaluated = page.evaluated or ""
+    assert "document.title" not in evaluated
+    assert "document.body?.innerText" not in evaluated
+    assert "bodyText" not in evaluated
+    assert "challenge_phrases" not in evaluated
+    assert "challenge_phrases" not in page.evaluated_argument
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_authorized_authentication_classifies_entry_risk_statuses(status: int) -> None:
+    from runtime.media_missher_runtime.browser import BrowserRiskError, BrowserSession
+
+    class RiskPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__("about:blank")
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse:
+            self.url = url
+            return FakeResponse(status)
+
+        async def close(self) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[RiskPage] = []
+
+        async def new_page(self) -> RiskPage:
+            page = RiskPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(BrowserRiskError) as caught:
+        _run(session.require_authenticated_page("bilibili"))
+
+    assert caught.value.code == f"http-{status}"
+
+
+def test_authorized_authentication_classifies_a_visible_challenge() -> None:
+    from runtime.media_missher_runtime.browser import BrowserRiskError, BrowserSession
+
+    class ChallengePage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(
+                "about:blank",
+                {"logged_out": False, "challenge": True, "ready": True},
+            )
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse:
+            self.url = url
+            return FakeResponse(200)
+
+        async def close(self) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[ChallengePage] = []
+
+        async def new_page(self) -> ChallengePage:
+            page = ChallengePage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(BrowserRiskError) as caught:
+        _run(session.require_authenticated_page("xhs"))
+
+    assert caught.value.code == "challenge"
+    assert context.pages[0].waits == []
+
+
+@pytest.mark.parametrize("status", [None, 500])
+def test_authorized_authentication_rejects_unsuccessful_entry_navigation(
+    status: int | None,
+) -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    class FailedPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__("about:blank")
+
+        async def goto(self, url: str, **_kwargs: object) -> FakeResponse | None:
+            self.url = url
+            return FakeResponse(status) if status is not None else None
+
+        async def close(self) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[FailedPage] = []
+
+        async def new_page(self) -> FailedPage:
+            page = FailedPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = BrowserSession(FakePlaywright(remote), remote, allow_navigation=True)
+
+    with pytest.raises(PreconditionError, match="navigation"):
+        _run(session.require_authenticated_page("weibo"))
+
+
 def test_navigation_requires_explicit_opt_in_and_an_exact_allowlisted_host() -> None:
     from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
 
@@ -182,7 +644,10 @@ def test_authenticated_page_check_rejects_same_host_login_urls(
 ) -> None:
     from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
 
-    page = FakePage(login_url, False)
+    page = FakePage(
+        login_url,
+        {"logged_out": False, "challenge": False, "ready": True},
+    )
     remote = FakeBrowser([page])
     session = BrowserSession(FakePlaywright(remote), remote)
 
@@ -206,14 +671,17 @@ def test_authenticated_page_check_rejects_explicit_visible_logged_out_markers(
 ) -> None:
     from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
 
-    page = FakePage(page_url, True)
+    page = FakePage(
+        page_url,
+        {"logged_out": True, "challenge": False, "ready": True},
+    )
     remote = FakeBrowser([page])
     session = BrowserSession(FakePlaywright(remote), remote)
 
     with pytest.raises(PreconditionError, match="logged out"):
         _run(session.require_authenticated_page(platform))
 
-    assert expected_selector in page.evaluated_argument["selectors"]
+    assert expected_selector in page.evaluated_argument["logged_out_selectors"]
     evaluated = page.evaluated or ""
     assert "cookie" not in evaluated.lower()
     assert "localstorage" not in evaluated.lower()
@@ -234,7 +702,10 @@ def test_authenticated_page_check_accepts_platform_pages_without_logged_out_mark
 ) -> None:
     from runtime.media_missher_runtime.browser import BrowserSession
 
-    page = FakePage(page_url, False)
+    page = FakePage(
+        page_url,
+        {"logged_out": False, "challenge": False, "ready": True},
+    )
     remote = FakeBrowser([page])
     session = BrowserSession(FakePlaywright(remote), remote)
 

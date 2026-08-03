@@ -1,7 +1,9 @@
-"""Browser-mediated Xiaohongshu collection with deliberately narrow outputs.
+"""Browser-mediated Xiaohongshu collection with safe rich business outputs.
 
 This module never calls Xiaohongshu APIs itself.  It only observes responses
-the authenticated user browser produces while navigating its normal UI.
+the authenticated user browser produces while navigating its normal UI. Public
+content detail is retained; request helpers, account IDs, and tracking data are
+not persisted.
 """
 
 from __future__ import annotations
@@ -13,7 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from numbers import Real
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PreconditionError
 from ..models import CollectionRequest
@@ -46,6 +49,20 @@ _SEARCH_SETTLE_ATTEMPTS = 40
 _SEARCH_SETTLE_INTERVAL_MS = 250
 _REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected")
 _FRESH_DETAIL_METRIC_SOURCES = frozenset({"detail_api", "detail_html"})
+_CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_SENSITIVE_URL_PART = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec)",
+    re.IGNORECASE,
+)
+_SENSITIVE_URL_KEY = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|"
+    r"xsec|signature|expires?|expiry|auth[_-]?key|"
+    r"(?:^|[_-])auth(?:[_-]|$)|(?:^|[_-])sign(?:[_-]|$))",
+    re.IGNORECASE,
+)
+_MAX_MEDIA_ITEMS = 100
+_MAX_TAGS = 100
+_MAX_COUNT = (1 << 63) - 1
 _MISSING = object()
 
 
@@ -202,7 +219,7 @@ class XhsCollector:
             try:
                 response = await _capture_while(
                     page,
-                    _is_detail_response,
+                    lambda candidate: _is_detail_response(candidate, note_id),
                     lambda: _click_note_and_check(page, note_id),
                 )
             except PlaywrightTimeoutError as error:
@@ -243,7 +260,15 @@ class XhsCollector:
             if self.request.comment_limit > 0 and record["detail_completed"]:
                 comments = await _read_comments(page, self.request.comment_limit)
                 _raise_for_observation(comments)
-                record["comments_data"] = _safe_comments(_as_sequence(comments.get("comments")), self.request.comment_limit)
+                comments_data = _safe_comments(
+                    _as_sequence(comments.get("comments")),
+                    self.request.comment_limit,
+                )
+                record["comments_data"] = comments_data
+                # Preserve the old public business aliases without restoring
+                # comment IDs, account IDs, request tokens, or raw payloads.
+                record["comments_detail"] = comments_data
+                record["comments_fetched"] = len(comments_data)
         except BaseException as error:
             primary_error = error
             raise
@@ -258,6 +283,7 @@ class XhsCollector:
         missing = _missing_completion(record)
         record["missing_fields"] = missing
         record["complete"] = not missing
+        _annotate_legacy_quality(record)
 
     async def _navigate_and_check(self, page: Any, target: str) -> None:
         response = await self.browser.navigate(page, target, allowed_hosts=_HOSTS)
@@ -284,7 +310,15 @@ def parse_count(value: object) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, Real):
-        return int(value) if math.isfinite(float(value)) and value >= 0 else None
+        try:
+            numeric = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return (
+            int(value)
+            if math.isfinite(numeric) and 0 <= numeric <= _MAX_COUNT
+            else None
+        )
     if not isinstance(value, str):
         return None
     text = value.strip().replace(",", "")
@@ -294,7 +328,21 @@ def parse_count(value: object) -> int | None:
     number = float(match.group(1))
     multiplier = {"": 1, "万": 10_000, "亿": 100_000_000}[match.group(2)]
     result = number * multiplier
-    return int(result) if math.isfinite(result) and result >= 0 else None
+    return (
+        int(result)
+        if math.isfinite(result) and 0 <= result <= _MAX_COUNT
+        else None
+    )
+
+
+def _detail_count(source: Mapping[str, Any], field: str) -> int | None:
+    """Preserve the old API-only distinction between absent and present-empty."""
+    value = source.get(field, _MISSING)
+    if value is _MISSING or value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return 0
+    return parse_count(value)
 
 
 def build_run_report(status: str, records: Sequence[Mapping[str, Any]], started_at: str, finished_at: str, reason: str | None = None) -> dict[str, Any]:
@@ -337,9 +385,14 @@ def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool
     return bool(user_ids) and all(value == expected_uid for value in user_ids)
 
 
-def _is_detail_response(response: Any) -> bool:
+def _is_detail_response(response: Any, expected_note_id: str | None = None) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return parsed.hostname in _DETAIL_RESPONSE_HOSTS and parsed.path == _DETAIL_PATH
+    if parsed.hostname not in _DETAIL_RESPONSE_HOSTS or parsed.path != _DETAIL_PATH:
+        return False
+    if expected_note_id is None:
+        return True
+    note_ids = _response_request_note_ids(response)
+    return bool(note_ids) and all(value == expected_note_id for value in note_ids)
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:
@@ -418,6 +471,35 @@ def _response_request_user_ids(response: Any) -> list[str]:
     return values
 
 
+def _response_request_note_ids(response: Any) -> list[str]:
+    request = getattr(response, "request", None)
+    urls = [getattr(request, "url", None), getattr(response, "url", None)]
+    values: list[str] = []
+    for url in urls:
+        if not isinstance(url, str):
+            continue
+        query = parse_qs(urlparse(url).query, keep_blank_values=True)
+        for key in ("source_note_id", "note_id"):
+            values.extend(
+                value for value in query.get(key, ()) if _safe_note_id(value)
+            )
+    try:
+        post_data = getattr(request, "post_data_json", None)
+    except Exception:
+        post_data = None
+    if callable(post_data):
+        try:
+            post_data = post_data()
+        except Exception:
+            post_data = None
+    if isinstance(post_data, Mapping):
+        for key in ("source_note_id", "note_id"):
+            value = post_data.get(key)
+            if _safe_note_id(value):
+                values.append(value)
+    return values
+
+
 def _creator_page(payload: Mapping[str, Any]) -> tuple[Sequence[Mapping[str, Any]], bool, object]:
     data, notes = _payload_collection(payload, "notes")
     if "has_more" not in data or data.get("has_more") not in (True, False, 0, 1):
@@ -479,16 +561,34 @@ def parse_creator_item(item: Mapping[str, Any], *, observed_at: str | None = Non
     note_id = _text(item.get("note_id"))
     info = _mapping(item.get("interact_info"))
     user = _mapping(item.get("user"))
-    title = _text(item.get("display_title"))
+    note_card = _mapping(item.get("note_card"))
+    title = _text(item.get("display_title")) or _text(item.get("title"))
+    desc = _text(item.get("desc")) or _text(note_card.get("desc"))
     link = _explore_link(note_id)
     stamp = observed_at or _observed_at()
-    return _base_record(note_id, _text(item.get("type")), title, None, link, None, parse_count(info.get("liked_count")), None, None, None, _text(user.get("nickname")), stamp)
+    raw_time = _first_timestamp(item)
+    record = _base_record(
+        note_id,
+        _text(item.get("type")),
+        title,
+        desc,
+        link,
+        _timestamp(raw_time),
+        parse_count(info.get("liked_count")),
+        parse_count(info.get("comment_count")),
+        parse_count(info.get("share_count")),
+        parse_count(info.get("collected_count")),
+        _text(user.get("nickname")) or _text(user.get("nick_name")),
+        stamp,
+    )
+    _merge_preview_business_fields(record, item, source="list_api")
+    return record
 
 
 def parse_creator_dom_item(item: Mapping[str, Any], *, observed_at: str | None = None) -> dict[str, Any]:
     """Build a minimal creator record from an already-rendered safe DOM card."""
     note_id = _text(item.get("note_id"))
-    return _base_record(
+    record = _base_record(
         note_id,
         None,
         _text(item.get("title")),
@@ -502,16 +602,46 @@ def parse_creator_dom_item(item: Mapping[str, Any], *, observed_at: str | None =
         _text(item.get("author")),
         observed_at or _observed_at(),
     )
+    record["detail_source"] = "creator_dom"
+    _annotate_legacy_quality(record)
+    return record
 
 
 def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str | None = None) -> dict[str, Any]:
     note_id = _text(item.get("note_id"))
     title = _text(item.get("title")) or _text(item.get("display_title"))
-    author = _text(item.get("author")) or _text(_mapping(item.get("user")).get("nickname"))
-    return {
+    user = _mapping(item.get("user"))
+    author = _text(item.get("author")) or _text(user.get("nickname"))
+    record = {
         **_base_record(note_id, _text(item.get("type")), title, _text(item.get("desc")), _explore_link(note_id), None, parse_count(item.get("liked")), parse_count(item.get("comments")), parse_count(item.get("shares")), parse_count(item.get("collected")), author, observed_at or _observed_at()),
         "search_keyword": keyword,
     }
+    cover_value = item.get("cover")
+    if isinstance(cover_value, Mapping):
+        cover = dict(cover_value)
+    else:
+        cover = {
+            "url": cover_value or item.get("cover_url"),
+            "width": item.get("cover_width"),
+            "height": item.get("cover_height"),
+        }
+    publish_time = _observable_timestamp_millis(item)
+    _merge_preview_business_fields(
+        record,
+        {
+            "user": {
+                "avatar": item.get("author_avatar")
+                or user.get("avatar")
+                or user.get("image")
+            },
+            "cover": cover,
+            "publish_time": publish_time,
+        },
+        source="search_dom",
+    )
+    record["image_count"] = _dimension(item.get("image_count"))
+    _annotate_legacy_quality(record)
+    return record
 
 
 def _base_record(note_id: str | None, kind: str | None, title: str | None, desc: str | None, link: str | None, date: str | None, liked: int | None, comments: int | None, shares: int | None, collected: int | None, author: str | None, observed_at: str) -> dict[str, Any]:
@@ -523,7 +653,56 @@ def _base_record(note_id: str | None, kind: str | None, title: str | None, desc:
         "observed_at": observed_at, "detail_completed": False, "detail_attempted": False,
         "engagement_fresh": False, "engagement_observed_at": None, "engagement_source": None,
         "metric_sources": {}, "complete": False, "missing_fields": [],
+        "detail_link": link, "detail_source": None, "date_source": None,
+        "publish_time": None, "publish_date": None, "last_update_time": None,
+        "ip_location": None, "author_avatar": None,
+        "cover": None, "cover_width": None, "cover_height": None,
+        "images": [], "image_count": None, "image_details": [],
+        "tags": [], "tag_list": None, "raw_share_count": shares,
+        "metric_observed_at": {}, "engagement_detail_fields": [],
+        "engagement_stale_fields": [], "quality_score": 0,
+        "quality_missing_fields": [],
     }
+
+
+def _merge_preview_business_fields(
+    record: dict[str, Any],
+    item: Mapping[str, Any],
+    *,
+    source: str,
+) -> None:
+    """Keep public preview fields while excluding request/account helpers."""
+    user = _mapping(item.get("user"))
+    avatar = _safe_content_url(user.get("avatar") or user.get("image"))
+    if avatar is not None:
+        record["author_avatar"] = avatar
+
+    cover = _mapping(item.get("cover"))
+    cover_url = _first_image_url(cover)
+    if cover_url is not None:
+        record["cover"] = cover_url
+        record["cover_width"] = _dimension(cover.get("width"))
+        record["cover_height"] = _dimension(cover.get("height"))
+
+    raw_time = _first_timestamp(item)
+    if (publish_time := _timestamp_millis(raw_time)) is not None:
+        record["publish_time"] = publish_time
+        record["publish_date"] = _publish_date(publish_time)
+        record["date"] = record["published_at"] = _timestamp(raw_time)
+        record["date_precision"] = "second"
+        record["date_estimated"] = False
+        record["date_source"] = source
+
+    record["raw_share_count"] = record.get("shares")
+    metric_sources = dict(_mapping(record.get("metric_sources")))
+    for field in ("liked", "comments", "collected", "shares"):
+        if record.get(field) is not None:
+            metric_sources[field] = source
+    if record.get("raw_share_count") is not None:
+        metric_sources["raw_share_count"] = source
+    record["metric_sources"] = metric_sources
+    record["detail_source"] = source
+    _annotate_legacy_quality(record)
 
 
 def _detail_card(
@@ -568,42 +747,216 @@ def _has_current_detail_time(
 
 def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement_observed_at: str) -> None:
     info = _mapping(card.get("interact_info"))
-    date = _timestamp(card.get("time"))
+    raw_time = _first_timestamp(card)
+    date = _timestamp(raw_time)
     if date is not None:
         record["date"] = record["published_at"] = date
         record["date_precision"] = "second"
         record["date_estimated"] = False
+        record["date_source"] = "detail_api"
+        record["publish_time"] = _timestamp_millis(raw_time)
+        record["publish_date"] = _publish_date(record["publish_time"])
+    observed_fields: list[str] = []
     for field, source_key in (("liked", "liked_count"), ("comments", "comment_count"), ("collected", "collected_count"), ("shares", "share_count")):
-        value = parse_count(info.get(source_key))
+        value = _detail_count(info, source_key)
         if value is not None:
             record[field] = value
             record["metric_sources"][field] = "detail_api"
-    for output, input_name in (("title", "title"), ("desc", "desc"), ("type", "type")):
-        value = _text(card.get(input_name))
+            if field == "shares":
+                record["metric_sources"]["raw_share_count"] = "detail_api"
+            observed_fields.append("raw_share_count" if field == "shares" else field)
+    record["raw_share_count"] = record.get("shares")
+    for output, input_names in (
+        ("title", ("display_title", "title")),
+        ("desc", ("desc",)),
+        ("type", ("type",)),
+    ):
+        value = next(
+            (_text(card.get(input_name)) for input_name in input_names if _text(card.get(input_name)) is not None),
+            None,
+        )
         if value is not None:
             record[output] = value
-    author = _text(_mapping(card.get("user")).get("nickname"))
+    user = _mapping(card.get("user"))
+    author = _text(user.get("nickname")) or _text(user.get("nick_name"))
     if author is not None:
         record["author"] = author
-    record["engagement_fresh"] = True
+    avatar = _safe_content_url(user.get("avatar") or user.get("image"))
+    if avatar is not None:
+        record["author_avatar"] = avatar
+    if (last_update := _timestamp_millis(card.get("last_update_time"))) is not None:
+        record["last_update_time"] = last_update
+    if (ip_location := _text(card.get("ip_location"))) is not None:
+        record["ip_location"] = ip_location
+    _merge_media_business_fields(record, card)
+    _merge_tag_business_fields(record, card)
+    record["detail_link"] = record.get("link")
+    record["detail_source"] = "detail_api"
+    record["detail_checked_at"] = _iso_timestamp_seconds(engagement_observed_at)
+    _mark_metric_observations(record, observed_fields, engagement_observed_at)
     record["engagement_observed_at"] = engagement_observed_at
     record["engagement_source"] = "detail_api"
+    _refresh_engagement_fresh(record)
+    _annotate_legacy_quality(record)
+
+
+def _merge_media_business_fields(
+    record: dict[str, Any], card: Mapping[str, Any]
+) -> None:
+    image_details: list[dict[str, Any]] = []
+    image_urls: list[str] = []
+    for candidate in _as_sequence(card.get("image_list"))[:_MAX_MEDIA_ITEMS]:
+        image = _mapping(candidate)
+        url = _first_image_url(image)
+        if url is None or url in image_urls:
+            continue
+        image_urls.append(url)
+        image_details.append(
+            {
+                "url": url,
+                "width": _dimension(image.get("width")),
+                "height": _dimension(image.get("height")),
+            }
+        )
+    if image_urls:
+        record["images"] = image_urls
+        record["image_count"] = len(image_urls)
+        record["image_details"] = image_details
+        if record.get("cover") is None:
+            record["cover"] = image_urls[0]
+            record["cover_width"] = image_details[0]["width"]
+            record["cover_height"] = image_details[0]["height"]
+    elif _text(card.get("type")) == "video":
+        record["image_count"] = 0
+
+    if record.get("cover") is None:
+        cover = _mapping(card.get("cover"))
+        if (cover_url := _first_image_url(cover)) is not None:
+            record["cover"] = cover_url
+            record["cover_width"] = _dimension(cover.get("width"))
+            record["cover_height"] = _dimension(cover.get("height"))
+
+    video_urls = _video_urls(card)
+    if video_urls:
+        record["video_urls"] = video_urls
+        record["video_url"] = ",".join(video_urls)
+
+
+def _merge_tag_business_fields(
+    record: dict[str, Any], card: Mapping[str, Any]
+) -> None:
+    tags: list[str] = []
+    desc = _text(record.get("desc")) or ""
+    for match in re.findall(r"#([^#\n]{1,50}?)(?:\[话题\])?#", desc):
+        tag = match.strip()
+        if tag and tag not in tags:
+            tags.append(tag)
+    for candidate in _as_sequence(card.get("tag_list")):
+        tag = _text(_mapping(candidate).get("name"))
+        if tag is not None and len(tag) <= 100 and tag not in tags:
+            tags.append(tag)
+        if len(tags) >= _MAX_TAGS:
+            break
+    record["tags"] = tags
+    record["tag_list"] = ",".join(tags) if tags else None
+
+
+def _mark_metric_observations(
+    record: dict[str, Any], fields: Sequence[str], observed_at: str
+) -> None:
+    observed_ms = _iso_timestamp_millis(observed_at)
+    if observed_ms is None:
+        return
+    metric_observed_at = dict(_mapping(record.get("metric_observed_at")))
+    detail_fields = [
+        field
+        for field in _as_sequence(record.get("engagement_detail_fields"))
+        if isinstance(field, str)
+    ]
+    for field in fields:
+        if field not in {"liked", "comments", "collected", "raw_share_count"}:
+            continue
+        metric_observed_at[field] = observed_ms
+        if field not in detail_fields:
+            detail_fields.append(field)
+    record["metric_observed_at"] = metric_observed_at
+    record["engagement_detail_fields"] = detail_fields
+    observed = set(fields)
+    record["engagement_stale_fields"] = [
+        field
+        for field in _as_sequence(record.get("engagement_stale_fields"))
+        if isinstance(field, str) and field not in observed
+    ]
+
+
+def _refresh_engagement_fresh(record: dict[str, Any]) -> None:
+    stale_fields = {
+        field
+        for field in _as_sequence(record.get("engagement_stale_fields"))
+        if isinstance(field, str)
+    }
+    record["engagement_fresh"] = bool(
+        not stale_fields.intersection(_REQUIRED_DETAIL_METRICS)
+        and all(
+            _has_fresh_detail_metric(record, field)
+            for field in _REQUIRED_DETAIL_METRICS
+        )
+    )
+
+
+def _annotate_legacy_quality(record: dict[str, Any]) -> None:
+    missing: list[str] = []
+    if not _text(record.get("desc")):
+        missing.append("desc")
+    for field in ("liked", "comments", "collected"):
+        if record.get(field) is None:
+            missing.append(field)
+    if not _text(record.get("date")):
+        missing.append("date")
+    if not (
+        _as_sequence(record.get("images"))
+        or _as_sequence(record.get("video_urls"))
+        or _safe_content_url(record.get("cover"))
+    ):
+        missing.append("media")
+    if not _as_sequence(record.get("tags")):
+        missing.append("tags")
+    record["quality_missing_fields"] = missing
+    record["quality_score"] = sum(
+        (
+            not _placeholder(record.get("title")),
+            bool(_text(record.get("desc"))),
+            record.get("liked") is not None,
+            record.get("comments") is not None,
+            record.get("collected") is not None,
+            bool(_text(record.get("date"))),
+            "media" not in missing,
+            "tags" not in missing,
+        )
+    )
 
 
 def _merge_detail_html(record: dict[str, Any], observation: Mapping[str, Any]) -> None:
     metrics = _mapping(observation.get("metrics"))
     source = "detail_html"
     changed = False
+    observed_fields: list[str] = []
     for field in ("liked", "comments", "collected"):
         value = parse_count(metrics.get(field))
         if value is not None:
             record[field] = value
             record["metric_sources"][field] = source
             changed = True
+            observed_fields.append(field)
     if changed:
-        record["engagement_fresh"] = True
-        record["engagement_observed_at"] = _observed_at()
+        observed_at = _observed_at()
+        record["engagement_observed_at"] = observed_at
         record["engagement_source"] = source
+        record["detail_source"] = source
+        record["detail_checked_at"] = _iso_timestamp_seconds(observed_at)
+        _mark_metric_observations(record, observed_fields, observed_at)
+        _refresh_engagement_fresh(record)
+        _annotate_legacy_quality(record)
 
 
 def _missing_required_metrics(record: Mapping[str, Any]) -> list[str]:
@@ -623,6 +976,7 @@ def _supplement_missing_detail_html(
     record: dict[str, Any], observation: Mapping[str, Any]
 ) -> None:
     metrics = _mapping(observation.get("metrics"))
+    observed_fields: list[str] = []
     for field in _REQUIRED_DETAIL_METRICS:
         if _has_fresh_detail_metric(record, field):
             continue
@@ -630,10 +984,17 @@ def _supplement_missing_detail_html(
         if value is not None:
             record[field] = value
             record["metric_sources"][field] = "detail_html"
+            observed_fields.append(field)
+    if observed_fields:
+        observed_at = _observed_at()
+        _mark_metric_observations(record, observed_fields, observed_at)
+        _refresh_engagement_fresh(record)
+        _annotate_legacy_quality(record)
 
 
 def _missing_completion(record: Mapping[str, Any]) -> list[str]:
     missing: list[str] = []
+    missing_metrics = _missing_required_metrics(record)
     if not _safe_note_id(record.get("note_id")):
         missing.append("note_id")
     if _placeholder(record.get("title")):
@@ -642,11 +1003,17 @@ def _missing_completion(record: Mapping[str, Any]) -> list[str]:
         missing.append("date")
     if record.get("detail_attempted") is not True:
         missing.append("detail_attempted")
-    if record.get("engagement_fresh") is not True:
+    if record.get("detail_completed") is not True:
+        missing.append("detail")
+    if record.get("engagement_fresh") is not True and (
+        not missing_metrics
+        or record.get("engagement_source")
+        not in {"detail_api", "detail_html", "detail_cdp"}
+    ):
         missing.append("engagement_fresh")
     if record.get("engagement_source") not in {"detail_api", "detail_html", "detail_cdp"}:
         missing.append("engagement_source")
-    missing.extend(_missing_required_metrics(record))
+    missing.extend(missing_metrics)
     return missing
 
 
@@ -693,15 +1060,99 @@ async def _read_creator_cards(page: Any) -> Mapping[str, Any]:
 
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
     value = await page.evaluate("""() => {
+        /* search card business fields */
         const body = document.body?.innerText || '';
         const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
         const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
         const risk_text = challenge ? 'challenge-selector' : (phrases.find((word) => body.includes(word)) || '');
-        const cards = Array.from(document.querySelectorAll('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')).map((card) => {
-            const cover = card.querySelector('a.cover.mask'); const title = card.querySelector('.footer > a.title');
-            const author = card.querySelector('.author-wrapper, .card-bottom-wrapper'); const like = card.querySelector('.like-wrapper .count');
-            return {note_id: card.getAttribute('data-note-id'), href: cover?.getAttribute('href') || null, title: title?.textContent || null, author: author?.textContent || null, liked: like?.textContent || null};
-        }); return {risk_text, cards};
+        const isVisible = (element) => {
+            if (!element || !element.isConnected) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none'
+                && style.visibility !== 'hidden'
+                && Number(style.opacity) !== 0
+                && rect.width > 0
+                && rect.height > 0;
+        };
+        const text = (card, selectors) => {
+            for (const selector of selectors) {
+                const element = card.querySelector(selector);
+                if (!isVisible(element)) continue;
+                const value = element?.textContent?.trim();
+                if (value) return value;
+            }
+            return null;
+        };
+        const metric = (card, selectors, attribute) => (
+            text(card, selectors) || card.getAttribute(attribute) || null
+        );
+        const imageUrl = (image) => {
+            if (!isVisible(image)) return null;
+            return image.currentSrc || image.getAttribute('src') || null;
+        };
+        const dimension = (image, name) => {
+            if (!image) return null;
+            const natural = name === 'width' ? image.naturalWidth : image.naturalHeight;
+            if (Number.isFinite(natural) && natural > 0) return natural;
+            return image.getAttribute(name) || null;
+        };
+        const cards = Array.from(document.querySelectorAll(
+            '.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]'
+        )).filter(isVisible).map((card) => {
+            const coverLink = card.querySelector('a.cover.mask');
+            const coverImage = coverLink?.querySelector('img') || card.querySelector('.cover img');
+            const authorImage = card.querySelector('.author-wrapper img, .card-bottom-wrapper img');
+            const timeElement = card.querySelector(
+                'time[datetime], [data-publish-time], [data-time]'
+            );
+            const explicitType = card.getAttribute('data-note-type')
+                || card.getAttribute('data-type');
+            const videoMarker = card.querySelector('video, .video-icon, .play-icon');
+            return {
+                note_id: card.getAttribute('data-note-id'),
+                title: text(card, ['.footer > a.title', '.footer .title']),
+                desc: text(card, ['.footer .desc', '.footer .description', '.desc']),
+                type: explicitType || (isVisible(videoMarker) ? 'video' : null),
+                author: text(card, [
+                    '.author-wrapper .name',
+                    '.author-wrapper .author',
+                    '.card-bottom-wrapper .name',
+                    '.author-wrapper',
+                    '.card-bottom-wrapper',
+                ]),
+                author_avatar: imageUrl(authorImage),
+                liked: metric(card, ['.like-wrapper .count'], 'data-liked-count'),
+                comments: metric(
+                    card,
+                    ['.comment-wrapper .count', '.chat-wrapper .count'],
+                    'data-comment-count'
+                ),
+                collected: metric(
+                    card,
+                    ['.collect-wrapper .count'],
+                    'data-collected-count'
+                ),
+                shares: metric(
+                    card,
+                    ['.share-wrapper .count'],
+                    'data-share-count'
+                ),
+                publish_time: card.getAttribute('data-publish-time')
+                    || card.getAttribute('data-time')
+                    || timeElement?.getAttribute('datetime')
+                    || timeElement?.getAttribute('data-time')
+                    || null,
+                cover: {
+                    url: imageUrl(coverImage),
+                    width: dimension(coverImage, 'width'),
+                    height: dimension(coverImage, 'height'),
+                },
+                image_count: card.getAttribute('data-image-count')
+                    || text(card, ['.image-count', '.image-count-badge']),
+            };
+        });
+        return {risk_text, cards};
     }""")
     return value if isinstance(value, Mapping) else {"risk_text": "", "cards": []}
 
@@ -1014,8 +1465,138 @@ def _int_like(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
-        return int(value)
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return None
     return None
+
+
+def _dimension(value: object) -> int | None:
+    result = _int_like(value)
+    return result if result is not None and 0 <= result <= _MAX_COUNT else None
+
+
+def _observable_timestamp_millis(data: Mapping[str, Any]) -> int | None:
+    for field in ("publish_time", "time", "create_time", "datetime"):
+        value = data.get(field)
+        if (milliseconds := _timestamp_millis(value)) is not None:
+            return milliseconds
+        if (milliseconds := _iso_timestamp_millis(value)) is not None:
+            return milliseconds
+    return None
+
+
+def _first_timestamp(data: Mapping[str, Any]) -> object:
+    for source in (data, _mapping(data.get("note_card"))):
+        for field in ("time", "create_time", "publish_time", "posted_time", "timestamp"):
+            value = source.get(field)
+            if _timestamp_seconds(value) is not None:
+                return value
+    return None
+
+
+def _timestamp_millis(value: object) -> int | None:
+    seconds = _timestamp_seconds(value)
+    return int(seconds * 1000) if seconds is not None else None
+
+
+def _publish_date(value: object) -> str | None:
+    seconds = _timestamp_seconds(value)
+    if seconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, _CHINA_TIMEZONE).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _iso_timestamp_millis(value: object) -> int | None:
+    text = _text(value)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    timestamp = parsed.timestamp()
+    return int(timestamp * 1000) if math.isfinite(timestamp) and timestamp > 0 else None
+
+
+def _iso_timestamp_seconds(value: object) -> int | None:
+    milliseconds = _iso_timestamp_millis(value)
+    return milliseconds // 1000 if milliseconds is not None else None
+
+
+def _safe_content_url(value: object) -> str | None:
+    text = _text(value)
+    if text is None or len(text) > 8192:
+        return None
+    try:
+        parsed = urlparse(text)
+        valid_origin = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return None
+    if not valid_origin:
+        return None
+    query = urlencode(
+        [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _SENSITIVE_URL_KEY.search(key)
+            and not _SENSITIVE_URL_PART.search(item)
+        ],
+        doseq=True,
+    )
+    return urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, "")
+    )
+
+
+def _first_image_url(image: Mapping[str, Any]) -> str | None:
+    for field in ("url_default", "url_pre", "url"):
+        if (url := _safe_content_url(image.get(field))) is not None:
+            return url
+    for candidate in _as_sequence(image.get("info_list")):
+        if (url := _safe_content_url(_mapping(candidate).get("url"))) is not None:
+            return url
+    return None
+
+
+def _video_urls(card: Mapping[str, Any]) -> list[str]:
+    if _text(card.get("type")) != "video":
+        return []
+    video = _mapping(card.get("video"))
+    consumer = _mapping(video.get("consumer"))
+    origin_key = _text(
+        consumer.get("origin_video_key") or consumer.get("originVideoKey")
+    )
+    candidates: list[object] = []
+    if origin_key is not None and not _SENSITIVE_URL_PART.search(origin_key):
+        candidates.append(
+            f"https://sns-video-bd.xhscdn.com/{quote(origin_key, safe='/._-')}"
+        )
+    stream = _mapping(_mapping(video.get("media")).get("stream"))
+    for codec in ("h264", "h265", "av1"):
+        for item in _as_sequence(stream.get(codec))[:_MAX_MEDIA_ITEMS]:
+            payload = _mapping(item)
+            candidates.append(payload.get("master_url"))
+            candidates.extend(_as_sequence(payload.get("backup_urls")))
+    output: list[str] = []
+    for candidate in candidates:
+        url = _safe_content_url(candidate)
+        if url is not None and url not in output:
+            output.append(url)
+        if len(output) >= _MAX_MEDIA_ITEMS:
+            break
+    return output
 
 
 def _timestamp(value: object) -> str | None:
@@ -1030,10 +1611,19 @@ def _timestamp(value: object) -> str | None:
 
 def _timestamp_seconds(value: object) -> float | None:
     if isinstance(value, str) and re.fullmatch(r"\d+(?:\.\d+)?", value.strip()):
-        value = float(value)
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(float(value)) or value <= 0:
+        try:
+            value = float(value)
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(value, bool) or not isinstance(value, Real):
         return None
-    seconds = float(value) / 1000 if value > 10_000_000_000 else float(value)
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric <= 0:
+        return None
+    seconds = numeric / 1000 if numeric > 10_000_000_000 else numeric
     try:
         datetime.fromtimestamp(seconds, UTC)
     except (OverflowError, OSError, ValueError):

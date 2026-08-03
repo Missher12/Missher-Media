@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -407,7 +408,12 @@ def detail_response(note_id: str, **overrides: Any) -> Response:
         "user": {"nickname": "Creator", "user_id": "must-not-leak"}, "xsec_token": "must-not-leak",
     }
     card.update(overrides)
-    return Response({"code": 0, "success": True, "msg": "ok", "data": {"current_time": current_time, "items": [{"id": note_id, "note_card": card}] }}, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+    url = "https://www.xiaohongshu.com/api/sns/web/v1/feed"
+    return Response(
+        {"code": 0, "success": True, "msg": "ok", "data": {"current_time": current_time, "items": [{"id": note_id, "note_card": card}]}},
+        url=url,
+        request=Request(url, {"source_note_id": note_id}),
+    )
 
 
 def test_creator_parses_safe_schema_dedupes_and_paginates() -> None:
@@ -439,8 +445,142 @@ def test_search_reads_dom_cards_canonicalizes_links_and_never_completes() -> Non
     assert page.gotos == ["https://www.xiaohongshu.com/search_result?keyword=two%20words&source=web_search_result_notes"]
     assert records[0]["link"] == "https://www.xiaohongshu.com/explore/abc_1"
     assert records[0]["liked"] == 12000 and records[0]["search_keyword"] == "two words"
+    assert records[0]["comments"] is None
+    assert records[0]["collected"] is None
+    assert records[0]["shares"] is None
+    assert records[0]["publish_time"] is None
+    assert records[0]["cover"] is None
+    assert records[0]["image_count"] is None
     with pytest.raises(ValueError, match="complete search"):
         run(search(CollectionRequest(platform="xhs", count=1, keyword="term", complete=True), Browser(page)))
+
+
+def test_search_preserves_only_observable_safe_business_fields() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import search
+
+    published_ms = 1_767_225_600_000
+    page = Page(
+        cards=[
+            {
+                "note_id": "search_1",
+                "title": "Visible title",
+                "desc": "Visible description",
+                "type": "video",
+                "author": "Visible author",
+                "author_avatar": (
+                    "https://cdn.example.invalid/avatar.jpg?width=64&"
+                    "auth_key=must-not-leak"
+                ),
+                "liked": "0",
+                "comments": "2",
+                "collected": "3",
+                "shares": "4",
+                "publish_time": published_ms,
+                "cover": {
+                    "url": (
+                        "https://cdn.example.invalid/cover.jpg?width=720&"
+                        "signature=must-not-leak"
+                    ),
+                    "width": "720",
+                    "height": "960",
+                },
+                "image_count": "0",
+                "href": "/explore/search_1?xsec_token=must-not-leak",
+                "xsec_token": "must-not-leak",
+                "user_id": "must-not-leak-user-id",
+            }
+        ]
+    )
+
+    record = run(
+        search(
+            CollectionRequest(platform="xhs", count=1, keyword="synthetic"),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["desc"] == "Visible description"
+    assert record["type"] == "video"
+    assert record["liked"] == 0
+    assert record["comments"] == 2
+    assert record["collected"] == 3
+    assert record["shares"] == record["raw_share_count"] == 4
+    assert record["publish_time"] == published_ms
+    assert record["publish_date"] == datetime.fromtimestamp(
+        published_ms / 1000, ZoneInfo("Asia/Shanghai")
+    ).strftime("%Y-%m-%d")
+    assert record["date_source"] == "search_dom"
+    assert record["date_precision"] == "second"
+    assert record["cover"] == "https://cdn.example.invalid/cover.jpg?width=720"
+    assert record["cover_width"] == 720
+    assert record["cover_height"] == 960
+    assert record["image_count"] == 0
+    assert record["author_avatar"] == "https://cdn.example.invalid/avatar.jpg?width=64"
+    assert record["metric_sources"] == {
+        "liked": "search_dom",
+        "comments": "search_dom",
+        "collected": "search_dom",
+        "shares": "search_dom",
+        "raw_share_count": "search_dom",
+    }
+    assert record["detail_source"] == "search_dom"
+    assert record["complete"] is False
+    assert record["detail_attempted"] is False
+    assert record["engagement_fresh"] is False
+    encoded = json.dumps(record)
+    assert "must-not-leak" not in encoded
+    assert "xsec_token" not in encoded
+    assert "user_id" not in encoded
+    observer = next(
+        script
+        for script in page.evaluations
+        if "search card business fields" in script
+    )
+    for required in (
+        "desc",
+        "type",
+        "comments",
+        "collected",
+        "shares",
+        "publish_time",
+        "cover",
+        "image_count",
+    ):
+        assert required in observer
+    lowered = observer.casefold()
+    for forbidden in (
+        "cookie",
+        "localstorage",
+        "sessionstorage",
+        "xsec_token",
+        "user_id",
+        "location.search",
+    ):
+        assert forbidden not in lowered
+
+
+def test_search_drops_malformed_observable_media_metadata() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import parse_search_item
+
+    record = parse_search_item(
+        {
+            "note_id": "search_2",
+            "title": "Visible title",
+            "cover": {
+                "url": "https://[invalid",
+                "width": "9" * 5_000,
+                "height": -1,
+            },
+            "image_count": "9" * 5_000,
+        },
+        "synthetic",
+        observed_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert record["cover"] is None
+    assert record["cover_width"] is None
+    assert record["cover_height"] is None
+    assert record["image_count"] is None
 
 
 def test_complete_uses_current_detail_response_and_modal_comments() -> None:
@@ -452,7 +592,379 @@ def test_complete_uses_current_detail_response_and_modal_comments() -> None:
     assert record["engagement_fresh"] is True and record["engagement_source"] == "detail_api"
     assert record["date_precision"] == "second" and record["date_estimated"] is False
     assert record["comments_data"] == [{"author": "A", "text": "hello", "date": "today", "liked": 1}]
-    assert record["metric_sources"] == {"liked": "detail_api", "comments": "detail_api", "collected": "detail_api", "shares": "detail_api"}
+    assert record["comments_detail"] == record["comments_data"]
+    assert record["comments_fetched"] == 1
+    assert record["metric_sources"] == {
+        "liked": "detail_api",
+        "comments": "detail_api",
+        "collected": "detail_api",
+        "shares": "detail_api",
+        "raw_share_count": "detail_api",
+    }
+
+
+def test_complete_preserves_safe_legacy_detail_business_fields() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response(
+        "one",
+        desc="Detail body #Inline[话题]#",
+        ip_location="Synthetic region",
+        user={
+            "nickname": "Creator",
+            "user_id": "must-not-leak-user-id",
+            "avatar": "https://cdn.example.invalid/avatar.jpg",
+        },
+        image_list=[
+            {
+                "url_default": "https://cdn.example.invalid/first.jpg",
+                "width": 1080,
+                "height": 1440,
+                "file_id": "must-not-leak-file-id",
+                "trace_id": "must-not-leak-trace-id",
+            },
+            {
+                "info_list": [{"url": "https://cdn.example.invalid/second.jpg"}],
+                "width": 720,
+                "height": 960,
+            },
+        ],
+        tag_list=[{"name": "API tag"}, {"name": "Inline"}],
+        xsec_token="must-not-leak-token",
+    )
+    card = detail.payload["data"]["items"][0]["note_card"]  # type: ignore[index]
+    published_ms = card["time"]
+    updated_ms = card["last_update_time"]
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert {
+        "author",
+        "author_avatar",
+        "collected",
+        "comments",
+        "complete",
+        "cover",
+        "cover_height",
+        "cover_width",
+        "date",
+        "date_precision",
+        "date_source",
+        "desc",
+        "detail_attempted",
+        "detail_checked_at",
+        "detail_link",
+        "detail_source",
+        "engagement_detail_fields",
+        "engagement_fresh",
+        "engagement_observed_at",
+        "engagement_source",
+        "engagement_stale_fields",
+        "image_count",
+        "image_details",
+        "images",
+        "ip_location",
+        "last_update_time",
+        "liked",
+        "link",
+        "metric_observed_at",
+        "metric_sources",
+        "missing_fields",
+        "note_id",
+        "publish_date",
+        "publish_time",
+        "quality_score",
+        "raw_share_count",
+        "tag_list",
+        "tags",
+        "title",
+        "type",
+    }.issubset(record)
+    assert record["detail_source"] == "detail_api"
+    assert record["detail_link"] == record["link"]
+    assert record["date_source"] == "detail_api"
+    assert record["publish_time"] == published_ms
+    assert record["publish_date"] == datetime.fromtimestamp(
+        published_ms / 1000, ZoneInfo("Asia/Shanghai")
+    ).strftime("%Y-%m-%d")
+    assert record["last_update_time"] == updated_ms
+    assert record["ip_location"] == "Synthetic region"
+    assert record["author_avatar"] == "https://cdn.example.invalid/avatar.jpg"
+    assert record["cover"] == "https://cdn.example.invalid/first.jpg"
+    assert record["cover_width"] == 1080
+    assert record["cover_height"] == 1440
+    assert record["images"] == [
+        "https://cdn.example.invalid/first.jpg",
+        "https://cdn.example.invalid/second.jpg",
+    ]
+    assert record["image_count"] == 2
+    assert record["image_details"] == [
+        {
+            "url": "https://cdn.example.invalid/first.jpg",
+            "width": 1080,
+            "height": 1440,
+        },
+        {
+            "url": "https://cdn.example.invalid/second.jpg",
+            "width": 720,
+            "height": 960,
+        },
+    ]
+    assert record["tags"] == ["Inline", "API tag"]
+    assert record["tag_list"] == "Inline,API tag"
+    assert record["raw_share_count"] == record["shares"] == 4
+    assert record["quality_score"] == 8
+    assert record["engagement_detail_fields"] == [
+        "liked",
+        "comments",
+        "collected",
+        "raw_share_count",
+    ]
+    assert record["engagement_stale_fields"] == []
+    assert set(record["metric_observed_at"]) == {
+        "liked",
+        "comments",
+        "collected",
+        "raw_share_count",
+    }
+    assert all(
+        isinstance(value, int) and value > 0
+        for value in record["metric_observed_at"].values()
+    )
+    encoded = json.dumps(record)
+    for forbidden in (
+        "xsec_token",
+        "must-not-leak-token",
+        "user_id",
+        "must-not-leak-user-id",
+        "file_id",
+        "trace_id",
+    ):
+        assert forbidden not in encoded
+
+
+def test_complete_preserves_video_and_sanitizes_media_urls() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response(
+        "one",
+        type="video",
+        cover={
+            "url_default": "https://cdn.example.invalid/cover.jpg?width=720&token=must-not-leak",
+            "width": 720,
+            "height": 1280,
+        },
+        image_list=[],
+        video={
+            "consumer": {"origin_video_key": "public/video-key.mp4"},
+            "media": {
+                "stream": {
+                    "h264": [
+                        {
+                            "master_url": "https://video.example.invalid/main.mp4?quality=hd&xsec_token=must-not-leak",
+                            "backup_urls": [
+                                "https://video.example.invalid/backup.mp4?quality=hd"
+                            ],
+                        }
+                    ]
+                }
+            },
+        },
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(
+                Page(
+                    responses=[creator_response(note("one")), detail],
+                    cards=[{"note_id": "one"}],
+                )
+            ),
+        )
+    )[0]
+
+    assert record["cover"] == "https://cdn.example.invalid/cover.jpg?width=720"
+    assert record["cover_width"] == 720
+    assert record["cover_height"] == 1280
+    assert record["image_count"] == 0
+    assert record["video_urls"] == [
+        "https://sns-video-bd.xhscdn.com/public/video-key.mp4",
+        "https://video.example.invalid/main.mp4?quality=hd",
+        "https://video.example.invalid/backup.mp4?quality=hd",
+    ]
+    assert record["video_url"] == ",".join(record["video_urls"])
+    assert "must-not-leak" not in json.dumps(record)
+    assert "xsec_token" not in json.dumps(record)
+
+
+@pytest.mark.parametrize("sensitive_key", ("sign", "auth_key", "signature", "expires"))
+def test_media_url_sanitizer_removes_signed_request_helpers(
+    sensitive_key: str,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _safe_content_url
+
+    result = _safe_content_url(
+        "https://cdn.example.invalid/media.jpg?width=720&"
+        f"{sensitive_key}=must-not-leak"
+    )
+
+    assert result == "https://cdn.example.invalid/media.jpg?width=720"
+
+
+def test_complete_drops_malformed_media_urls_without_losing_detail_record() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response(
+        "one",
+        user={"nickname": "Creator", "avatar": "https://[invalid"},
+        image_list=[
+            {"url_default": "https://[invalid", "width": 1, "height": 1},
+            {
+                "url_default": "https://cdn.example.invalid/safe.jpg",
+                "width": 720,
+                "height": 960,
+            },
+        ],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(
+                Page(
+                    responses=[creator_response(note("one")), detail],
+                    cards=[{"note_id": "one"}],
+                )
+            ),
+        )
+    )[0]
+
+    assert record["complete"] is True
+    assert record["author_avatar"] is None
+    assert record["images"] == ["https://cdn.example.invalid/safe.jpg"]
+    assert record["cover"] == "https://cdn.example.invalid/safe.jpg"
+
+
+def test_creator_list_preserves_safe_preview_fields_without_request_helpers() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    item = note("one")
+    item.update(
+        {
+            "desc": "Preview body",
+            "time": 1_767_225_600_000,
+            "cover": {
+                "url_default": "https://cdn.example.invalid/preview.jpg",
+                "width": 640,
+                "height": 800,
+            },
+            "user": {
+                "nickname": "Creator",
+                "user_id": "must-not-leak-user-id",
+                "avatar": "https://cdn.example.invalid/avatar.jpg",
+            },
+            "interact_info": {
+                "liked_count": 1,
+                "comment_count": 2,
+                "collected_count": 3,
+                "share_count": 4,
+            },
+        }
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u"),
+            Browser(Page(responses=[creator_response(item)])),
+        )
+    )[0]
+
+    assert record["desc"] == "Preview body"
+    assert record["author_avatar"] == "https://cdn.example.invalid/avatar.jpg"
+    assert record["cover"] == "https://cdn.example.invalid/preview.jpg"
+    assert record["cover_width"] == 640
+    assert record["cover_height"] == 800
+    assert record["publish_time"] == 1_767_225_600_000
+    assert record["date_source"] == "list_api"
+    assert record["raw_share_count"] == record["shares"] == 4
+    assert record["detail_source"] == "list_api"
+    assert record["metric_sources"] == {
+        "liked": "list_api",
+        "comments": "list_api",
+        "collected": "list_api",
+        "shares": "list_api",
+        "raw_share_count": "list_api",
+    }
+    encoded = json.dumps(record)
+    assert "xsec_token" not in encoded
+    assert "user_id" not in encoded
+
+
+def test_complete_keeps_preview_cover_when_detail_images_are_enriched() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    item = note("one")
+    item["cover"] = {
+        "url_default": "https://cdn.example.invalid/preview.jpg",
+        "width": 640,
+        "height": 800,
+    }
+    detail = detail_response(
+        "one",
+        image_list=[
+            {
+                "url_default": "https://cdn.example.invalid/original.jpg",
+                "width": 1080,
+                "height": 1440,
+            }
+        ],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(
+                Page(
+                    responses=[creator_response(item), detail],
+                    cards=[{"note_id": "one"}],
+                )
+            ),
+        )
+    )[0]
+
+    assert record["cover"] == "https://cdn.example.invalid/preview.jpg"
+    assert record["cover_width"] == 640
+    assert record["cover_height"] == 800
+    assert record["images"] == ["https://cdn.example.invalid/original.jpg"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    (None, True, -1, 0, float("inf"), float("nan"), 10**1000),
+)
+def test_creator_list_does_not_fail_or_fabricate_invalid_publish_time(
+    value: object,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import parse_creator_item
+
+    item = note("one")
+    item["time"] = value
+    record = parse_creator_item(item, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["date"] is None
+    assert record["published_at"] is None
+    assert record["publish_time"] is None
+    assert record["publish_date"] is None
+    assert record["date_source"] is None
+    assert record["date_precision"] is None
 
 
 def test_complete_supplements_only_missing_required_api_metric_from_open_modal() -> None:
@@ -485,9 +997,97 @@ def test_complete_supplements_only_missing_required_api_metric_from_open_modal()
         "comments": "detail_api",
         "collected": "detail_html",
         "shares": "detail_api",
+        "raw_share_count": "detail_api",
+    }
+    assert set(record["engagement_detail_fields"]) == {
+        "liked",
+        "comments",
+        "collected",
+        "raw_share_count",
+    }
+    assert set(record["metric_observed_at"]) == {
+        "liked",
+        "comments",
+        "collected",
+        "raw_share_count",
     }
     assert page.wait_timeouts == []
     assert sum("engage-bar" in script for script in page.evaluations) == 1
+
+
+def test_complete_preserves_legacy_explicit_blank_detail_count_as_zero() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    detail.payload["data"]["items"][0]["note_card"]["interact_info"]["collected_count"] = ""  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is True
+    assert record["collected"] == 0
+    assert record["metric_sources"]["collected"] == "detail_api"
+    assert record["engagement_fresh"] is True
+    assert page.wait_timeouts == []
+    assert not any("engage-bar" in script for script in page.evaluations)
+
+
+@pytest.mark.parametrize("raw", [None, "--"])
+def test_complete_does_not_turn_unknown_detail_count_into_zero(raw: object) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    detail = detail_response("one")
+    detail.payload["data"]["items"][0]["note_card"]["interact_info"]["collected_count"] = raw  # type: ignore[index]
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["complete"] is False
+    assert record["collected"] is None
+    assert record["missing_fields"] == ["collected"]
+
+
+def test_detail_html_records_safe_field_level_provenance() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import (
+        _merge_detail_html,
+        parse_creator_item,
+    )
+
+    record = parse_creator_item(note("one"), observed_at="2026-01-01T00:00:00+00:00")
+    _merge_detail_html(
+        record,
+        {"metrics": {"liked": "0", "comments": "2", "collected": "3"}},
+    )
+
+    assert record["detail_source"] == "detail_html"
+    assert isinstance(record["detail_checked_at"], int)
+    assert record["engagement_detail_fields"] == [
+        "liked",
+        "comments",
+        "collected",
+    ]
+    assert set(record["metric_observed_at"]) == {
+        "liked",
+        "comments",
+        "collected",
+    }
+    assert record["engagement_stale_fields"] == []
 
 
 def test_complete_waits_for_delayed_required_modal_metric_render() -> None:
@@ -612,7 +1212,8 @@ def test_complete_rejects_stale_creator_metric_when_api_and_modal_omit_it() -> N
     assert record["complete"] is False
     assert record["liked"] == 123
     assert record["missing_fields"] == ["liked"]
-    assert "liked" not in record["metric_sources"]
+    assert record["metric_sources"]["liked"] == "list_api"
+    assert record["engagement_fresh"] is False
     assert record["engagement_source"] == "detail_api"
 
 
@@ -626,6 +1227,7 @@ def test_completion_requires_fresh_source_for_each_required_metric(field: str) -
         "date": "2026-08-04T00:00:00+00:00",
         "date_precision": "second",
         "detail_attempted": True,
+        "detail_completed": True,
         "engagement_fresh": True,
         "engagement_source": "detail_api",
         "liked": 1,
@@ -640,6 +1242,31 @@ def test_completion_requires_fresh_source_for_each_required_metric(field: str) -
     del record["metric_sources"][field]
 
     assert _missing_completion(record) == [field]
+
+
+def test_completion_requires_a_valid_detail_payload_not_only_modal_metrics() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _missing_completion
+
+    record = {
+        "note_id": "one",
+        "title": "Title",
+        "date": "2026-01-01T00:00:00+00:00",
+        "date_precision": "second",
+        "detail_attempted": True,
+        "detail_completed": False,
+        "liked": 1,
+        "comments": 2,
+        "collected": 3,
+        "metric_sources": {
+            "liked": "detail_html",
+            "comments": "detail_html",
+            "collected": "detail_html",
+        },
+        "engagement_fresh": True,
+        "engagement_source": "detail_html",
+    }
+
+    assert _missing_completion(record) == ["detail"]
 
 
 def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric() -> None:
@@ -662,7 +1289,7 @@ def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric(
 
     assert record["complete"] is False
     assert record["detail_completed"] is True
-    assert record["engagement_fresh"] is True
+    assert record["engagement_fresh"] is False
     assert record["engagement_source"] == "detail_api"
     assert record["collected"] is None
     assert record["missing_fields"] == ["collected"]
@@ -670,6 +1297,7 @@ def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric(
         "liked": "detail_api",
         "comments": "detail_api",
         "shares": "detail_api",
+        "raw_share_count": "detail_api",
     }
 
 
@@ -740,9 +1368,43 @@ def test_detail_response_requires_exact_observed_host_and_path(
     assert _is_detail_response(Response({}, url=url)) is expected
 
 
+def test_detail_listener_ignores_unrelated_feed_response_before_target_note() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    unrelated = detail_response("other")
+    target = detail_response("one")
+    page = Page(
+        responses=[creator_response(note("one")), unrelated, target],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert page.ignored_responses == 1
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert record["complete"] is True
+
+
+def test_detail_response_target_match_requires_exact_request_note_id() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _is_detail_response
+
+    assert _is_detail_response(detail_response("one"), "one") is True
+    assert _is_detail_response(detail_response("other"), "one") is False
+    unreadable = detail_response("one")
+    unreadable.request = UnreadablePostRequest(unreadable.url)
+    assert _is_detail_response(unreadable, "one") is False
+
+
 def test_incomplete_detail_risk_stops_without_further_clicks_and_http_is_checked_before_json() -> None:
     from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
-    page = Page(responses=[creator_response(note("one"), note("two")), Response("not-json", status=403, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")], cards=[{"note_id": "one"}, {"note_id": "two"}])
+    detail_url = "https://www.xiaohongshu.com/api/sns/web/v1/feed"
+    page = Page(responses=[creator_response(note("one"), note("two")), Response("not-json", status=403, url=detail_url, request=Request(detail_url, {"source_note_id": "one"}))], cards=[{"note_id": "one"}, {"note_id": "two"}])
     with pytest.raises(CollectionStopped, match="http-403"):
         run(collect_creator(CollectionRequest(platform="xhs", count=2, uid="u", complete=True), Browser(page)))
     assert page.clicked == ["one"]
@@ -1306,7 +1968,8 @@ def test_modal_cleanup_uses_modal_scoped_close_and_keyboard_fallback_for_playwri
 
 def test_cleanup_challenge_overrides_nonrisk_primary_detail_error() -> None:
     from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, collect_creator
-    bad_detail = Response({}, status=500, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+    detail_url = "https://www.xiaohongshu.com/api/sns/web/v1/feed"
+    bad_detail = Response({}, status=500, url=detail_url, request=Request(detail_url, {"source_note_id": "one"}))
     page = Page(
         responses=[creator_response(note("one")), bad_detail],
         cards=[{"note_id": "one"}],
@@ -1336,7 +1999,8 @@ def test_endpoint_payload_requires_success_code_data_and_collection_shapes(sourc
         page = Page(responses=[malformed])
         request = CollectionRequest(platform="xhs", count=1, uid="u")
     else:
-        malformed = Response(payload, url="https://www.xiaohongshu.com/api/sns/web/v1/feed")
+        detail_url = "https://www.xiaohongshu.com/api/sns/web/v1/feed"
+        malformed = Response(payload, url=detail_url, request=Request(detail_url, {"source_note_id": "one"}))
         page = Page(responses=[creator_response(note("one")), malformed], cards=[{"note_id": "one"}])
         request = CollectionRequest(platform="xhs", count=1, uid="u", complete=True)
 
@@ -1361,6 +2025,7 @@ def test_endpoint_payload_requires_success_code_data_and_collection_shapes(sourc
         ("NaN万", None),
         ("Infinity", None),
         (float("inf"), None),
+        (10**1000, None),
     ),
 )
 def test_count_parser_is_finite_and_localized(value: object, expected: object) -> None:

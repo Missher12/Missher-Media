@@ -219,6 +219,187 @@ def test_creator_parser_keeps_compatibility_aliases_zero_null_and_drops_sensitiv
         assert forbidden not in rendered
 
 
+def test_creator_parser_restores_safe_public_avatar_and_region_without_signed_parameters() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("safe-public-fields")
+    post["region_name"] = "发布于 上海"
+    post["user"]["avatar_hd"] = (
+        "https://cdn.example.invalid/avatar.jpeg?width=180&token=must-not-leak&expires=123#fragment"
+    )
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["region_name"] == "发布于 上海"
+    assert record["author_avatar"] == "https://cdn.example.invalid/avatar.jpeg?width=180"
+    rendered = json.dumps(record, ensure_ascii=False)
+    for forbidden in ("token", "expires", "must-not-leak", "#fragment"):
+        assert forbidden not in rendered
+
+
+def test_creator_parser_rejects_malformed_public_avatar_url() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("malformed-avatar")
+    post["user"]["avatar_hd"] = "https://[invalid"
+
+    record = parse_creator_item(post)
+
+    assert record["author_avatar"] is None
+
+
+def test_creator_parser_accepts_sign_in_public_path_and_tries_avatar_fallbacks() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("avatar-fallback")
+    post["user"]["avatar_hd"] = "javascript:alert(1)"
+    post["user"]["avatar_large"] = (
+        "https://cdn.example.invalid/design-avatar.jpeg?width=180"
+    )
+
+    record = parse_creator_item(post)
+
+    assert record["author_avatar"] == (
+        "https://cdn.example.invalid/design-avatar.jpeg?width=180"
+    )
+
+
+def test_creator_parser_keeps_only_safe_picture_ids_with_compatibility_alias_and_count() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("pictures")
+    post["pic_ids"] = ["pic-1", "bad/id", "pic_2", 7, True, None]
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_ids"] == ["pic-1", "pic_2", "7"]
+    assert record["pics"] is None
+    assert record["pic_num"] == 3
+    assert "bad/id" not in json.dumps(record)
+
+
+def test_creator_parser_uses_safe_pic_infos_keys_without_leaking_picture_payloads() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("pic-infos")
+    post.pop("pic_ids")
+    post["pic_infos"] = {
+        "pic-1": {
+            "largest": {
+                "url": "https://cdn.example.invalid/pic-1.jpg?width=720&token=must-not-leak"
+            }
+        },
+        "bad/id": {"token": "must-not-leak"},
+    }
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_ids"] == ["pic-1"]
+    assert record["pics"] == ["https://cdn.example.invalid/pic-1.jpg?width=720"]
+    assert record["pic_num"] == 1
+    rendered = json.dumps(record)
+    assert "token" not in rendered and "must-not-leak" not in rendered
+
+
+def test_creator_picture_count_distinguishes_unknown_from_explicit_empty() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    missing = _post("missing-pictures")
+    missing.pop("pic_ids")
+    explicit_empty = _post("empty-pictures")
+    explicit_empty["pic_ids"] = []
+
+    unknown_record = parse_creator_item(missing, observed_at="2026-01-01T00:00:00+00:00")
+    empty_record = parse_creator_item(explicit_empty, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert unknown_record["pic_ids"] is None and unknown_record["pics"] is None
+    assert unknown_record["pic_num"] is None
+    assert empty_record["pic_ids"] == [] and empty_record["pics"] == []
+    assert empty_record["pic_num"] == 0
+
+
+def test_creator_picture_count_keeps_unrecognizable_nonempty_container_unknown() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("invalid-pictures")
+    post["pic_ids"] = ["bad/id", True, None]
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_ids"] is None
+    assert record["pics"] is None
+    assert record["pic_num"] is None
+
+
+def test_creator_picture_parser_falls_back_to_safe_pic_info_keys() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("picture-fallback")
+    post["pic_ids"] = ["bad/id", True]
+    post["pic_infos"] = {
+        "safe-picture": {
+            "large": {
+                "url": "https://cdn.example.invalid/safe-picture.jpg?signature=must-not-leak&width=720"
+            }
+        },
+        "also/bad": {"token": "must-not-leak"},
+    }
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_ids"] == ["safe-picture"]
+    assert record["pics"] == ["https://cdn.example.invalid/safe-picture.jpg?width=720"]
+    assert record["pic_num"] == 1
+    rendered = json.dumps(record)
+    assert "signature" not in rendered and "must-not-leak" not in rendered
+
+
+@pytest.mark.parametrize("pic_num", (0, 3))
+def test_creator_picture_parser_preserves_explicit_safe_picture_count_without_ids(
+    pic_num: int,
+) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post(f"picture-count-{pic_num}")
+    post.pop("pic_ids")
+    post["pic_num"] = pic_num
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_num"] == pic_num
+    assert record["pic_ids"] == ([] if pic_num == 0 else None)
+    assert record["pics"] == ([] if pic_num == 0 else None)
+
+
+@pytest.mark.parametrize("pic_num", (True, -1, 1.5, "2"))
+def test_creator_picture_parser_rejects_unsafe_picture_counts(pic_num: object) -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_creator_item
+
+    post = _post("invalid-picture-count")
+    post.pop("pic_ids")
+    post["pic_num"] = pic_num
+
+    record = parse_creator_item(post, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["pic_ids"] is None
+    assert record["pics"] is None
+    assert record["pic_num"] is None
+
+
+def test_search_picture_fields_remain_unknown_without_dom_evidence() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import parse_search_item
+
+    record = parse_search_item(
+        {"mid": "search-post", "text": "No image evidence in the search DOM"},
+        "term",
+        observed_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert record["pic_ids"] is None
+    assert record["pics"] is None
+    assert record["pic_num"] is None
+
+
 @pytest.mark.parametrize("identifier", ("bad/id", "has space", "x" * 65, None))
 def test_parser_never_builds_links_for_unsafe_or_unknown_native_ids(identifier: object) -> None:
     from runtime.media_missher_runtime.platforms.weibo import parse_creator_item

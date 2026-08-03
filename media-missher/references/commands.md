@@ -55,6 +55,7 @@ python3 "$SKILL_DIR/scripts/run_collection.py" \
   --profile "$PROFILE_PATH" \
   --platform bilibili,xhs,douyin,weibo \
   --count 10 \
+  --allow-navigation \
   --platform-timeout 600 \
   --json-summary
 ```
@@ -63,7 +64,7 @@ Use `--bilibili-count`, `--xhs-count`, `--douyin-count`, or `--weibo-count` for 
 
 Add `--complete` for Bilibili and Xiaohongshu complete collection. You can instead select one with `--bilibili-complete` or `--xhs-complete`. Add `--xhs-comments 10` only when Xiaohongshu is selected.
 
-Pass `--allow-navigation` only after explicit authorization to navigate exact allowlisted hosts during this run. Omit it for read-only work and passive collection from already open matching pages.
+Pass `--allow-navigation` only after explicit authorization to navigate exact allowlisted hosts during this run. The controller opens one temporary page per selected platform in the existing browser context, keeps existing pages unchanged, and closes only its temporary pages after the run. Omit it for read-only work and passive collection from already open matching pages.
 
 ## Search one platform
 
@@ -110,7 +111,7 @@ Add the same complete flags used for collection. Add `--format` and `--output` o
 
 ## Recover a previous release
 
-An upgrade keeps the prior runtime as `previous-{release_timestamp}` and the prior dependency environment as `venv.previous-{release_timestamp}`. Full installation also keeps each prior skill as `media-missher.previous-{release_timestamp}`.
+An upgrade keeps the prior runtime as `previous-{release_timestamp}` and the prior dependency environment as `venv.previous-{release_timestamp}`. Full installation keeps prior skills outside both discovery roots under the private shared-home paths `recovery/codex/media-missher.previous-{release_timestamp}` and `recovery/openclaw/media-missher.previous-{release_timestamp}`. The installer JSON reports every exact current and recovery path.
 
 The installer restores prior components automatically if atomic rotation fails. For manual recovery:
 

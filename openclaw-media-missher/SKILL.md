@@ -12,7 +12,7 @@ Use the shared local runtime. Run preflight before collection, keep platforms se
 ```bash
 python scripts/preflight.py --json
 python scripts/preflight.py --live --cdp-url http://127.0.0.1:9222 --json
-python scripts/run_collection.py creator --platforms bilibili,xhs,douyin,weibo --count 1 --bilibili-uid UID --xhs-uid UID --douyin-uid UID --weibo-uid UID --output-dir OUTPUT
+python scripts/run_collection.py creator --platforms bilibili,xhs,douyin,weibo --count 1 --bilibili-uid UID --xhs-uid UID --douyin-uid UID --weibo-uid UID --output-dir OUTPUT --allow-navigation --no-feishu
 python scripts/run_collection.py search --platform weibo --keyword TOPIC --count 5 --output-dir OUTPUT
 ```
 

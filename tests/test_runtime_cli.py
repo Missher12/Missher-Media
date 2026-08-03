@@ -463,6 +463,43 @@ def test_platform_preflight_failure_emits_only_a_safe_line_before_inner_output(
     assert "private-xhs" not in captured.err
 
 
+def test_platform_risk_preflight_emits_only_a_safe_stop_before_inner_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from runtime.media_missher_runtime.cli import PlatformRiskPreflightError, main
+
+    class PreflightRisk(FakeDispatcher):
+        async def preflight(self, requests: object) -> None:
+            raise PlatformRiskPreflightError("bilibili", "http-429")
+
+    dispatcher = PreflightRisk()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili,xhs",
+            "--bilibili-uid",
+            "private-bili",
+            "--xhs-uid",
+            "private-xhs",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert dispatcher.closed is True
+    captured = capsys.readouterr()
+    assert code == 75
+    assert captured.out == ""
+    assert captured.err == (
+        "media-missher-diagnostic platform=bilibili "
+        "kind=risk-stop code=http-429\n"
+    )
+    assert not list(tmp_path.glob("run-*"))
+    assert "private-bili" not in captured.err
+
+
 def test_runtime_dispatcher_preflight_attaches_only_the_failing_platform() -> None:
     from runtime.media_missher_runtime.browser import PreconditionError
     from runtime.media_missher_runtime.cli import (

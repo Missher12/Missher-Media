@@ -184,6 +184,11 @@ def _prepare_directory(path: Path, mode: int = 0o700) -> None:
         path.chmod(mode)
 
 
+def _prepare_private_directory(path: Path) -> None:
+    _prepare_directory(path, mode=0o700)
+    path.chmod(0o700)
+
+
 def _valid_owner_marker(path: Path) -> bool:
     marker = path / _OWNER_MARKER
     if marker.is_symlink() or not marker.is_file():
@@ -372,6 +377,13 @@ def install(
     state = runtime_home / "state"
     _prepare_directory(state)
     state.chmod(0o700)
+    recovery_directories: tuple[Path, ...] = ()
+    if not runtime_only:
+        recovery = runtime_home / "recovery"
+        recovery_directories = (recovery / "codex", recovery / "openclaw")
+        _prepare_private_directory(recovery)
+        for directory in recovery_directories:
+            _prepare_private_directory(directory)
 
     release = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{secrets.token_hex(4)}"
     runtime_stage = runtime_home / f".current.staging-{release}"
@@ -439,10 +451,19 @@ def install(
         ]
         if not runtime_only:
             assert codex_parent is not None and openclaw_parent is not None
+            codex_recovery, openclaw_recovery = recovery_directories
             components.extend(
                 (
-                    _Component(package_stages[0], codex_parent / "media-missher", codex_parent / f"media-missher.previous-{release}"),
-                    _Component(package_stages[1], openclaw_parent / "media-missher", openclaw_parent / f"media-missher.previous-{release}"),
+                    _Component(
+                        package_stages[0],
+                        codex_parent / "media-missher",
+                        codex_recovery / f"media-missher.previous-{release}",
+                    ),
+                    _Component(
+                        package_stages[1],
+                        openclaw_parent / "media-missher",
+                        openclaw_recovery / f"media-missher.previous-{release}",
+                    ),
                 )
             )
         _rotate(components, renamer, cleaner, release)
@@ -483,7 +504,23 @@ def main(argv: list[str] | None = None) -> int:
         runtime_only=args.runtime_only,
         python=args.python,
     )
-    print(json.dumps({"current": str(result.current), "state": str(result.state)}, ensure_ascii=False))
+    paths = {
+        "current": result.current,
+        "previous": result.previous,
+        "venv": result.venv,
+        "venv_previous": result.venv_previous,
+        "state": result.state,
+        "codex_current": result.codex_current,
+        "codex_previous": result.codex_previous,
+        "openclaw_current": result.openclaw_current,
+        "openclaw_previous": result.openclaw_previous,
+    }
+    print(
+        json.dumps(
+            {name: str(path) if path is not None else None for name, path in paths.items()},
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

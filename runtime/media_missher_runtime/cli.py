@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .browser import BrowserSession, PreconditionError
+from .browser import BrowserRiskError, BrowserSession, PreconditionError
 from .models import CollectionRequest
 from .platforms import bilibili, douyin, weibo, xhs
 from .storage import RunStore
@@ -96,6 +96,21 @@ class PlatformPreflightError(RuntimeError):
         super().__init__("platform preflight failed")
 
 
+class PlatformRiskPreflightError(RuntimeError):
+    """A platform page exposed a safe non-retryable risk signal in preflight."""
+
+    def __init__(self, platform: str, code: str) -> None:
+        if platform not in PLATFORMS or code not in {
+            "http-403",
+            "http-429",
+            "challenge",
+        }:
+            raise ValueError("invalid platform risk preflight failure")
+        self.platform = platform
+        self.code = code
+        super().__init__("platform risk preflight failed")
+
+
 class RuntimeDispatcher:
     """Own one connection to the user's existing browser for a serial run."""
 
@@ -112,7 +127,11 @@ class RuntimeDispatcher:
 
     async def __aexit__(self, *exc: object) -> None:
         if self.browser is not None:
-            await self.browser.close()
+            try:
+                await self.browser.close()
+            except BaseException:
+                if not exc or exc[0] is None:
+                    raise
 
     async def preflight(self, requests: Sequence[CollectionRequest]) -> None:
         if self.browser is None:
@@ -120,6 +139,8 @@ class RuntimeDispatcher:
         for platform in dict.fromkeys(request.platform for request in requests):
             try:
                 await self.browser.require_authenticated_page(platform)
+            except BrowserRiskError as error:
+                raise PlatformRiskPreflightError(platform, error.code) from error
             except PreconditionError as error:
                 raise PlatformPreflightError(platform, error) from error
 
@@ -462,6 +483,14 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
             file=sys.stderr,
         )
         return 78
+    except PlatformRiskPreflightError as error:
+        print(
+            "media-missher-diagnostic "
+            f"platform={error.platform} "
+            f"kind=risk-stop code={error.code}",
+            file=sys.stderr,
+        )
+        return 75
     except Exception as exc:
         print(f"runtime failed: {type(exc).__name__}", file=sys.stderr)
         return 1
@@ -471,6 +500,7 @@ __all__ = [
     "DEFAULT_CDP_URL",
     "PLATFORMS",
     "PlatformPreflightError",
+    "PlatformRiskPreflightError",
     "RiskStop",
     "RuntimeDispatcher",
     "build_parser",

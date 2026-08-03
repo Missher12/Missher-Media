@@ -305,6 +305,32 @@ def test_search_does_not_treat_ordinary_english_risk_text_as_a_challenge() -> No
     assert record["title"] == "Risk analysis"
 
 
+def test_search_observer_whitelists_visible_legacy_business_metadata() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import search
+
+    page = CapturePage(url="https://search.bilibili.com/all", cards=[[{
+        "bvid": "BVvisible",
+        "title": "Visible",
+        "href": "/video/BVvisible?spm_id_from=must-not-return",
+        "description": "Visible description",
+        "play": "1.2万",
+        "duration": "03:21",
+        "tag": "动画",
+        "author": "Visible author",
+        "date": "2026-08-03",
+    }]])
+
+    record = _run(search(
+        CollectionRequest(platform="bilibili", count=1, keyword="visible"),
+        ProductionBrowser(page, allow_navigation=False),
+    ))[0]
+
+    assert (record["play"], record["duration"], record["tag"]) == (12_000, "03:21", "动画")
+    script = next(script for script in page.evaluations if "bili-video-card" in script)
+    assert "return {bvid, title, href, description, play, duration, tag, author, date};" in script
+    assert all(fragment not in script for fragment in ("fetch(", "__INITIAL_STATE__", ".dataset", "mid:", "uid:"))
+
+
 def test_creator_deduplicates_before_count_truncation_across_captured_pages() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import collect_creator
 
@@ -352,7 +378,13 @@ def test_complete_requires_a_structurally_valid_current_video_observation() -> N
     records = _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True), ProductionBrowser(page)))
 
     assert records[0]["complete"] is True
+    assert records[0]["detail_attempted"] is True
     assert records[0]["detail_completed"] is True
+    assert records[0]["detail_source"] == "detail_api"
+    assert records[0]["title_source"] == "detail_api"
+    assert records[0]["content_source"] == "detail_api"
+    assert records[0]["publish_time"] == 1_700_000_010_000
+    assert records[0]["date_source"] == "detail_api"
     assert records[0]["missing_fields"] == []
     assert records[0]["comments"] == 0
 
@@ -361,8 +393,63 @@ def test_complete_requires_a_structurally_valid_current_video_observation() -> N
         details=[{"risk_text": "", "videoData": {"bvid": "BVdetail1", "title": "Incomplete"}}],
     )
     incomplete = _run(collect_creator(CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True), ProductionBrowser(invalid_page)))
+    assert incomplete[0]["detail_attempted"] is True
     assert incomplete[0]["detail_completed"] is False
+    assert incomplete[0]["detail_source"] == "list_api"
     assert "detail" in incomplete[0]["missing_fields"]
+
+
+def test_complete_rejects_video_detail_with_unparseable_publish_time() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("first", bvid="BVdetail1"), has_more=False)],
+        details=[{
+            "risk_text": "",
+            "videoData": {
+                "bvid": "BVdetail1",
+                "title": "Complete",
+                "pubdate": "not-a-timestamp",
+                "desc": "Desc",
+                "stat": {"like": 3, "reply": 0, "share": 1, "favorite": 2},
+            },
+        }],
+    )
+
+    record = _run(
+        collect_creator(
+            CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True),
+            ProductionBrowser(page),
+        )
+    )[0]
+
+    assert record["detail_attempted"] is True
+    assert record["detail_completed"] is False
+    assert record["complete"] is False
+    assert "detail" in record["missing_fields"]
+
+
+def test_complete_accepts_authoritative_list_payload_for_nonvideo_dynamic() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    item = _item("word")
+    item["modules"]["module_stat"]["favorite"] = {"count": 4}
+    page = CapturePage(responses=[_feed(item, has_more=False)])
+
+    record = _run(
+        collect_creator(
+            CollectionRequest(platform="bilibili", count=1, uid="synthetic-user", complete=True),
+            ProductionBrowser(page),
+        )
+    )[0]
+
+    assert record["type"] == "dynamic"
+    assert record["detail_attempted"] is False
+    assert record["detail_completed"] is True
+    assert record["detail_source"] == "list_api"
+    assert record["complete"] is True
+    assert record["missing_fields"] == []
+    assert page.gotos == ["https://space.bilibili.com/synthetic-user/dynamic"]
 
 
 def test_complete_keeps_a_placeholder_detail_title_incomplete() -> None:

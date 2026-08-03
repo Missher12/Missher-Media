@@ -62,7 +62,7 @@ Do not invoke `runtime/scripts/*.py` with a system Python older than 3.11. The r
 
 Multi-platform creator work runs sequentially. Count `0` requires `--collect-as-much-as-safe` and remains bounded by page caps. The runtime stops on platform risk, lock, block, cooldown, or documented HTTP signals.
 
-The runtime connects only to an existing Chrome DevTools Protocol (CDP) browser. It never starts or reconfigures Chrome. Exact-host navigation requires explicit `--allow-navigation` authorization for the current collection or live acceptance run.
+The runtime connects only to an existing Chrome DevTools Protocol (CDP) browser. It never starts or reconfigures Chrome. Exact-host navigation requires explicit `--allow-navigation` authorization for the current collection or live acceptance run. Authorized navigation creates temporary pages inside the uniquely proven existing browser context, leaves existing user pages unchanged, and closes only the temporary pages on success or failure. Ambiguous multiple contexts fail closed. Entry `403`, `429`, and visible challenges are non-retryable risk stops before output creation.
 
 Every run uses a unique mode-`0700` directory and mode-`0600` artifacts. Media@Missher never creates Feishu artifacts or performs a remote Feishu write.
 
@@ -86,17 +86,17 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-The current source baseline passes 547 standard tests with one environment-dependent skip and 548 tests with Playwright installed. All tests run with sockets disabled. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, and the Codex skill validator accepts the package.
+The current source baseline passes 659 tests with Playwright installed, zero failures, and zero skips. The full suite runs with sockets disabled. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, the active residual scanner returns zero for the source tree, and the Codex skill validator accepts the package.
 
 ## Live acceptance
 
-Live acceptance is a separate authorized stage. Sequential count-`1` runs proved one current record for every platform with no timeout or risk stop. Bilibili, Douyin, and Weibo completed. Xiaohongshu matched the expected note, consumed a fresh official detail response, and passed detail/current-time validation, but its API omitted one required metric while the current modal rendered that metric later.
+Live acceptance is a separate authorized stage. The latest sequential count-`1` run at `~/.local/share/media-missher/state/runs/run-20260803T183331Z-yio893cc` produced one current record for every platform in 51.704 seconds with no timeout, risk signal, or Feishu artifact. Bilibili complete mode passed with 35 fields. Douyin and Weibo passed with 24 and 22 fields. Xiaohongshu matched the expected note, consumed a fresh official detail response, and produced 53 fields including body, author, publish time, location, media, tags, and the other engagement values, but remained incomplete only because `collected` was unknown.
 
-The runtime now supplements only required metrics missing a fresh source, never overwrites an API value, and condition-polls the current modal with the same count parser for at most three seconds. Placeholder text remains unaccepted, ordinary timeout remains incomplete, and a risk signal still stops immediately. A real-CDP `about:blank` smoke test proved delayed placeholder-to-number rendering with zero network requests. The final fix passes focused and full offline suites and is installed in the isolated acceptance packages. Staged live preflight passes all 14 Codex checks and all 19 OpenClaw checks.
+The old active implementation distinguishes a missing or `null` detail API count from an explicitly present empty string: missing/`null` remains unknown, while present-empty means zero. The independent runtime had collapsed both cases to unknown. It now restores that narrow detail-API-only distinction without changing list, search, DOM, or global count parsing. Missing values, `null`, and placeholders remain incomplete; no stale preview value is promoted to fresh detail evidence. The fix passes 109 Xiaohongshu tests, the 659-test full suite, and independent static review.
 
-One post-final-fix four-platform live run is still required before active-skill cutover or recovery of replaced directories. Do not treat the prior four-platform count as complete evidence because its Xiaohongshu record was intentionally rejected as incomplete.
+The safe live artifact intentionally excludes raw payload shape, so the prior run cannot prove whether its source field was absent/`null` or present-empty. The corrected runtime release `20260803T183949270349Z-139870f4` is installed and passes all 14 live preflight checks, but the retry budget is exhausted. One future explicitly authorized fresh four-platform acceptance is still required before active-skill cutover or recovery of replaced directories. Do not treat the prior partial run or the offline compatibility fix as that final live proof.
 
-Before cutover, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. Then run one sequential count-`1` creator collection across all four platforms. The runtime controller checks selected pages and visible login state before creating output.
+Before cutover, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. Then run one sequential count-`1` creator collection across all four platforms. The runtime controller checks selected pages and visible login state before creating output. With explicit navigation authorization, the controller prepares one temporary page per selected platform and closes only those pages after the run.
 
 Use Bilibili and Xiaohongshu complete modes with bounded Xiaohongshu comments. Validate native IDs, links, current timestamps, completeness, counts, no timeout, no risk stop, and no Feishu artifact.
 
@@ -108,19 +108,19 @@ Cutover remains pending until offline, compatibility, staged skill, and live acc
 
 The authorized sequence is:
 
-1. Record read-only manifests, sizes, hashes, and versions for exact active targets
+1. Record read-only manifests, sizes, hashes, and versions for exact active targets and freeze a content hash for `runtime/`, `media-missher/`, and `openclaw-media-missher/`
 2. Run `python3 tools/install_media_missher.py --runtime-only`
 3. Preflight staged Codex and OpenClaw packages against the shared home
 4. Complete authorized four-platform live acceptance
-5. Run `python3 tools/install_media_missher.py` for atomic full installation
-6. Move only approved replaced targets to unique Trash destinations with exact `/bin/mv` arguments
+5. Prove the frozen source hash is unchanged, then run `python3 tools/install_media_missher.py` for atomic full installation and verify all three installed trees against that same source
+6. If old residual-bearing skills are to leave recovery, move only the exact `codex_previous` and `openclaw_previous` paths reported by the installer JSON to unique Trash destinations with exact `/bin/mv` arguments; never move either new `*_current` path
 7. Rerun preflight, five help commands, validation, permission checks, and active residual scans
 
 Never use recursive deletion for cutover.
 
 ## Recovery
 
-The installer rotates prior components to `previous-{release_timestamp}`, `venv.previous-{release_timestamp}`, and `media-missher.previous-{release_timestamp}` paths. It attempts automatic rollback when rotation fails.
+The installer rotates prior runtime components to `previous-{release_timestamp}` and `venv.previous-{release_timestamp}`. Prior Codex and OpenClaw skills move outside their discovery roots into private mode-`0700` `recovery/codex/` and `recovery/openclaw/` directories under the shared runtime home. The installer reports every exact recovery path and attempts automatic rollback when rotation fails.
 
 For manual recovery, validate exact paths, ownership, release markers, and the install lock. Move a failed current component to a unique Trash destination, restore its matching previous component, then rerun all gates. Use the private handoff evidence to restore a component moved during destructive cutover.
 
@@ -128,9 +128,10 @@ Keep runtime outputs and historical evidence during rollback.
 
 ## Current limitations
 
-- Post-fix four-platform live acceptance and active cutover are pending
+- One fresh post-compatibility-fix four-platform live acceptance and active cutover are pending
+- The active OpenClaw skill still contains the recoverable pre-cutover tree; zero replaced-implementation residue is not yet claimed
 - Platform response schemas, login markers, and challenge behavior can change without notice
 - Creator collection needs a non-empty UID for every selected platform; search does not
 - Navigation is disabled unless the current run has explicit authorization
 - A failed non-risk prerequisite permits one retry only after correction and fresh preflight
-- Do not recover replaced directories until the post-fix live run, full installation, permission checks, and active residual scans all pass
+- Do not recover replaced directories until the fresh live run, full installation, permission checks, and active residual scans all pass

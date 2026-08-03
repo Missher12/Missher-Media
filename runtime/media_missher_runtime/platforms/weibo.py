@@ -9,7 +9,7 @@ from html import escape, unescape
 from html.parser import HTMLParser
 from numbers import Real
 from typing import Any
-from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from ..browser import BrowserSession, PreconditionError
 from ..models import CollectionRequest
@@ -54,6 +54,16 @@ _BLOCKING_SELECTORS = _CHALLENGE_SELECTORS + (
 _BLOCKING_PHRASES = ("请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码")
 _MAX_RAW_HTML = 4096
 _MISSING = object()
+_SENSITIVE_URL_VALUE = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec)",
+    re.IGNORECASE,
+)
+_SENSITIVE_URL_KEY = re.compile(
+    r"(?:token|secret|password|passwd|credential|cookie|session|authorization|"
+    r"xsec|signature|expires?|expiry|auth[_-]?key|"
+    r"(?:^|[_-])auth(?:[_-]|$)|(?:^|[_-])sign(?:[_-]|$))",
+    re.IGNORECASE,
+)
 
 
 class CollectionStopped(RuntimeError):
@@ -235,12 +245,19 @@ def parse_creator_item(item: Mapping[str, Any], *, author_domain: str | None = N
     link = _post_link(mblog_id, domain)
     text = clean_html(_text(item.get("text_raw")) or _text(item.get("text")))
     published = _text(item.get("created_at"))
-    pic_ids = _safe_picture_ids(item)
+    pic_ids, pics, pic_num = _safe_picture_fields(item)
     return {
         "platform": "weibo", "type": "post", "mblog_id": mblog_id, "title": text, "link": link, "date": published,
         "liked": _metric(item.get("attitudes_count")), "comments": _metric(item.get("comments_count")),
-        "shares": _metric(item.get("reposts_count")), "collected": None, "pics": pic_ids, "source": _text(item.get("source")),
+        "shares": _metric(item.get("reposts_count")), "collected": None, "pic_ids": pic_ids, "pics": pics,
+        "pic_num": pic_num, "source": _text(item.get("source")),
         "id": mblog_id, "native_id": mblog_id, "url": link, "author": _text(user.get("screen_name")),
+        "author_avatar": _first_safe_content_url(
+            user.get("avatar_hd"),
+            user.get("avatar_large"),
+            user.get("profile_image_url"),
+        ),
+        "region_name": _text(item.get("region_name")),
         "published_at": published, "observed_at": observed_at or _observed_at(),
     }
 
@@ -255,7 +272,8 @@ def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str
     return {
         "platform": "weibo", "type": "post", "mblog_id": mblog_id, "title": text, "link": link, "date": published,
         "liked": _metric(item.get("liked")), "comments": _metric(item.get("comments")), "shares": _metric(item.get("shares")),
-        "collected": _metric(item.get("collected")), "source": _text(item.get("source")), "raw_html": raw_html,
+        "collected": _metric(item.get("collected")), "pic_ids": None, "pics": None, "pic_num": None,
+        "source": _text(item.get("source")), "raw_html": raw_html,
         "search_keyword": keyword, "id": mblog_id, "native_id": mblog_id, "url": link,
         "author": _text(item.get("author")), "published_at": published, "observed_at": observed_at or _observed_at(),
     }
@@ -494,12 +512,96 @@ def _post_link(mblog_id: str | None, domain: str) -> str | None:
     return f"https://weibo.com/{domain}/{mblog_id}"
 
 
-def _safe_picture_ids(item: Mapping[str, Any]) -> list[str] | None:
-    raw = _items(item.get("pic_ids"))
-    if not raw:
-        raw = list(_mapping(item.get("pic_infos")).keys())
-    values = [value for value in (_safe_id(item) for item in raw) if value is not None]
-    return values or None
+def _safe_picture_fields(
+    item: Mapping[str, Any],
+) -> tuple[list[str] | None, list[str] | None, int | None]:
+    raw_pic_ids = item.get("pic_ids", _MISSING)
+    pic_infos = item.get("pic_infos", _MISSING)
+    raw_pic_num = item.get("pic_num", _MISSING)
+    explicit_count = raw_pic_num if isinstance(raw_pic_num, int) and not isinstance(raw_pic_num, bool) and raw_pic_num >= 0 else None
+    has_pic_ids = isinstance(raw_pic_ids, Sequence) and not isinstance(raw_pic_ids, (str, bytes, bytearray))
+    has_pic_infos = isinstance(pic_infos, Mapping)
+    if not has_pic_ids and not has_pic_infos:
+        if explicit_count == 0:
+            return [], [], 0
+        return None, None, explicit_count
+
+    primary = list(raw_pic_ids) if has_pic_ids else []
+    fallback = list(pic_infos) if has_pic_infos else []
+    values = [value for value in (_safe_id(raw) for raw in primary) if value is not None]
+    if not values:
+        values = [value for value in (_safe_id(raw) for raw in fallback) if value is not None]
+    if values:
+        count = explicit_count if explicit_count is not None and explicit_count >= len(values) else len(values)
+        urls: list[str] = []
+        if has_pic_infos:
+            for value in values:
+                if (url := _picture_url(_mapping(pic_infos).get(value))) is not None and url not in urls:
+                    urls.append(url)
+        return values, urls or None, count
+
+    if not primary and not fallback and explicit_count in (None, 0):
+        return [], [], 0
+    return None, None, explicit_count
+
+
+def _picture_url(value: object) -> str | None:
+    info = _mapping(value)
+    for field in (
+        "largest",
+        "large",
+        "original",
+        "bmiddle",
+        "thumbnail",
+        "square",
+        "mw2000",
+        "mw1024",
+    ):
+        candidate = info.get(field)
+        if isinstance(candidate, str):
+            url = _safe_content_url(candidate)
+        else:
+            media = _mapping(candidate)
+            url = _safe_content_url(media.get("url") or media.get("src"))
+        if url is not None:
+            return url
+    return _safe_content_url(info.get("url") or info.get("src"))
+
+
+def _safe_content_url(value: object) -> str | None:
+    text = _text(value)
+    if text is None or len(text) > 8192:
+        return None
+    if text.startswith("//"):
+        text = f"https:{text}"
+    try:
+        parsed = urlparse(text)
+        valid_origin = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return None
+    if not valid_origin:
+        return None
+    query = urlencode(
+        [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _SENSITIVE_URL_KEY.search(key) and not _SENSITIVE_URL_VALUE.search(item)
+        ],
+        doseq=True,
+    )
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
+
+
+def _first_safe_content_url(*values: object) -> str | None:
+    for value in values:
+        if (url := _safe_content_url(value)) is not None:
+            return url
+    return None
 
 
 def _mapping(value: object) -> Mapping[str, Any]:

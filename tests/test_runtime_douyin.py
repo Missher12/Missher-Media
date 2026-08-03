@@ -202,6 +202,62 @@ def test_creator_captures_browser_generated_responses_and_emits_safe_compatibili
         assert secret not in rendered
 
 
+def test_aweme_parser_restores_safe_public_avatar_and_cover_without_signed_parameters() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    item = _aweme("safe-media")
+    item["author"]["avatar_thumb"] = {
+        "url_list": [
+            "https://cdn.example.invalid/avatar.jpeg?width=96&token=must-not-leak&expires=123#fragment"
+        ]
+    }
+    item["video"]["cover"] = {
+        "url_list": [
+            "https://cdn.example.invalid/cover.jpeg?height=720&signature=must-not-leak"
+        ]
+    }
+
+    record = parse_aweme_item(item, observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["author_avatar"] == "https://cdn.example.invalid/avatar.jpeg?width=96"
+    assert record["cover"] == "https://cdn.example.invalid/cover.jpeg?height=720"
+    rendered = json.dumps(record)
+    for forbidden in ("token", "expires", "signature", "must-not-leak", "#fragment"):
+        assert forbidden not in rendered
+
+
+def test_aweme_parser_rejects_malformed_public_media_urls() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    item = _aweme("malformed-media")
+    item["author"]["avatar_thumb"] = {"url_list": ["https://[invalid"]}
+    item["video"]["cover"] = {"url_list": ["javascript:alert(1)"]}
+
+    record = parse_aweme_item(item)
+
+    assert record["author_avatar"] is None
+    assert record["cover"] is None
+
+
+def test_aweme_parser_accepts_realistic_sign_cdn_and_tries_safe_media_fallbacks() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    item = _aweme("realistic-media")
+    item["author"]["avatar_thumb"] = {"url_list": ["javascript:alert(1)"]}
+    item["author"]["avatar_medium"] = {
+        "url_list": ["https://p3-sign.douyinpic.com/design-avatar.jpeg?width=96"]
+    }
+    item["video"]["cover"] = {"url_list": ["https://[invalid"]}
+    item["video"]["dynamic_cover"] = {
+        "url_list": ["https://p3-sign.douyinpic.com/design-cover.jpeg?height=720"]
+    }
+
+    record = parse_aweme_item(item)
+
+    assert record["author_avatar"] == "https://p3-sign.douyinpic.com/design-avatar.jpeg?width=96"
+    assert record["cover"] == "https://p3-sign.douyinpic.com/design-cover.jpeg?height=720"
+
+
 def test_creator_deduplicates_before_truncation_and_stops_when_cursor_does_not_advance() -> None:
     from runtime.media_missher_runtime.platforms.douyin import collect_creator
 
@@ -240,6 +296,166 @@ def test_empty_or_missing_cursor_exhausts_before_scrolling(source: str, cursor: 
 
     assert [record["native_id"] for record in records] == ["one"]
     assert not any("window.scrollTo" in script for script in page.evaluations)
+    assert len(page.responses) == 1
+
+
+def test_search_uses_response_offset_when_cursor_is_absent() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import search
+
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    first = Response(
+        {
+            "status_code": 0,
+            "data": [{"aweme_info": _aweme("one")}],
+            "has_more": 1,
+            "offset": 15,
+        },
+        url=url,
+    )
+    second = Response(
+        {
+            "status_code": 0,
+            "data": [{"aweme_info": _aweme("two")}],
+            "has_more": 0,
+            "offset": 30,
+        },
+        url=url,
+    )
+    page = CapturePage(responses=[first, second])
+
+    records = _run(
+        search(
+            CollectionRequest(platform="douyin", count=0, page_cap=3, keyword="term"),
+            ProductionBrowser(page),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["one", "two"]
+    assert [record["cursor"] for record in records] == [15, 30]
+    assert sum("window.scrollTo" in script for script in page.evaluations) == 1
+
+
+def test_search_stops_after_a_repeated_response_offset() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import search
+
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    responses = [
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("one")}],
+                "has_more": 1,
+                "offset": 15,
+            },
+            url=url,
+        ),
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("two")}],
+                "has_more": 1,
+                "offset": 15,
+            },
+            url=url,
+        ),
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("never")}],
+                "has_more": 0,
+                "offset": 30,
+            },
+            url=url,
+        ),
+    ]
+    page = CapturePage(responses=responses)
+
+    records = _run(
+        search(
+            CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"),
+            ProductionBrowser(page),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["one", "two"]
+    assert sum("window.scrollTo" in script for script in page.evaluations) == 1
+    assert len(page.responses) == 1
+
+
+def test_search_does_not_guess_a_cursor_when_cursor_and_offset_are_absent() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import search
+
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    first = Response(
+        {
+            "status_code": 0,
+            "data": [{"aweme_info": _aweme("one")}],
+            "has_more": 1,
+        },
+        url=url,
+    )
+    page = CapturePage(responses=[first, _search(_aweme("never"), has_more=False)])
+
+    records = _run(
+        search(
+            CollectionRequest(platform="douyin", count=0, page_cap=3, keyword="term"),
+            ProductionBrowser(page),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["one"]
+    assert records[0]["cursor"] is None
+    assert not any("window.scrollTo" in script for script in page.evaluations)
+    assert len(page.responses) == 1
+
+
+def test_search_prefers_an_explicit_cursor_over_response_offset() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import search
+
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    responses = [
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("one")}],
+                "has_more": 1,
+                "cursor": 7,
+                "offset": 15,
+            },
+            url=url,
+        ),
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("two")}],
+                "has_more": 1,
+                "cursor": 7,
+                "offset": 30,
+            },
+            url=url,
+        ),
+        Response(
+            {
+                "status_code": 0,
+                "data": [{"aweme_info": _aweme("never")}],
+                "has_more": 0,
+                "cursor": 8,
+                "offset": 45,
+            },
+            url=url,
+        ),
+    ]
+    page = CapturePage(responses=responses)
+
+    records = _run(
+        search(
+            CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"),
+            ProductionBrowser(page),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["one", "two"]
+    assert [record["cursor"] for record in records] == [7, 7]
     assert len(page.responses) == 1
 
 
@@ -285,10 +501,73 @@ def test_search_navigates_to_exact_host_and_uses_single_or_stream_responses() ->
     assert page.evaluations.count("() => window.scrollTo(0, document.documentElement.scrollHeight)") == 1
 
 
+def test_search_unwraps_aweme_info_mix_and_direct_items() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import search
+
+    payload = {
+        "status_code": 0,
+        "data": [
+            {"aweme_info": _aweme("wrapped"), "token": "must-not-leak"},
+            {
+                "aweme_mix_info": {
+                    "mix_items": [_aweme("mixed")],
+                    "token": "must-not-leak",
+                }
+            },
+            _aweme("direct"),
+        ],
+        "has_more": 0,
+        "cursor": 0,
+    }
+    page = CapturePage(
+        responses=[
+            Response(
+                payload,
+                url="https://www.douyin.com/aweme/v1/web/general/search/single/",
+            )
+        ]
+    )
+
+    records = _run(
+        search(
+            CollectionRequest(platform="douyin", count=3, keyword="term"),
+            ProductionBrowser(page),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == [
+        "wrapped",
+        "mixed",
+        "direct",
+    ]
+    rendered = json.dumps(records)
+    assert "must-not-leak" not in rendered
+    assert "authentication_token" not in rendered
+
+
 def test_search_ignores_malformed_items_and_stops_on_duplicate_only_or_timeout() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
-    malformed = Response({"status_code": 0, "data": [None, {}, {"aweme_info": _aweme("one")}], "has_more": True, "cursor": 1}, url="https://www.douyin.com/aweme/v1/web/general/search/single/")
+    malformed = Response(
+        {
+            "status_code": 0,
+            "data": [
+                None,
+                {},
+                {"aweme_mix_info": {"mix_items": []}},
+                {
+                    "aweme_mix_info": {
+                        "mix_items": ["invalid", _aweme("ignored-second")]
+                    }
+                },
+                {"aweme_id": "bad/id"},
+                {"aweme_info": _aweme("one")},
+            ],
+            "has_more": True,
+            "cursor": 1,
+        },
+        url="https://www.douyin.com/aweme/v1/web/general/search/single/",
+    )
     duplicate = _search(_aweme("one"), has_more=True, cursor=2)
     page = CapturePage(responses=[malformed, duplicate, _search(_aweme("never"), has_more=False)])
     assert [record["native_id"] for record in _run(search(CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"), ProductionBrowser(page)))] == ["one"]
@@ -519,6 +798,58 @@ def test_parsers_preserve_zero_null_dates_duration_and_media_type() -> None:
     assert video["date"] == "2023-11-14T22:13:20+00:00"
     assert image["type"] == "images"
     assert unknown["title"] is None and unknown["date"] is None and unknown["duration_ms"] is None
+
+
+def test_parser_emits_source_publish_time_and_shanghai_publish_date() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    record = parse_aweme_item(_aweme("published"), observed_at="2026-01-01T00:00:00+00:00")
+
+    assert record["publish_time"] == 1_700_000_000
+    assert isinstance(record["publish_time"], int)
+    assert record["publish_date"] == "2023-11-15"
+    assert record["date_precision"] == "second"
+    assert record["date_source"] == "api"
+    assert record["date"] == record["published_at"] == "2023-11-14T22:13:20+00:00"
+
+
+def test_creator_and_search_use_the_same_publish_time_parser() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
+
+    creator = _run(
+        collect_creator(
+            CollectionRequest(platform="douyin", count=1, uid="creator"),
+            ProductionBrowser(CapturePage(responses=[_creator(_aweme("creator-item"))])),
+        )
+    )[0]
+    searched = _run(
+        search(
+            CollectionRequest(platform="douyin", count=1, keyword="term"),
+            ProductionBrowser(CapturePage(responses=[_search(_aweme("search-item"))])),
+        )
+    )[0]
+
+    fields = ("publish_time", "publish_date", "date_precision", "date_source")
+    assert {field: creator[field] for field in fields} == {
+        field: searched[field] for field in fields
+    }
+
+
+@pytest.mark.parametrize("value", (None, "", "not-a-time", True, -1, 0, 1.5, float("nan"), 10**1000))
+def test_parser_does_not_fabricate_publish_metadata_for_invalid_time(value: object) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import parse_aweme_item
+
+    record = parse_aweme_item(
+        {"aweme_id": "invalid-time", "create_time": value, "statistics": {}},
+        observed_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert record["publish_time"] is None
+    assert record["publish_date"] is None
+    assert record["date_precision"] is None
+    assert record["date_source"] is None
+    assert record["date"] is None
+    assert record["published_at"] is None
 
 
 def test_parser_uses_observed_media_kind_and_nested_video_duration() -> None:

@@ -20,7 +20,9 @@ Ask for manual login in the existing browser. Do not capture credentials, import
 
 ## A matching page is unavailable
 
-The runtime controller checks each selected platform page and visible login state before output creation. Passive mode requires an already open matching page. If navigation is needed, request explicit authorization for that collection or live acceptance run, then pass `--allow-navigation` to the collection command. The runtime restricts navigation to exact platform hosts.
+The runtime controller checks each selected platform page and visible login state before output creation. Passive mode requires an already open matching page. If navigation is needed, request explicit authorization for that collection or live acceptance run, then pass `--allow-navigation` to the collection command. Authorized mode opens temporary pages inside the existing browser context, restricts them to exact platform hosts, and closes only those temporary pages after the run. It does not repurpose or close an existing user page.
+
+When Chrome exposes multiple browser contexts, the controller uses the unique context that already contains a matching platform page. If no unique context can be proven, it fails closed instead of guessing an account environment. Entry navigation must return a successful response; `403`, `429`, or a visible challenge is a non-retryable risk stop even when it occurs before output creation.
 
 Never add `--allow-navigation` to a read-only review. Retry one non-risk page failure only after the page or authorization prerequisite is corrected and live preflight passes.
 

@@ -16,7 +16,7 @@ Operate the installed shared runtime through this skill's standard-library adapt
 - Limit keyword search to one platform. Reject search combined with complete mode.
 - Run selected platforms sequentially in one controller process. Never overlap Xiaohongshu with another collection.
 - Run complete mode once when requested. Do not collect an ordinary pass first.
-- Pass `--allow-navigation` only after explicit authorization for browser navigation during that collection or live acceptance run. Never use it for a read-only request.
+- Pass `--allow-navigation` only after explicit authorization for browser navigation during that collection or live acceptance run. It uses temporary pages in the existing browser context and closes only those temporary pages after the run. Never use it for a read-only request.
 
 Read [commands](references/commands.md) before collection or installation. Read [configuration](references/configuration.md) when resolving the shared home, output root, Chrome DevTools Protocol (CDP) endpoint, private profile, or creator UID. Read [validation](references/validation.md) before accepting evidence. Read [troubleshooting](references/troubleshooting.md) after a preflight, login, timeout, lock, cooldown, or risk failure. Read [licensing](references/licensing.md) before copying, distributing, or licensing a component.
 
@@ -31,7 +31,7 @@ Read [commands](references/commands.md) before collection or installation. Read 
 
 ## Preserve safety controls
 
-- Do not start, restart, terminate, or reprofile Chrome.
+- Do not start, restart, terminate, or reprofile Chrome. Do not close or repurpose the user's existing pages.
 - Do not replace cookies, clear locks, clear state, rotate accounts, rotate network exits, or increase concurrency.
 - Do not bypass a captcha, inject stealth behavior, use proxy rotation, defeat fingerprinting controls, or evade platform restrictions.
 - Preserve rate limits, jitter, page caps, timeouts, cooldowns, and sequential execution.
