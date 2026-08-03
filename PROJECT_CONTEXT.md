@@ -20,7 +20,7 @@ The external runtime includes work governed by the Non-Commercial Learning Licen
 - Design: completed in `docs/superpowers/specs/2026-08-03-media-missher-codex-skill-design.md`
 - Implementation plan: recorded in `docs/superpowers/plans/2026-08-03-media-missher-codex-skill.md`
 - Current phase: Task 5, final skill instructions and security gates
-- Verification status: 89 offline tests pass; official skill validation, real-engine read-only preflight, four-platform schema compatibility, and independent Task 1–4 reviews pass. Live count-1 collection and installation remain pending.
+- Verification command: `PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest python -m pytest -q -p no:cacheprovider`. Official skill validation, real-engine read-only preflight, four-platform schema compatibility, and independent Task 1–4 reviews pass. Live count-1 collection and installation remain pending.
 
 ## Known Constraint
 
