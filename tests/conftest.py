@@ -1,0 +1,44 @@
+import socket
+import sys
+from pathlib import Path
+
+import pytest
+
+
+REPO = Path(__file__).resolve().parents[1]
+SCRIPTS = REPO / "media-missher" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+
+@pytest.fixture(autouse=True)
+def isolated_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for name in (
+        "MEDIA_MISSHER_ENGINE_ROOT",
+        "MEDIA_MISSHER_DATA_ROOT",
+        "MEDIA_MISSHER_PROFILE_CONFIG",
+        "MEDIA_MISSHER_CDP_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    def deny_network(*_args, **_kwargs):
+        raise AssertionError("offline test attempted a real network connection")
+
+    monkeypatch.setattr(socket, "create_connection", deny_network)
+
+
+@pytest.fixture
+def fake_engine_root(tmp_path):
+    root = tmp_path / "external-engine"
+    interpreter = root / "engine" / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(Path(sys.executable).resolve())
+    entrypoint = root / "scripts" / "scrape_all.py"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text(
+        "import argparse\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.parse_args()\n",
+        encoding="utf-8",
+    )
+    return root
