@@ -489,7 +489,7 @@ def build_engine_command(
     else:
         script = layout.current / "scripts" / "scrape_all.py"
     script = script.resolve()
-    interpreter = layout.python.resolve()
+    interpreter = layout.python.expanduser().absolute()
     if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
         raise ConfigurationError(f"runtime python is missing or not executable: {interpreter}")
     if not script.is_file():

@@ -4,8 +4,10 @@ import os
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import time
+import venv
 from pathlib import Path
 
 import pytest
@@ -621,6 +623,37 @@ def test_engine_command_uses_absolute_shared_runtime_paths(fake_engine_root, tmp
     assert "--platform" in command.argv
     assert "--xhs-complete" in command.argv
     assert "--no-feishu" in command.argv
+
+
+def test_engine_command_preserves_real_venv_interpreter_identity(tmp_path):
+    home = tmp_path / "runtime-home"
+    scripts = home / "current" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "scrape_all.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8"
+    )
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(home / "venv")
+    layout = resolve_runtime_layout(environ={"MEDIA_MISSHER_HOME": str(home)})
+    assert layout.python.is_symlink()
+
+    command = build_engine_command(
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            platform_uids={"bilibili": "bilibili-user"},
+        ),
+        tmp_path / "staging",
+        layout=layout,
+    )
+    identity = subprocess.run(
+        [command.argv[0], "-c", "import sys; print(sys.prefix)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert Path(identity.stdout.strip()).resolve() == (home / "venv").resolve()
+    assert command.argv[0] == str(layout.python)
 
 
 def test_engine_command_forwards_exact_cdp_and_only_explicit_navigation(
