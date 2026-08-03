@@ -120,6 +120,19 @@ def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):
     assert time.monotonic() - started < 2
 
 
+def test_run_collection_does_not_treat_unlocked_as_a_risk_signal(fake_engine_root, tmp_path):
+    summary = run_collection_request(
+        CollectionRequest(platforms=("xhs",), count=1),
+        engine_root=fake_engine_root,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={"MEDIA_MISSHER_FAKE_MODE": "benign_log"},
+    )
+    assert summary["status"] == "success"
+    assert summary["validation"]["counts"] == {"xhs": 1}
+
+
 def test_run_collection_stops_before_directory_when_preflight_fails(fake_engine_root, tmp_path):
     summary = run_collection_request(
         CollectionRequest(platforms=("weibo",), count=1),

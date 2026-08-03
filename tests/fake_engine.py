@@ -50,6 +50,8 @@ def main():
     if mode == "fail":
         print("synthetic failure", file=sys.stderr)
         return 3
+    if mode == "benign_log":
+        print("synthetic unlocked state", file=sys.stderr, flush=True)
 
     output = args.output or Path.cwd()
     output.mkdir(parents=True, exist_ok=True)

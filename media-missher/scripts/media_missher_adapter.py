@@ -845,7 +845,9 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
     }
 
 
-_RISK_PATTERN = re.compile(r"(?i)(?:\b(?:403|429|461|471|999)\b|risk|locked|cooldown)")
+_RISK_PATTERN = re.compile(
+    r"(?i)(?:\b(?:403|429|461|471|999|risk|locked)\b|\bcooldown(?:\b|_))"
+)
 
 
 def run_collection_request(
