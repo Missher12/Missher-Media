@@ -8,6 +8,7 @@ import pytest
 
 from runtime.media_missher_runtime.browser import PreconditionError
 from runtime.media_missher_runtime.models import CollectionRequest
+from runtime.media_missher_runtime.platforms.douyin import PlaywrightTimeoutError
 
 
 def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
@@ -308,7 +309,7 @@ def test_scroll_response_timeout_is_bounded_and_nonrisk_failures_are_controlled(
         @property
         def value(self) -> Coroutine[Any, Any, Response]:
             async def result() -> Response:
-                raise TimeoutError("synthetic timeout")
+                raise PlaywrightTimeoutError("synthetic timeout")
 
             return result()
 

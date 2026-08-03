@@ -10,6 +10,7 @@ import pytest
 
 from runtime.media_missher_runtime.browser import PreconditionError
 from runtime.media_missher_runtime.models import CollectionRequest
+from runtime.media_missher_runtime.platforms.xhs import PlaywrightError, PlaywrightTimeoutError
 
 
 def run(coro: Any) -> Any:
@@ -74,7 +75,7 @@ class Waiter:
                 self.page.ignored_responses += 1
             if self.page.challenge_on_response_timeout:
                 self.page.challenge = "challenge-selector"
-            raise TimeoutError("synthetic response timeout")
+            raise PlaywrightTimeoutError("synthetic response timeout")
         return value()
 
 
@@ -90,7 +91,7 @@ class Locator:
 
     async def click(self, **_kwargs: Any) -> None:
         if self.page.close_click_error and ".close-circle" in self.selector:
-            raise RuntimeError("synthetic Playwright close failure")
+            raise PlaywrightError("synthetic Playwright close failure")
         if self.note_id:
             self.page.clicked.append(self.note_id)
         self.page.modal_visible = False if self.note_id is None else True
@@ -107,7 +108,7 @@ class Locator:
     async def wait_for(self, **kwargs: Any) -> None:
         self.page.modal_waits.append(kwargs)
         if self.page.modal_wait_error:
-            raise RuntimeError("synthetic Playwright modal wait failure")
+            raise PlaywrightError("synthetic Playwright modal wait failure")
 
     async def evaluate_all(self, _script: str, note_id: str) -> None:
         assert self.note_id is not None
@@ -213,7 +214,7 @@ class Page:
         if should_timeout:
             if self.challenge_on_wait_timeout:
                 self.challenge = "challenge-selector"
-            raise TimeoutError("synthetic wait timeout")
+            raise PlaywrightTimeoutError("synthetic wait timeout")
 
     async def wait_for_timeout(self, milliseconds: int) -> None:
         self.wait_timeouts.append(milliseconds)

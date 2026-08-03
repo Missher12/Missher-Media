@@ -7,6 +7,7 @@ import pytest
 
 from runtime.media_missher_runtime.browser import PreconditionError
 from runtime.media_missher_runtime.models import CollectionRequest
+from runtime.media_missher_runtime.platforms.bilibili import PlaywrightTimeoutError
 
 
 def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
@@ -119,7 +120,7 @@ class DelayedSearchPage(CapturePage):
         self.wait_args.append(arg)
         outcome = self.wait_outcomes.pop(0)
         if outcome == "timeout":
-            raise TimeoutError("synthetic timeout")
+            raise PlaywrightTimeoutError("synthetic timeout")
         self.state_index += 1
 
 
