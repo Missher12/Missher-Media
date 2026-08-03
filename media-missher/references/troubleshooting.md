@@ -14,6 +14,10 @@ Confirm the user's existing Chrome debugging session and configured CDP URL. Do 
 
 Ask the user to restore the platform session manually in the existing browser. Do not capture credentials, import cookies, bypass a captcha, or switch accounts automatically.
 
+## Platform page unavailable
+
+If the external runtime reports that a requested platform page is missing, ask the user to open the configured creator page in the existing debugging-enabled Chrome session, then rerun preflight and retry that platform at most once. Do not open or navigate a browser page without explicit authorization.
+
 ## Timeout
 
 Keep the failed run directory as evidence. Inspect redacted stderr and the platform status. Fix a concrete non-risk cause, rerun preflight, and retry at most once. Do not increase concurrency or create overlapping runs.
