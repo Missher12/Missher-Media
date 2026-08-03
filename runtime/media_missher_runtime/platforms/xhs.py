@@ -794,15 +794,89 @@ async def _wait_for_note_card(page: Any, note_id: str) -> bool:
     return True
 
 
+_EXACT_CREATOR_CARD_SCRIPT = """(item, expected) => {
+    /* exact creator card interaction */
+    const isVisible = (element) => {
+        if (!element || !element.isConnected) return false;
+        const style = window.getComputedStyle(element);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    };
+    return item.getAttribute('data-note-id') === expected && isVisible(item);
+}"""
+
+
+_EXACT_CREATOR_TARGET_SCRIPT = """(item, args) => {
+    /* exact creator card interaction */
+    const isVisible = (element) => {
+        if (!element || !element.isConnected) return false;
+        const style = window.getComputedStyle(element);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    };
+    return item.getAttribute('data-note-id') === args.expected
+        && isVisible(item)
+        && item.contains(args.target)
+        && isVisible(args.target);
+}"""
+
+
 async def _click_note_and_check(page: Any, note_id: str) -> None:
     await _raise_for_challenge(page)
-    locator = page.locator("[data-note-id]")
-    # The id is passed as an argument, never interpolated into a CSS selector.
-    await locator.evaluate_all("""(elements, expected) => {
-        const item = elements.find((element) => element.getAttribute('data-note-id') === expected);
-        if (!item) throw new Error('current note card is unavailable'); item.click();
-    }""", note_id)
-    await _raise_for_challenge(page)
+    starting_url = getattr(page, "url", "")
+    cards = await page.locator(
+        "#userPostedFeeds .note-item[data-note-id]"
+    ).element_handles()
+    selected_card = None
+    click_target = None
+    try:
+        for card in cards:
+            # The id is passed as an argument, never interpolated into CSS.
+            if not await card.evaluate(_EXACT_CREATOR_CARD_SCRIPT, note_id):
+                continue
+            selected_card = card
+            for selector in ("a.cover.mask.ld", "a.title"):
+                candidate = await card.query_selector(selector)
+                if candidate is None:
+                    continue
+                click_target = candidate
+                if await card.evaluate(
+                    _EXACT_CREATOR_TARGET_SCRIPT,
+                    {"expected": note_id, "target": candidate},
+                ):
+                    break
+                await _dispose_element_handle(click_target)
+                click_target = None
+            break
+        await _raise_for_challenge(page)
+        if (
+            getattr(page, "url", "") != starting_url
+            or selected_card is None
+            or click_target is None
+            or not await selected_card.evaluate(
+                _EXACT_CREATOR_TARGET_SCRIPT,
+                {"expected": note_id, "target": click_target},
+            )
+            or getattr(page, "url", "") != starting_url
+        ):
+            raise PlaywrightError("current note card is unavailable")
+        await click_target.click(timeout=5_000)
+        await _raise_for_challenge(page)
+    finally:
+        await _dispose_element_handle(click_target)
+        for card in cards:
+            await _dispose_element_handle(card)
+
+
+async def _dispose_element_handle(handle: Any) -> None:
+    if handle is None:
+        return
+    try:
+        await handle.dispose()
+    except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TypeError):
+        pass
 
 
 async def _close_modal(page: Any) -> None:

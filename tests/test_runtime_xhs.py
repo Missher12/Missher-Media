@@ -112,8 +112,89 @@ class Locator:
 
     async def evaluate_all(self, _script: str, note_id: str) -> None:
         assert self.note_id is not None
+        self.page.synthetic_clicks.append(note_id)
         self.page.clicked.append(note_id)
         self.page.modal_visible = True
+
+    async def element_handles(self) -> list["ElementHandle"]:
+        assert self.selector == "#userPostedFeeds .note-item[data-note-id]"
+        return [ElementHandle(self.page, card) for card in self.page.cards]
+
+
+@dataclass
+class ElementHandle:
+    page: "Page"
+    card: dict[str, Any]
+    selector: str | None = None
+    visible: bool = True
+    disposed: bool = False
+
+    def __post_init__(self) -> None:
+        self.page.active_handles += 1
+
+    async def evaluate(self, script: str, arg: Any) -> bool:
+        assert "exact creator card interaction" in script
+        lowered = script.casefold()
+        for forbidden in (
+            "cookie",
+            "localstorage",
+            "sessionstorage",
+            "xsec_token",
+            "location.search",
+            ".href",
+        ):
+            assert forbidden not in lowered
+        if not self.page.detail_dom_mutated:
+            self.page.detail_dom_mutated = True
+            if self.page.detail_dom_url_override is not None:
+                self.page.url = self.page.detail_dom_url_override
+            if self.page.detail_dom_note_id_override is not None:
+                self.card["note_id"] = self.page.detail_dom_note_id_override
+        expected = arg["expected"] if isinstance(arg, dict) else arg
+        target = arg.get("target") if isinstance(arg, dict) else None
+        if target is not None and self.page.detail_validation_error:
+            raise PlaywrightError("synthetic candidate validation failure")
+        matches = self.card.get("note_id") == expected and self.card.get("visible", True)
+        if target is None:
+            return matches
+        return (
+            matches
+            and isinstance(target, ElementHandle)
+            and target.card is self.card
+            and target.visible
+            and not target.disposed
+        )
+
+    async def query_selector(self, selector: str) -> "ElementHandle | None":
+        assert self.selector is None
+        links = self.card.get("links")
+        if links is None:
+            visible = selector in {"a.cover.mask.ld", "a.title"}
+        else:
+            match = next((link for link in links if link.get("selector") == selector), None)
+            if match is None:
+                return None
+            visible = bool(match.get("visible", True))
+        return ElementHandle(self.page, self.card, selector=selector, visible=visible)
+
+    async def click(self, **_kwargs: Any) -> None:
+        assert self.selector is not None
+        if not self.visible:
+            raise PlaywrightError("synthetic hidden element click")
+        note_id = self.card.get("note_id")
+        self.page.handle_clicks.append((note_id, self.selector))
+        self.page.clicked.append(note_id)
+        self.page.modal_visible = True
+        if self.page.detail_response_on_click is not None:
+            self.page.responses.append(self.page.detail_response_on_click)
+            self.page.detail_response_on_click = None
+
+    async def dispose(self) -> None:
+        if self.disposed:
+            return
+        self.disposed = True
+        self.page.active_handles -= 1
+        self.page.disposed_handles.append((self.card.get("note_id"), self.selector))
 
 
 @dataclass
@@ -134,6 +215,10 @@ class Page:
     challenge: str = ""
     gotos: list[str] = field(default_factory=list)
     clicked: list[str] = field(default_factory=list)
+    synthetic_clicks: list[str] = field(default_factory=list)
+    handle_clicks: list[tuple[str | None, str]] = field(default_factory=list)
+    disposed_handles: list[tuple[str | None, str | None]] = field(default_factory=list)
+    active_handles: int = 0
     listeners: int = 0
     modal_visible: bool = False
     evaluations: list[str] = field(default_factory=list)
@@ -156,6 +241,12 @@ class Page:
     wait_timeouts: list[int] = field(default_factory=list)
     creator_dom_responses: list[Response] = field(default_factory=list)
     creator_dom_url_override: str | None = None
+    detail_response_on_click: Response | None = None
+    detail_dom_url_override: str | None = None
+    detail_dom_note_id_override: str | None = None
+    detail_dom_mutated: bool = False
+    detail_validation_error: bool = False
+    locator_queries: list[str] = field(default_factory=list)
 
     @property
     def keyboard(self) -> Keyboard:
@@ -176,6 +267,7 @@ class Page:
 
     def locator(self, selector: str, *, has: Any = None) -> Locator:
         assert "must-not-leak" not in selector
+        self.locator_queries.append(selector)
         if selector == "[data-note-id]":
             return Locator(self, self.cards[0]["note_id"] if self.cards else None, selector)
         return Locator(self, selector=selector)
@@ -648,6 +740,104 @@ def test_dom_fallback_complete_mode_still_requires_fresh_detail_response() -> No
     assert record["engagement_source"] == "detail_api"
     assert record["engagement_observed_at"] is not None
     assert record["liked"] == 0
+
+
+@pytest.mark.parametrize(
+    ("cover_visible", "expected_selector"),
+    ((True, "a.cover.mask.ld"), (False, "a.title")),
+    ids=("visible-cover", "visible-title-fallback"),
+)
+def test_dom_fallback_complete_uses_real_visible_child_click(
+    cover_visible: bool,
+    expected_selector: str,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        cards=[
+            {
+                "note_id": "dom-one",
+                "title": "DOM title",
+                "visible": True,
+                "links": [
+                    {"selector": "a", "visible": False},
+                    {"selector": "a.cover.mask.ld", "visible": cover_visible},
+                    {"selector": "a.title", "visible": True},
+                ],
+            }
+        ],
+        detail_response_on_click=detail_response("dom-one"),
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )[0]
+
+    assert record["detail_completed"] is True
+    assert record["engagement_fresh"] is True
+    assert page.handle_clicks == [("dom-one", expected_selector)]
+    assert page.synthetic_clicks == []
+    assert "a" not in [selector for _, selector in page.handle_clicks]
+    assert all("dom-one" not in selector for selector in page.locator_queries)
+    assert page.active_handles == 0
+
+
+@pytest.mark.parametrize(
+    ("url_override", "note_id_override"),
+    (
+        ("https://www.xiaohongshu.com/user/profile/other", None),
+        (None, "changed-card"),
+    ),
+    ids=("creator-target-changed", "card-id-changed"),
+)
+def test_detail_click_fails_closed_when_dom_target_changes_during_selection(
+    url_override: str | None,
+    note_id_override: str | None,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _click_note_and_check
+
+    response = detail_response("dom-one")
+    page = Page(
+        url="https://www.xiaohongshu.com/user/profile/u",
+        cards=[
+            {
+                "note_id": "dom-one",
+                "visible": True,
+                "links": [{"selector": "a.cover.mask.ld", "visible": True}],
+            }
+        ],
+        detail_response_on_click=response,
+        detail_dom_url_override=url_override,
+        detail_dom_note_id_override=note_id_override,
+    )
+
+    with pytest.raises(PlaywrightError, match="current note card is unavailable"):
+        run(_click_note_and_check(page, "dom-one"))
+
+    assert page.handle_clicks == []
+    assert page.synthetic_clicks == []
+    assert page.detail_response_on_click is response
+    assert page.responses == []
+    assert page.active_handles == 0
+
+
+def test_detail_click_disposes_candidate_when_validation_raises() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _click_note_and_check
+
+    page = Page(
+        url="https://www.xiaohongshu.com/user/profile/u",
+        cards=[{"note_id": "dom-one", "visible": True}],
+        detail_validation_error=True,
+    )
+
+    with pytest.raises(PlaywrightError, match="candidate validation failure"):
+        run(_click_note_and_check(page, "dom-one"))
+
+    assert page.handle_clicks == []
+    assert page.active_handles == 0
 
 
 def test_dom_fallback_detail_timeout_keeps_fixed_detail_reason_code() -> None:
