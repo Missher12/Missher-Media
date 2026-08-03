@@ -118,6 +118,12 @@ def test_creator_dispatches_sequentially_and_preserves_platform_options(tmp_path
         },
         "platforms": {"bilibili": "complete", "xhs": "complete", "douyin": "complete", "weibo": "complete"},
         "status": "complete",
+        "diagnostics": {
+            "bilibili": {"kind": "ok", "code": "ok"},
+            "xhs": {"kind": "ok", "code": "ok"},
+            "douyin": {"kind": "ok", "code": "ok"},
+            "weibo": {"kind": "ok", "code": "ok"},
+        },
     }
     for name in ("bilibili.json", "xhs.json", "xhs_checkpoint.json", "xhs_report.json", "douyin.json", "weibo.json", "manifest.json"):
         assert stat.S_IMODE((run_dir / name).stat().st_mode) == 0o600
@@ -150,6 +156,12 @@ def test_risk_stop_aborts_all_later_platforms_and_is_recorded_privately(tmp_path
     assert manifest["platforms"] == {
         "bilibili": "complete", "xhs": "risk-stopped", "douyin": "not-run", "weibo": "not-run"
     }
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "ok", "code": "ok"},
+        "xhs": {"kind": "risk-stop", "code": "risk-signal"},
+        "douyin": {"kind": "not-run", "code": "prior-risk-stop"},
+        "weibo": {"kind": "not-run", "code": "prior-risk-stop"},
+    }
     assert "risk response" not in json.dumps(manifest)
 
 
@@ -172,7 +184,183 @@ def test_non_risk_failure_is_isolated_and_later_platforms_continue(tmp_path: Pat
     assert manifest["status"] == "failed"
     assert manifest["platforms"] == {"bilibili": "complete", "xhs": "failed", "douyin": "complete"}
     assert manifest["counts"] == {"bilibili": 1, "xhs": 0, "douyin": 1}
+    assert manifest["diagnostics"]["xhs"] == {
+        "kind": "internal",
+        "code": "unexpected",
+    }
     assert "secret detail" not in json.dumps(manifest)
+
+
+@pytest.mark.parametrize(
+    ("platform", "error_factory", "expected"),
+    [
+        (
+            "bilibili",
+            lambda: __import__(
+                "runtime.media_missher_runtime.platforms.bilibili",
+                fromlist=["SourceResponseError"],
+            ).SourceResponseError("https://server.invalid/?uid=private-bili"),
+            {"kind": "source-response", "code": "source-response-failed"},
+        ),
+        (
+            "xhs",
+            lambda: __import__(
+                "runtime.media_missher_runtime.browser", fromlist=["PreconditionError"]
+            ).PreconditionError("uid=private-xhs https://server.invalid/secret"),
+            {"kind": "precondition", "code": "precondition-failed"},
+        ),
+        (
+            "douyin",
+            lambda: ModuleNotFoundError("private.douyin.dependency"),
+            {"kind": "dependency", "code": "module-not-found"},
+        ),
+        (
+            "weibo",
+            lambda: TimeoutError("private-weibo-query"),
+            {"kind": "timeout", "code": "platform-timeout"},
+        ),
+    ],
+)
+def test_failure_diagnostics_use_only_strict_codes(
+    platform: str,
+    error_factory: object,
+    expected: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    error = error_factory()  # type: ignore[operator]
+    dispatcher = FakeDispatcher({platform: error})
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            platform,
+            f"--{platform}-uid",
+            "private-uid",
+            "--count",
+            "1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 1
+    _, manifest = _manifest(tmp_path)
+    assert manifest["diagnostics"] == {platform: expected}
+    encoded = json.dumps(manifest)
+    for secret in (
+        "server.invalid",
+        "private-bili",
+        "private-xhs",
+        "private.douyin.dependency",
+        "private-weibo-query",
+    ):
+        assert secret not in encoded
+
+
+def test_collector_contract_diagnostic_does_not_persist_invalid_value(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher({"bilibili": {"uid": "must-not-persist"}})
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "private-uid",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 1
+    _, manifest = _manifest(tmp_path)
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "collector-contract", "code": "invalid-records"}
+    }
+    assert "must-not-persist" not in json.dumps(manifest)
+
+
+@pytest.mark.parametrize(
+    "capture_code", ["creator-capture-timeout", "detail-capture-timeout"]
+)
+def test_xhs_capture_timeout_keeps_only_its_fixed_code(
+    capture_code: str, tmp_path: Path
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+    from runtime.media_missher_runtime.platforms.xhs import CaptureTimeout
+
+    dispatcher = FakeDispatcher({"xhs": CaptureTimeout(capture_code)})
+    returncode = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "private-xhs",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert returncode == 1
+    run_dir, manifest = _manifest(tmp_path)
+    assert manifest["diagnostics"] == {
+        "xhs": {"kind": "timeout", "code": capture_code}
+    }
+    report = json.loads((run_dir / "xhs_report.json").read_text(encoding="utf-8"))
+    assert report["reason"] == capture_code
+
+
+@pytest.mark.parametrize(
+    ("reason", "code"),
+    [
+        ("http-403", "http-403"),
+        ("http-429", "http-429"),
+        ("payload-461", "payload-461"),
+        ("payload-471", "payload-471"),
+        ("payload-999", "payload-999"),
+        ("challenge-selector", "challenge"),
+        ("privateuid123", "risk-signal"),
+    ],
+)
+def test_risk_reason_is_mapped_to_a_fixed_code(
+    reason: str, code: str, tmp_path: Path
+) -> None:
+    from runtime.media_missher_runtime.cli import RiskStop, main
+
+    dispatcher = FakeDispatcher({"xhs": RiskStop(reason)})
+    returncode = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs,douyin",
+            "--xhs-uid",
+            "private-xhs",
+            "--douyin-uid",
+            "private-douyin",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert returncode == 75
+    run_dir, manifest = _manifest(tmp_path)
+    assert manifest["diagnostics"] == {
+        "xhs": {"kind": "risk-stop", "code": code},
+        "douyin": {"kind": "not-run", "code": "prior-risk-stop"},
+    }
+    report = json.loads((run_dir / "xhs_report.json").read_text(encoding="utf-8"))
+    assert report["reason"] == code
+    assert reason not in json.dumps({"manifest": manifest, "report": report}) or reason == code
 
 
 def test_count_shortfall_and_incomplete_detail_cannot_be_reported_as_complete(tmp_path: Path) -> None:

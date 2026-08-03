@@ -99,6 +99,7 @@ platforms = tuple((args.platform or ",".join(PLATFORMS)).split(",")) if script_n
 paths = {}
 counts = {}
 statuses = {}
+diagnostics = {}
 for platform in platforms:
     requested = getattr(args, f"{platform}_count", None)
     count = requested if requested is not None else args.count
@@ -108,6 +109,7 @@ for platform in platforms:
         count = min(count, max(0, int(cap)))
     counts[platform] = count
     statuses[platform] = "complete"
+    diagnostics[platform] = {"kind": "ok", "code": "ok"}
     records = [{
         "platform": platform,
         {"bilibili": "dynamic_id", "xhs": "note_id", "douyin": "aweme_id", "weibo": "mblog_id"}[platform]: f"synthetic-{platform}-{index}",
@@ -138,10 +140,11 @@ if "xhs" in platforms:
 manifest_status = "risk-stopped" if mode == "manifest_risk" else "complete"
 if mode == "manifest_risk":
     statuses[platforms[-1]] = "risk-stopped"
+    diagnostics[platforms[-1]] = {"kind": "risk-stop", "code": "payload-471"}
 if mode == "manifest_invalid_platform_status":
     statuses[platforms[-1]] = {}
 manifest = inner / "manifest.json"
-manifest.write_text(json.dumps({"counts": counts, "paths": paths, "platforms": statuses, "status": manifest_status}), encoding="utf-8")
+manifest.write_text(json.dumps({"counts": counts, "paths": paths, "platforms": statuses, "status": manifest_status, "diagnostics": diagnostics}), encoding="utf-8")
 manifest.chmod(0o600)
 print("synthetic collection complete")
 raise SystemExit(75 if mode == "manifest_risk" else 0)
@@ -233,6 +236,9 @@ def test_discover_current_json_rejects_stale_files(tmp_path):
                 "paths": {"bilibili": current.name},
                 "platforms": {"bilibili": "shortfall"},
                 "status": "failed",
+                "diagnostics": {
+                    "bilibili": {"kind": "result", "code": "count-shortfall"}
+                },
             }
         ),
         encoding="utf-8",
@@ -271,12 +277,47 @@ def test_discover_current_json_rejects_unexpected_manifest_path_key(tmp_path):
                 "paths": {"unexpected": "unexpected.json"},
                 "platforms": {"xhs": "complete"},
                 "status": "complete",
+                "diagnostics": {"xhs": {"kind": "ok", "code": "ok"}},
             }
         ),
         encoding="utf-8",
     )
 
     with __import__("pytest").raises(ConfigurationError, match="unexpected manifest path key"):
+        discover_current_json(tmp_path, started_ns=started_ns)
+
+
+@pytest.mark.parametrize(
+    "diagnostics",
+    [
+        {},
+        {"xhs": {"kind": "risk-stop", "code": "privateuid123"}},
+        {"xhs": {"kind": "ok", "code": "ok", "reason": "private"}},
+        {"weibo": {"kind": "ok", "code": "ok"}},
+    ],
+)
+def test_discover_current_json_rejects_non_strict_diagnostics(
+    tmp_path, diagnostics
+):
+    started_ns = time.time_ns()
+    inner = tmp_path / "run-current"
+    inner.mkdir(mode=0o700)
+    artifact = inner / "xhs.json"
+    artifact.write_text("[]", encoding="utf-8")
+    (inner / "manifest.json").write_text(
+        json.dumps(
+            {
+                "counts": {"xhs": 0},
+                "paths": {"xhs": "xhs.json"},
+                "platforms": {"xhs": "complete"},
+                "status": "complete",
+                "diagnostics": diagnostics,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="diagnostic"):
         discover_current_json(tmp_path, started_ns=started_ns)
 
 
@@ -291,6 +332,7 @@ def test_discover_current_json_requires_path_for_completed_platform(tmp_path):
                 "paths": {},
                 "platforms": {"xhs": "complete"},
                 "status": "complete",
+                "diagnostics": {"xhs": {"kind": "ok", "code": "ok"}},
             }
         ),
         encoding="utf-8",
@@ -329,6 +371,7 @@ def test_discover_current_json_rejects_invalid_xhs_checkpoint(tmp_path):
                 },
                 "platforms": {"xhs": "complete"},
                 "status": "complete",
+                "diagnostics": {"xhs": {"kind": "ok", "code": "ok"}},
             }
         ),
         encoding="utf-8",
@@ -355,6 +398,14 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
     assert len(summary["evidence"]) == 1
     assert Path(summary["run_dir"]).is_dir()
     assert summary["validation"]["counts"] == {"douyin": 1}
+    manifest_diagnostic = next(
+        item
+        for item in summary["validation"]["diagnostics"]
+        if Path(item["path"]).name == "manifest.json"
+    )
+    assert manifest_diagnostic["platforms"] == {
+        "douyin": {"kind": "ok", "code": "ok"}
+    }
 
 
 def test_run_collection_rejects_mixed_release_before_preflight_or_output(
@@ -815,5 +866,5 @@ def test_malformed_manifest_platform_status_returns_structured_failure(
         },
     )
 
-    assert summary["status"] == "partial"
-    assert any("invalid platform statuses" in error for error in summary["errors"])
+    assert summary["status"] == "failed"
+    assert any("diagnostic" in error for error in summary["errors"])

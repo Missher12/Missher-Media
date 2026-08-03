@@ -425,6 +425,63 @@ def test_creator_response_timeout_rechecks_challenge_before_stopping_pagination(
         run(collect_creator(CollectionRequest(platform="xhs", count=0, page_cap=2, uid="u"), Browser(page)))
 
 
+def test_initial_creator_capture_timeout_rechecks_challenge_then_uses_fixed_code() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import (
+        CaptureTimeout,
+        CollectionStopped,
+        collect_creator,
+    )
+
+    with pytest.raises(CaptureTimeout) as timeout:
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u"),
+                Browser(Page()),
+            )
+        )
+    assert timeout.value.code == "creator-capture-timeout"
+
+    challenged = Page(challenge_on_response_timeout=True)
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u"),
+                Browser(challenged),
+            )
+        )
+
+
+def test_detail_capture_timeout_rechecks_challenge_then_uses_fixed_code() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import (
+        CaptureTimeout,
+        CollectionStopped,
+        collect_creator,
+    )
+
+    page = Page(responses=[creator_response(note("one"))], cards=[{"note_id": "one"}])
+    with pytest.raises(CaptureTimeout) as timeout:
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+                Browser(page),
+            )
+        )
+    assert timeout.value.code == "detail-capture-timeout"
+
+    challenged = Page(
+        responses=[creator_response(note("one"))],
+        cards=[{"note_id": "one"}],
+        challenge_on_response_timeout=True,
+    )
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+                Browser(challenged),
+            )
+        )
+
+
 def test_search_card_change_timeout_rechecks_challenge_before_normal_break() -> None:
     from runtime.media_missher_runtime.platforms.xhs import CollectionStopped, search
     page = Page(
@@ -603,6 +660,29 @@ def test_risk_success_false_challenge_and_reports_cannot_leak_content_or_secrets
     report = build_run_report("complete", [{"note_id": "n", "title": "must-not-leak", "detail_attempted": True, "detail_completed": True, "complete": True, "engagement_fresh": True}], "start", "end", reason="xsec_token=must-not-leak")
     checkpoint = build_checkpoint([{"note_id": "n", "observed_at": "now", "xsec_token": "must-not-leak"}])
     encoded = json.dumps({"report": report, "checkpoint": checkpoint})
-    assert report == {"status": "complete", "started_at": "start", "finished_at": "end", "final_items": 1, "complete_items": 1, "fresh_items": 1, "detail_attempts": 1, "detail_successes": 1, "reason": "redacted"}
+    assert report == {"status": "complete", "started_at": "start", "finished_at": "end", "final_items": 1, "complete_items": 1, "fresh_items": 1, "detail_attempts": 1, "detail_successes": 1, "reason": "risk-signal"}
     assert checkpoint == {"items": [{"note_id": "n", "observed_at": "now"}]}
     assert "must-not-leak" not in encoded
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("http-403", "http-403"),
+        ("payload-471", "payload-471"),
+        ("challenge", "challenge"),
+        ("privateuid12345", "risk-signal"),
+        ("https://example.invalid/?uid=private", "risk-signal"),
+        ("account server message", "risk-signal"),
+    ],
+)
+def test_xhs_report_reason_uses_only_fixed_diagnostic_codes(
+    reason: str, expected: str
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import build_run_report
+
+    report = build_run_report("failed", [], "start", "end", reason=reason)
+
+    assert report["reason"] == expected
+    if expected == "risk-signal":
+        assert reason not in json.dumps(report)

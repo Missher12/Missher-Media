@@ -44,6 +44,50 @@ SOURCE_TREE_MARKER = ".media-missher-source-tree"
 SOURCE_TREE_IDENTITY = b"media-missher-source-v1\n"
 MAX_RELEASE_ID_BYTES = 128
 _RELEASE_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_MANIFEST_KEYS = frozenset(
+    {"counts", "paths", "platforms", "status", "diagnostics"}
+)
+_DIAGNOSTIC_CODES = {
+    "ok": frozenset({"ok"}),
+    "result": frozenset({"count-shortfall", "incomplete-record"}),
+    "not-run": frozenset({"preflight-aborted", "prior-risk-stop"}),
+    "dependency": frozenset({"module-not-found"}),
+    "precondition": frozenset({"precondition-failed"}),
+    "source-response": frozenset({"source-response-failed"}),
+    "risk-stop": frozenset(
+        {
+            "http-403",
+            "http-429",
+            "payload-461",
+            "payload-471",
+            "payload-999",
+            "challenge",
+            "risk-signal",
+        }
+    ),
+    "timeout": frozenset(
+        {"platform-timeout", "creator-capture-timeout", "detail-capture-timeout"}
+    ),
+    "collector-contract": frozenset({"invalid-records"}),
+    "internal": frozenset({"unexpected"}),
+}
+_STATUS_KINDS = {
+    "complete": frozenset({"ok"}),
+    "shortfall": frozenset({"result"}),
+    "incomplete": frozenset({"result"}),
+    "failed": frozenset(
+        {
+            "dependency",
+            "precondition",
+            "source-response",
+            "timeout",
+            "collector-contract",
+            "internal",
+        }
+    ),
+    "risk-stopped": frozenset({"risk-stop"}),
+    "not-run": frozenset({"not-run"}),
+}
 
 
 class ConfigurationError(ValueError):
@@ -56,6 +100,63 @@ class _RuntimeLeaseError(ConfigurationError):
     def __init__(self, message: str, *, lease_acquired: bool = False) -> None:
         super().__init__(message)
         self.lease_acquired = lease_acquired
+
+
+def _validated_manifest_diagnostics(manifest: object) -> dict[str, dict[str, str]]:
+    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_KEYS:
+        raise ConfigurationError("invalid runtime manifest diagnostic contract")
+    counts = manifest.get("counts")
+    platforms = manifest.get("platforms")
+    diagnostics = manifest.get("diagnostics")
+    if not all(isinstance(value, dict) for value in (counts, platforms, diagnostics)):
+        raise ConfigurationError("invalid runtime manifest diagnostic contract")
+    selected = set(platforms)
+    if (
+        not selected
+        or set(counts) != selected
+        or set(diagnostics) != selected
+        or any(platform not in PLATFORMS for platform in selected)
+    ):
+        raise ConfigurationError("invalid runtime manifest diagnostic platform keys")
+    sanitized: dict[str, dict[str, str]] = {}
+    for platform in platforms:
+        platform_status = platforms[platform]
+        value = diagnostics[platform]
+        if (
+            not isinstance(platform_status, str)
+            or platform_status not in _STATUS_KINDS
+            or not isinstance(value, dict)
+            or set(value) != {"kind", "code"}
+        ):
+            raise ConfigurationError("invalid runtime manifest diagnostic schema")
+        kind, code = value.get("kind"), value.get("code")
+        if (
+            not isinstance(kind, str)
+            or not isinstance(code, str)
+            or kind not in _DIAGNOSTIC_CODES
+            or code not in _DIAGNOSTIC_CODES[kind]
+            or kind not in _STATUS_KINDS[platform_status]
+        ):
+            raise ConfigurationError("invalid runtime manifest diagnostic value")
+        expected = {
+            "complete": ("ok", "ok"),
+            "shortfall": ("result", "count-shortfall"),
+            "incomplete": ("result", "incomplete-record"),
+        }.get(platform_status)
+        if expected is not None and (kind, code) != expected:
+            raise ConfigurationError("runtime manifest status and diagnostic differ")
+        sanitized[platform] = {"kind": kind, "code": code}
+    overall = manifest.get("status")
+    expected_overall = (
+        "risk-stopped"
+        if any(value == "risk-stopped" for value in platforms.values())
+        else "complete"
+        if all(value == "complete" for value in platforms.values())
+        else "failed"
+    )
+    if overall != expected_overall:
+        raise ConfigurationError("runtime manifest overall diagnostic is inconsistent")
+    return sanitized
 
 
 @dataclass(frozen=True)
@@ -678,6 +779,7 @@ def discover_current_json(run_dir: Path, *, started_ns: int) -> tuple[Path, ...]
         raise ConfigurationError(f"invalid runtime manifest: {type(exc).__name__}: {exc}") from exc
     if not isinstance(manifest, dict):
         raise ConfigurationError("invalid runtime manifest: expected a JSON object")
+    _validated_manifest_diagnostics(manifest)
     paths = manifest.get("paths")
     if not isinstance(paths, dict):
         raise ConfigurationError("invalid runtime manifest: paths must be a JSON object")
@@ -1097,7 +1199,7 @@ def _xhs_complete(record: Mapping, started_ns: int) -> bool:
 def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
     errors: list[str] = []
     evidence: list[str] = []
-    diagnostics: list[dict[str, str]] = []
+    diagnostics: list[dict[str, object]] = []
     collected: dict[str, list[dict]] = {platform: [] for platform in request.platforms}
     risk_stopped = False
     for raw_path in paths:
@@ -1123,10 +1225,20 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
         if isinstance(payload, dict):
             status = str(payload.get("status", "")).lower().replace("_", "-")
             if path.name == "manifest.json":
-                diagnostics.append({"path": str(path), "status": status or "unknown"})
-                required_keys = {"counts", "paths", "platforms", "status"}
-                if set(payload) != required_keys:
-                    errors.append(f"runtime manifest has an invalid schema: {path}")
+                try:
+                    safe_diagnostics = _validated_manifest_diagnostics(payload)
+                except ConfigurationError:
+                    errors.append(
+                        f"runtime manifest has an invalid diagnostic contract: {path}"
+                    )
+                    continue
+                diagnostics.append(
+                    {
+                        "path": str(path),
+                        "status": status or "unknown",
+                        "platforms": safe_diagnostics,
+                    }
+                )
                 counts_payload = payload.get("counts")
                 paths_payload = payload.get("paths")
                 platforms_payload = payload.get("platforms")

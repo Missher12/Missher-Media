@@ -79,6 +79,14 @@ def test_validation_preserves_runtime_manifest_failure_statuses(
         (FIXTURES / "bilibili_creator.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    diagnostic = {
+        "complete": {"kind": "ok", "code": "ok"},
+        "shortfall": {"kind": "result", "code": "count-shortfall"},
+        "incomplete": {"kind": "result", "code": "incomplete-record"},
+        "failed": {"kind": "source-response", "code": "source-response-failed"},
+        "not-run": {"kind": "not-run", "code": "preflight-aborted"},
+        "risk-stopped": {"kind": "risk-stop", "code": "payload-471"},
+    }[platform_status]
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -87,6 +95,7 @@ def test_validation_preserves_runtime_manifest_failure_statuses(
                 "paths": {"bilibili": "bilibili.json"},
                 "platforms": {"bilibili": platform_status},
                 "status": overall_status,
+                "diagnostics": {"bilibili": diagnostic},
             }
         ),
         encoding="utf-8",
@@ -105,6 +114,45 @@ def test_validation_preserves_runtime_manifest_failure_statuses(
     assert [record["dynamic_id"] for record in result["records"]] == [
         "synthetic-bili-creator-1"
     ]
+    manifest_diagnostic = next(
+        item for item in result["diagnostics"] if Path(item["path"]).name == "manifest.json"
+    )
+    assert manifest_diagnostic["platforms"] == {"bilibili": diagnostic}
+
+
+@pytest.mark.parametrize(
+    "diagnostics",
+    [
+        {},
+        {"bilibili": {"kind": "source-response", "code": "private-server-message"}},
+        {"bilibili": {"kind": "internal", "code": "unexpected", "detail": "private"}},
+        {"weibo": {"kind": "ok", "code": "ok"}},
+    ],
+)
+def test_validation_rejects_non_strict_manifest_diagnostics(tmp_path, diagnostics):
+    started_ns = time.time_ns() - 1_000_000
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "counts": {"bilibili": 0},
+                "paths": {},
+                "platforms": {"bilibili": "failed"},
+                "status": "failed",
+                "diagnostics": diagnostics,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(manifest, ns=(started_ns + 1, started_ns + 1))
+
+    result = validate_run(
+        (manifest,), CollectionRequest(platforms=("bilibili",), count=1), started_ns
+    )
+
+    assert result["status"] == "failed"
+    assert any("diagnostic" in error for error in result["errors"])
+    assert "private-server-message" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("payload", ["{not-json", json.dumps({"unexpected": "object"})])

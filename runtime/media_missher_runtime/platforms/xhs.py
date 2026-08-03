@@ -52,6 +52,18 @@ class SourceResponseError(RuntimeError):
     """A browser-generated response was malformed or non-risk unsuccessful."""
 
 
+class CaptureTimeout(TimeoutError):
+    """A response listener timed out after a fresh challenge check."""
+
+    _CODES = frozenset({"creator-capture-timeout", "detail-capture-timeout"})
+
+    def __init__(self, code: str) -> None:
+        if code not in self._CODES:
+            raise ValueError("unsupported capture timeout code")
+        self.code = code
+        super().__init__(code)
+
+
 @dataclass(slots=True)
 class XhsCollector:
     request: CollectionRequest
@@ -71,7 +83,15 @@ class XhsCollector:
             raise PreconditionError("Xiaohongshu creator collection requires authorized navigation")
         await _raise_for_challenge(page)
         creator_predicate = lambda response: _is_creator_response(response, self.request.uid)
-        response = await _capture_while(page, creator_predicate, lambda: self._navigate_and_check(page, target))
+        try:
+            response = await _capture_while(
+                page,
+                creator_predicate,
+                lambda: self._navigate_and_check(page, target),
+            )
+        except PlaywrightTimeoutError as error:
+            await _raise_for_challenge(page)
+            raise CaptureTimeout("creator-capture-timeout") from error
         records = await self._collect_creator_pages(page, response)
         if self.request.complete:
             for record in records:
@@ -107,9 +127,9 @@ class XhsCollector:
             await _scroll_and_check(page)
             try:
                 await _wait_for_card_change(page, sorted(seen))
-            except PlaywrightTimeoutError:
+            except PlaywrightTimeoutError as error:
                 await _raise_for_challenge(page)
-                break
+                raise CaptureTimeout("creator-capture-timeout") from error
         return records
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
@@ -156,7 +176,15 @@ class XhsCollector:
         primary_error: BaseException | None = None
         try:
             attempt_started_at = datetime.now(UTC)
-            response = await _capture_while(page, _is_detail_response, lambda: _click_note_and_check(page, note_id))
+            try:
+                response = await _capture_while(
+                    page,
+                    _is_detail_response,
+                    lambda: _click_note_and_check(page, note_id),
+                )
+            except PlaywrightTimeoutError as error:
+                await _raise_for_challenge(page)
+                raise CaptureTimeout("detail-capture-timeout") from error
             payload = await _response_payload(response)
             attempt_finished_at = datetime.now(UTC)
             card = _detail_card(
@@ -834,7 +862,28 @@ def _observed_at() -> str:
 
 def _safe_report_reason(value: object) -> str:
     """Keep operational reason codes, never an arbitrary server/body message."""
-    reason = str(value).strip().casefold()
-    if re.fullmatch(r"(?:http-)?(?:403|429)|payload-(?:461|471|999)|[a-z][a-z0-9_-]{0,63}", reason):
+    reason = value.strip().casefold() if isinstance(value, str) else ""
+    if reason in {
+        "ok",
+        "count-shortfall",
+        "incomplete-record",
+        "preflight-aborted",
+        "prior-risk-stop",
+        "module-not-found",
+        "precondition-failed",
+        "source-response-failed",
+        "http-403",
+        "http-429",
+        "payload-461",
+        "payload-471",
+        "payload-999",
+        "challenge",
+        "risk-signal",
+        "platform-timeout",
+        "creator-capture-timeout",
+        "detail-capture-timeout",
+        "invalid-records",
+        "unexpected",
+    }:
         return reason
-    return "redacted"
+    return "risk-signal"

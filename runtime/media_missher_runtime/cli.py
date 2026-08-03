@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .browser import BrowserSession
+from .browser import BrowserSession, PreconditionError
 from .models import CollectionRequest
 from .platforms import bilibili, douyin, weibo, xhs
 from .storage import RunStore
@@ -32,10 +32,57 @@ _PLATFORM_STOPS = (
     douyin.CollectionStopped,
     weibo.CollectionStopped,
 )
+_SOURCE_RESPONSE_ERRORS = (
+    bilibili.SourceResponseError,
+    xhs.SourceResponseError,
+    douyin.SourceResponseError,
+    weibo.SourceResponseError,
+)
+_SAFE_RISK_CODES = frozenset(
+    {
+        "http-403",
+        "http-429",
+        "payload-461",
+        "payload-471",
+        "payload-999",
+    }
+)
+_CHALLENGE_REASONS = frozenset(
+    {
+        "captcha",
+        "challenge",
+        "challenge-selector",
+        "请完成验证",
+        "访问受限",
+        "请求过于频繁",
+        "账号异常",
+        "风控",
+        "安全验证",
+        "验证码",
+    }
+)
+
+
+def _safe_risk_code(value: object) -> str:
+    reason = value if isinstance(value, str) else ""
+    normalized = reason.strip().casefold()
+    if normalized in _SAFE_RISK_CODES:
+        return normalized
+    if normalized in _CHALLENGE_REASONS:
+        return "challenge"
+    return "risk-signal"
 
 
 class RiskStop(RuntimeError):
     """Signal that no later platform may be run in this invocation."""
+
+    def __init__(self, reason: object = None) -> None:
+        self.code = _safe_risk_code(reason)
+        super().__init__(self.code)
+
+
+class CollectorContractError(RuntimeError):
+    """Signal that a collector returned a value outside the runtime contract."""
 
 
 class RuntimeDispatcher:
@@ -70,7 +117,8 @@ class RuntimeDispatcher:
         try:
             return await operation(request, self.browser)
         except _PLATFORM_STOPS as exc:
-            raise RiskStop(request.platform) from exc
+            reason = exc.args[0] if len(exc.args) == 1 else None
+            raise RiskStop(reason) from exc
 
 
 def _non_negative_int(value: str) -> int:
@@ -224,13 +272,40 @@ def _write_xhs_artifacts(
     *,
     status: str,
     started_at: str,
+    reason: str | None = None,
 ) -> dict[str, str]:
     finished_at = datetime.now(UTC).isoformat()
-    report = xhs.build_run_report(status, records, started_at, finished_at)
+    report = xhs.build_run_report(
+        status, records, started_at, finished_at, reason=reason
+    )
     checkpoint = xhs.build_checkpoint(records)
     report_path = store.write_json("xhs_report.json", report)
     checkpoint_path = store.write_json("xhs_checkpoint.json", checkpoint)
     return {"xhs_report": report_path.name, "xhs_checkpoint": checkpoint_path.name}
+
+
+def _result_diagnostic(status: str) -> dict[str, str]:
+    if status == "complete":
+        return {"kind": "ok", "code": "ok"}
+    if status == "shortfall":
+        return {"kind": "result", "code": "count-shortfall"}
+    return {"kind": "result", "code": "incomplete-record"}
+
+
+def _failure_diagnostic(error: BaseException) -> dict[str, str]:
+    if isinstance(error, ModuleNotFoundError):
+        return {"kind": "dependency", "code": "module-not-found"}
+    if isinstance(error, PreconditionError):
+        return {"kind": "precondition", "code": "precondition-failed"}
+    if isinstance(error, _SOURCE_RESPONSE_ERRORS):
+        return {"kind": "source-response", "code": "source-response-failed"}
+    if isinstance(error, xhs.CaptureTimeout):
+        return {"kind": "timeout", "code": error.code}
+    if isinstance(error, TimeoutError):
+        return {"kind": "timeout", "code": "platform-timeout"}
+    if isinstance(error, CollectorContractError):
+        return {"kind": "collector-contract", "code": "invalid-records"}
+    return {"kind": "internal", "code": "unexpected"}
 
 
 async def _run_requests(
@@ -245,6 +320,10 @@ async def _run_requests(
     statuses = {platform: "not-run" for platform in selected}
     counts = {platform: 0 for platform in selected}
     paths: dict[str, str] = {}
+    diagnostics = {
+        platform: {"kind": "not-run", "code": "preflight-aborted"}
+        for platform in selected
+    }
 
     async with dispatcher:
         preflight = getattr(dispatcher, "preflight", None)
@@ -264,34 +343,67 @@ async def _run_requests(
                     else await operation
                 )
                 if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
-                    raise ValueError("collector returned invalid records")
+                    raise CollectorContractError
                 path = store.write_json(f"{platform}.json", records)
                 counts[platform] = len(records)
                 paths[platform] = path.name
                 statuses[platform] = _result_status(request, records)
+                diagnostics[platform] = _result_diagnostic(statuses[platform])
                 if platform == "xhs":
                     paths.update(_write_xhs_artifacts(store, records, status=statuses[platform], started_at=started_at))
                 if statuses[platform] != "complete":
                     failed = True
-            except RiskStop:
+            except RiskStop as error:
                 statuses[platform] = "risk-stopped"
+                diagnostics[platform] = {
+                    "kind": "risk-stop",
+                    "code": error.code,
+                }
                 if platform == "xhs":
-                    paths.update(_write_xhs_artifacts(store, [], status="risk-stopped", started_at=started_at))
+                    paths.update(
+                        _write_xhs_artifacts(
+                            store,
+                            [],
+                            status="risk-stopped",
+                            started_at=started_at,
+                            reason=error.code,
+                        )
+                    )
                 risk_stopped = True
                 break
-            except Exception:
+            except Exception as error:
                 statuses[platform] = "failed"
+                diagnostic = _failure_diagnostic(error)
+                diagnostics[platform] = diagnostic
                 if platform == "xhs":
                     try:
-                        paths.update(_write_xhs_artifacts(store, [], status="failed", started_at=started_at))
+                        paths.update(
+                            _write_xhs_artifacts(
+                                store,
+                                [],
+                                status="failed",
+                                started_at=started_at,
+                                reason=diagnostic["code"],
+                            )
+                        )
                     except Exception:
                         pass
                 failed = True
 
+        if risk_stopped:
+            for platform, status in statuses.items():
+                if status == "not-run":
+                    diagnostics[platform] = {
+                        "kind": "not-run",
+                        "code": "prior-risk-stop",
+                    }
         overall = "risk-stopped" if risk_stopped else "failed" if failed else "complete"
-        store.write_json(
-            "manifest.json",
-            {"counts": counts, "paths": paths, "platforms": statuses, "status": overall},
+        store.write_manifest(
+            counts=counts,
+            paths=paths,
+            platforms=statuses,
+            status=overall,
+            diagnostics=diagnostics,
         )
     return 75 if risk_stopped else 1 if failed else 0
 

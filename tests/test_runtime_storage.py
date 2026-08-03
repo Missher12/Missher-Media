@@ -29,19 +29,38 @@ def test_run_store_writes_private_json_without_losing_values(tmp_path: Path) -> 
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
-def test_manifest_accepts_only_counts_status_and_path_metadata(tmp_path: Path) -> None:
+def test_manifest_accepts_only_strict_status_and_diagnostic_metadata(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.storage import RunStore
 
     store = RunStore.create(tmp_path, "manifest")
-    manifest = store.write_manifest(counts={"records": 0}, status="complete", paths={"records": "records.json"})
+    manifest = store.write_manifest(
+        counts={"bilibili": 0},
+        paths={},
+        platforms={"bilibili": "shortfall"},
+        status="failed",
+        diagnostics={
+            "bilibili": {"kind": "result", "code": "count-shortfall"}
+        },
+    )
 
     assert json.loads(manifest.read_text(encoding="utf-8")) == {
-        "counts": {"records": 0},
-        "status": "complete",
-        "paths": {"records": "records.json"},
+        "counts": {"bilibili": 0},
+        "paths": {},
+        "platforms": {"bilibili": "shortfall"},
+        "status": "failed",
+        "diagnostics": {
+            "bilibili": {"kind": "result", "code": "count-shortfall"}
+        },
     }
     with pytest.raises(ValueError, match="manifest"):
-        store.write_manifest(counts={}, status="complete", paths={}, extra="not allowed")
+        store.write_manifest(
+            counts={},
+            paths={},
+            platforms={},
+            status="complete",
+            diagnostics={},
+            extra="not allowed",
+        )
 
 
 def test_atomic_json_syncs_file_and_containing_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
