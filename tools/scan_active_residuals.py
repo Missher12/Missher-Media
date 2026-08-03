@@ -29,7 +29,7 @@ _SKIPPED_DIRECTORIES = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Finding:
     root: Path
     relative_path: str
