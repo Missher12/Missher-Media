@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import pwd
+import re
 import shlex
 import shutil
 import stat
@@ -86,7 +87,7 @@ def test_install_stages_runtime_and_both_compact_skills_with_private_state(tmp_p
     assert help_scripts == {"scrape_all.py", "scrape_bilibili.py", "scrape_xhs.py", "scrape_douyin.py", "scrape_weibo.py"}
 
 
-def test_install_writes_one_release_id_to_all_four_components(tmp_path: Path) -> None:
+def test_install_records_v12_product_version_and_one_unique_release(tmp_path: Path) -> None:
     result = _install(tmp_path)
     marker_name = ".media-missher-release"
     components = (result.current, result.venv, result.codex_current, result.openclaw_current)
@@ -94,6 +95,11 @@ def test_install_writes_one_release_id_to_all_four_components(tmp_path: Path) ->
     release_ids = {component.joinpath(marker_name).read_text(encoding="utf-8").strip() for component in components}
 
     assert len(release_ids) == 1
+    release = next(iter(release_ids))
+    assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", release)
+    assert result.version == "12.0.0"
+    assert result.release == release
+    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "12.0.0\n"
     assert all(stat.S_IMODE(component.joinpath(marker_name).stat().st_mode) == 0o600 for component in components)
 
 
@@ -453,6 +459,7 @@ def test_runtime_only_never_inspects_or_touches_skill_sources_or_destinations(tm
 
     source = tmp_path / "source"
     shutil.copytree(PROJECT_ROOT / "runtime", source / "runtime", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copy2(PROJECT_ROOT / "VERSION", source / "VERSION")
     real_codex = tmp_path / "real-codex"
     real_openclaw = tmp_path / "real-openclaw"
     for root, marker in ((real_codex, "codex-old"), (real_openclaw, "openclaw-old")):
@@ -495,6 +502,7 @@ def test_installer_rechecks_source_symlinks_immediately_before_copy(tmp_path: Pa
 
     source = tmp_path / "source"
     shutil.copytree(PROJECT_ROOT / "runtime", source / "runtime")
+    shutil.copy2(PROJECT_ROOT / "VERSION", source / "VERSION")
     runtime_source = source / "runtime"
     saved_runtime = source / "runtime-real"
     real_reject = installer._reject_source_symlinks
@@ -528,6 +536,19 @@ def test_installer_cli_exposes_runtime_only_safety_gate() -> None:
     assert "--python" in completed.stdout
 
 
+def test_installer_cli_reports_media_missher_v12_product_version() -> None:
+    script = PROJECT_ROOT / "tools" / "install_media_missher.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "Media@Missher 12.0.0"
+
+
 def test_installer_cli_reports_exact_current_and_recovery_paths(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -541,6 +562,8 @@ def test_installer_cli_reports_exact_current_and_recovery_paths(
 
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
+        "version": result.version,
+        "release": result.release,
         "current": str(result.current),
         "previous": str(result.previous),
         "venv": str(result.venv),

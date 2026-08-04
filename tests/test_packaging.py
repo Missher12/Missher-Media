@@ -88,6 +88,7 @@ def test_openai_metadata_has_required_interface():
         "default_prompt",
     }
     assert all(interface.values())
+    assert interface["display_name"] == "Media@Missher V12"
     assert 25 <= len(interface["short_description"]) <= 64
     assert "$media-missher" in interface["default_prompt"]
 
@@ -240,8 +241,10 @@ def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflig
     ) in corpus
 
 
-def test_project_context_records_clean_boundaries_and_pending_live_cutover():
+def test_project_context_records_clean_boundaries_and_release_state():
     text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
+
+    assert (REPO / "VERSION").read_text(encoding="ascii") == "12.0.0\n"
 
     for phrase in (
         "Source boundary",

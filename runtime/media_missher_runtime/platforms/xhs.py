@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +44,8 @@ _CHALLENGE_PHRASES = (
 _RISK_WORDS = ("risk", "locked", "blocked", "cooldown", "challenge")
 _RISK_CODES = frozenset({461, 471, 999})
 _DETAIL_ATTEMPT_SKEW_SECONDS = 2
+_DETAIL_OPEN_SETTLE_MIN_MS = 5_000
+_DETAIL_OPEN_SETTLE_MAX_MS = 15_000
 _DETAIL_METRIC_POLL_INTERVAL_MS = 250
 _DETAIL_METRIC_POLL_ATTEMPTS = 12
 _SEARCH_SETTLE_ATTEMPTS = 40
@@ -227,6 +230,7 @@ class XhsCollector:
                 raise CaptureTimeout("detail-capture-timeout") from error
             payload = await _response_payload(response)
             attempt_finished_at = datetime.now(UTC)
+            await _wait_after_detail_open(page)
             card = _detail_card(
                 payload,
                 note_id,
@@ -1369,6 +1373,14 @@ async def _click_note_and_check(page: Any, note_id: str) -> None:
         await _dispose_element_handle(click_target)
         for card in cards:
             await _dispose_element_handle(card)
+
+
+async def _wait_after_detail_open(page: Any) -> None:
+    settle_milliseconds = _DETAIL_OPEN_SETTLE_MIN_MS + secrets.randbelow(
+        _DETAIL_OPEN_SETTLE_MAX_MS - _DETAIL_OPEN_SETTLE_MIN_MS + 1
+    )
+    await page.wait_for_timeout(settle_milliseconds)
+    await _raise_for_challenge(page)
 
 
 async def _dispose_element_handle(handle: Any) -> None:

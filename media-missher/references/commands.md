@@ -4,6 +4,12 @@ Use these commands for installation, preflight, creator collection, search, vali
 
 ## Install in two stages
 
+Confirm the source product version before installation:
+
+```bash
+python3 tools/install_media_missher.py --version
+```
+
 Run installation commands from the source repository. The first command installs only `current/`, `venv/`, and private `state/` under `MEDIA_MISSHER_HOME` or `~/.local/share/media-missher`:
 
 ```bash
@@ -63,6 +69,8 @@ python3 "$SKILL_DIR/scripts/run_collection.py" \
 Use `--bilibili-count`, `--xhs-count`, `--douyin-count`, or `--weibo-count` for selected-platform overrides. A matching `--<platform>-uid` overrides the private profile.
 
 Add `--complete` for Bilibili and Xiaohongshu complete collection. You can instead select one with `--bilibili-complete` or `--xhs-complete`. Add `--xhs-comments 10` only when Xiaohongshu is selected.
+
+Xiaohongshu complete mode keeps each successfully opened note visible for one randomized 5–15 second settle after the detail response passes its immediate risk check and before collection values, DOM fallbacks, or comments are read. Keep a sufficient `--platform-timeout` for the requested count; the 600-second example above safely accommodates ordinary bounded batches without reducing this dwell.
 
 Pass `--allow-navigation` only after explicit authorization to navigate exact allowlisted hosts during this run. The controller opens one temporary page per selected platform in the existing browser context, keeps existing pages unchanged, and closes only its temporary pages after the run. Omit it for read-only work and passive collection from already open matching pages.
 

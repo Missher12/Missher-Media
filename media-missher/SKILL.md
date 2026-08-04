@@ -3,7 +3,7 @@ name: media-missher
 description: Operate and validate the shared Media@Missher runtime for Bilibili, Xiaohongshu, Douyin, and Weibo. Use for authorized creator collection, single-platform keyword search, complete Bilibili or Xiaohongshu evidence, fresh-run validation, and diagnosis of CDP, login, timeout, lock, cooldown, or risk failures. Keep review and planning read-only, and never perform a remote Feishu write.
 ---
 
-# Media@Missher
+# Media@Missher V12
 
 Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 
@@ -34,7 +34,7 @@ Read [commands](references/commands.md) before collection or installation. Read 
 - Do not start, restart, terminate, or reprofile Chrome. Do not close or repurpose the user's existing pages.
 - Do not replace cookies, clear locks, clear state, rotate accounts, rotate network exits, or increase concurrency.
 - Do not bypass a captcha, inject stealth behavior, use proxy rotation, defeat fingerprinting controls, or evade platform restrictions.
-- Preserve rate limits, jitter, page caps, timeouts, cooldowns, and sequential execution.
+- Preserve rate limits, jitter, page caps, timeouts, cooldowns, sequential execution, and the Xiaohongshu complete-mode 5–15 second randomized open-note settle.
 - Retry one non-risk failure only after correcting its concrete cause and passing preflight again.
 
 ## Keep Feishu separate

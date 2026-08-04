@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -240,6 +241,7 @@ class Page:
     search_settlement_states: list[dict[str, Any]] = field(default_factory=list)
     settlement_checks: int = 0
     wait_timeouts: list[int] = field(default_factory=list)
+    detail_open_waits: list[int] = field(default_factory=list)
     creator_dom_responses: list[Response] = field(default_factory=list)
     creator_dom_url_override: str | None = None
     detail_response_on_click: Response | None = None
@@ -249,6 +251,7 @@ class Page:
     detail_validation_error: bool = False
     detail_metrics: dict[str, object] = field(default_factory=dict)
     detail_metric_frames: list[dict[str, object]] = field(default_factory=list)
+    challenge_on_detail_open_settle: bool = False
     challenge_on_detail_metric_poll: bool = False
     detail_risk: str = ""
     locator_queries: list[str] = field(default_factory=list)
@@ -354,6 +357,11 @@ class Page:
             raise PlaywrightTimeoutError("synthetic wait timeout")
 
     async def wait_for_timeout(self, milliseconds: int) -> None:
+        if 5_000 <= milliseconds <= 15_000:
+            self.detail_open_waits.append(milliseconds)
+            if self.challenge_on_detail_open_settle:
+                self.challenge = "challenge-selector"
+            return
         self.wait_timeouts.append(milliseconds)
         if self.detail_metric_frames:
             self.detail_metrics = self.detail_metric_frames.pop(0)
@@ -425,6 +433,7 @@ def test_creator_parses_safe_schema_dedupes_and_paginates() -> None:
     assert records[0]["id"] == records[0]["native_id"] == "one"
     assert records[0]["url"] == records[0]["link"] == "https://www.xiaohongshu.com/explore/one"
     assert records[0]["liked"] == 0 and records[0]["comments"] is None
+    assert page.clicked == [] and page.detail_open_waits == []
     serialized = json.dumps(records)
     assert "must-not-leak" not in serialized and "xsec_token" not in serialized and "user_id" not in serialized
 
@@ -451,6 +460,7 @@ def test_search_reads_dom_cards_canonicalizes_links_and_never_completes() -> Non
     assert records[0]["publish_time"] is None
     assert records[0]["cover"] is None
     assert records[0]["image_count"] is None
+    assert page.detail_open_waits == []
     with pytest.raises(ValueError, match="complete search"):
         run(search(CollectionRequest(platform="xhs", count=1, keyword="term", complete=True), Browser(page)))
 
@@ -1408,6 +1418,7 @@ def test_incomplete_detail_risk_stops_without_further_clicks_and_http_is_checked
     with pytest.raises(CollectionStopped, match="http-403"):
         run(collect_creator(CollectionRequest(platform="xhs", count=2, uid="u", complete=True), Browser(page)))
     assert page.clicked == ["one"]
+    assert page.detail_open_waits == []
 
 
 @pytest.mark.parametrize("current_time", (None, "not-a-timestamp", 0))
@@ -1743,6 +1754,108 @@ def test_dom_fallback_complete_uses_real_visible_child_click(
 
 
 @pytest.mark.parametrize(
+    ("random_offset", "expected_milliseconds"),
+    ((0, 5_000), (10_000, 15_000)),
+    ids=("minimum", "maximum"),
+)
+def test_detail_click_waits_once_for_a_random_five_to_fifteen_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    random_offset: int,
+    expected_milliseconds: int,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    def fixed_randbelow(upper_bound: int) -> int:
+        assert upper_bound == 10_001
+        return random_offset
+
+    monkeypatch.setattr(secrets, "randbelow", fixed_randbelow)
+    page = Page(
+        url="https://www.xiaohongshu.com/user/profile/u",
+        responses=[creator_response(note("dom-one")), detail_response("dom-one")],
+        cards=[{"note_id": "dom-one", "visible": True}],
+    )
+
+    run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+            Browser(page),
+        )
+    )
+
+    assert page.clicked == ["dom-one"]
+    assert page.detail_open_waits == [expected_milliseconds]
+
+
+def test_detail_open_settle_rechecks_challenge_before_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import (
+        CollectionStopped,
+        collect_creator,
+    )
+
+    monkeypatch.setattr(secrets, "randbelow", lambda upper_bound: 0)
+    page = Page(
+        url="https://www.xiaohongshu.com/user/profile/u",
+        responses=[creator_response(note("dom-one")), detail_response("dom-one")],
+        cards=[{"note_id": "dom-one", "visible": True}],
+        challenge_on_detail_open_settle=True,
+    )
+
+    with pytest.raises(CollectionStopped, match="challenge-selector"):
+        run(
+            collect_creator(
+                CollectionRequest(platform="xhs", count=1, uid="u", complete=True),
+                Browser(page),
+            )
+        )
+
+    assert page.detail_open_waits == [5_000]
+    assert page.clicked == ["dom-one"]
+    assert page.modal_visible is False
+    assert page.listeners == 0
+
+
+def test_complete_waits_exactly_once_for_each_opened_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    offsets = iter((0, 10_000))
+    random_calls: list[int] = []
+
+    def next_randbelow(upper_bound: int) -> int:
+        random_calls.append(upper_bound)
+        return next(offsets)
+
+    monkeypatch.setattr(secrets, "randbelow", next_randbelow)
+    page = Page(
+        responses=[
+            creator_response(note("one"), note("two")),
+            detail_response("one"),
+            detail_response("two"),
+        ],
+        cards=[
+            {"note_id": "one", "visible": True},
+            {"note_id": "two", "visible": True},
+        ],
+    )
+
+    records = run(
+        collect_creator(
+            CollectionRequest(platform="xhs", count=2, uid="u", complete=True),
+            Browser(page),
+        )
+    )
+
+    assert [record["note_id"] for record in records] == ["one", "two"]
+    assert page.clicked == ["one", "two"]
+    assert page.detail_open_waits == [5_000, 15_000]
+    assert random_calls == [10_001, 10_001]
+
+
+@pytest.mark.parametrize(
     ("url_override", "note_id_override"),
     (
         ("https://www.xiaohongshu.com/user/profile/other", None),
@@ -1776,6 +1889,7 @@ def test_detail_click_fails_closed_when_dom_target_changes_during_selection(
 
     assert page.handle_clicks == []
     assert page.synthetic_clicks == []
+    assert page.detail_open_waits == []
     assert page.detail_response_on_click is response
     assert page.responses == []
     assert page.active_handles == 0

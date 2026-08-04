@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -28,10 +29,15 @@ _OWNER_MARKER = ".media-missher-owner.json"
 _OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
 _RELEASE_MARKER = ".media-missher-release"
 _INSTALL_LOCK = ".media-missher-install.lock"
+_PRODUCT_VERSION_FILE = "VERSION"
+_PRODUCT_VERSION_PATTERN = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
+_MAX_PRODUCT_VERSION_BYTES = 32
 
 
 @dataclass(frozen=True)
 class InstallResult:
+    version: str
+    release: str
     current: Path
     previous: Path | None
     venv: Path
@@ -117,6 +123,23 @@ def select_runtime_python(explicit: Path | str | None) -> Path:
 
 def _absolute(path: Path | str) -> Path:
     return Path(path).expanduser().absolute()
+
+
+def _read_product_version(source: Path) -> str:
+    marker = source / _PRODUCT_VERSION_FILE
+    if marker.is_symlink() or not marker.is_file():
+        raise ValueError("product version file is missing or invalid")
+    try:
+        payload = marker.read_bytes()
+        if len(payload) > _MAX_PRODUCT_VERSION_BYTES:
+            raise ValueError("product version is too long")
+        text = payload.decode("ascii")
+    except (OSError, UnicodeError) as error:
+        raise ValueError("product version is unreadable") from error
+    version = text[:-1] if text.endswith("\n") else text
+    if text not in {version, version + "\n"} or not _PRODUCT_VERSION_PATTERN.fullmatch(version):
+        raise ValueError("product version must use semantic X.Y.Z format")
+    return version
 
 
 def _has_glob(path: Path) -> bool:
@@ -365,6 +388,7 @@ def install(
     package_sources = [] if runtime_only else [source_path / "media-missher", source_path / "openclaw-media-missher"]
     for item in (runtime_source, *package_sources):
         _reject_source_symlinks(item)
+    product_version = _read_product_version(source_path)
     runtime_python = select_runtime_python(python)
 
     _prepare_owned_runtime_home(runtime_home)
@@ -399,6 +423,7 @@ def install(
     lock_descriptor = _acquire_install_lock(runtime_home)
     try:
         _copy_source(runtime_source, runtime_stage)
+        shutil.copyfile(source_path / _PRODUCT_VERSION_FILE, runtime_stage / _PRODUCT_VERSION_FILE)
         for package_source, package_stage in zip(package_sources, package_stages):
             _copy_source(package_source, package_stage)
         findings = scan_roots((runtime_stage, *package_stages))
@@ -468,6 +493,8 @@ def install(
             )
         _rotate(components, renamer, cleaner, release)
         return InstallResult(
+            version=product_version,
+            release=release,
             current=components[0].current.resolve(),
             previous=components[0].previous.resolve() if components[0].prior_moved else None,
             venv=components[1].current.resolve(),
@@ -495,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--openclaw-root", type=Path, default=Path.home() / ".openclaw" / "workspace" / "skills")
     parser.add_argument("--runtime-only", action="store_true", help="Install only the shared runtime and dependency environment")
     parser.add_argument("--python", type=Path, help="Python 3.11+ interpreter used to create the runtime environment")
+    parser.add_argument("--version", action="version", version=f"Media@Missher {_read_product_version(project)}")
     args = parser.parse_args(argv)
     result = install(
         source=args.source,
@@ -517,7 +545,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     print(
         json.dumps(
-            {name: str(path) if path is not None else None for name, path in paths.items()},
+            {
+                "version": result.version,
+                "release": result.release,
+                **{name: str(path) if path is not None else None for name, path in paths.items()},
+            },
             ensure_ascii=False,
         )
     )

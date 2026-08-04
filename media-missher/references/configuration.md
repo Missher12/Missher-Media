@@ -4,11 +4,13 @@ This reference defines the shared runtime layout, configuration precedence, priv
 
 ## Resolve the runtime home
 
+The repository `VERSION` file is the authoritative product version. Media@Missher V12 uses `12.0.0`. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
+
 `MEDIA_MISSHER_HOME` selects one shared home for the Codex and OpenClaw skills. When it is unset, both use `~/.local/share/media-missher`.
 
 The home contains these paths:
 
-- `current/`: deployed source and five entrypoints
+- `current/`: deployed source, product `VERSION`, and five entrypoints
 - `venv/`: Python 3.11 or newer dependency environment
 - `state/`: mode-`0700` locks, checkpoints, cache, reports, and default `runs/`
 

@@ -1,6 +1,8 @@
-# Media@Missher project context
+# Media@Missher V12 project context
 
 Media@Missher collects and validates Bilibili, Xiaohongshu, Douyin, and Weibo records through one independently authored shared runtime. This file records the architecture, verification workflow, deployment state, and recovery boundaries for future work.
+
+The current product version is Media@Missher V12 (`12.0.0`), recorded once in the repository `VERSION` file. Product versioning is separate from the installer's unique UTC timestamp-and-random-suffix deployment release so repeated upgrades and exact rollback paths remain collision-free.
 
 ## Project goal
 
@@ -25,7 +27,7 @@ The repository separates source, deployed runtime, adapters, and installed skill
 └── state/
 ```
 
-`current/` contains the deployed source and five entrypoints. `venv/` contains Python 3.11 or newer dependencies. Mode-`0700` `state/` contains locks, cache, checkpoints, reports, and default private runs.
+`current/` contains the deployed source, product `VERSION`, and five entrypoints. `venv/` contains Python 3.11 or newer dependencies. Mode-`0700` `state/` contains locks, cache, checkpoints, reports, and default private runs.
 
 The runtime home uses `.media-missher-owner.json` to prove installer ownership and `.media-missher-install.lock` to serialize installation against launch. One `.media-missher-release` value must match `current/`, `venv/`, the Codex skill, and the OpenClaw skill.
 
@@ -64,6 +66,8 @@ Multi-platform creator work runs sequentially. Count `0` requires `--collect-as-
 
 The runtime connects only to an existing Chrome DevTools Protocol (CDP) browser. It never starts or reconfigures Chrome. Exact-host navigation requires explicit `--allow-navigation` authorization for the current collection or live acceptance run. Authorized navigation creates temporary pages inside the uniquely proven existing browser context, leaves existing user pages unchanged, and closes only the temporary pages on success or failure. Ambiguous multiple contexts fail closed. Entry `403`, `429`, and visible challenges are non-retryable risk stops before output creation.
 
+Xiaohongshu complete mode attaches the exact detail-response listener before clicking the exact visible note target. It checks the captured response for HTTP or payload risk immediately, then keeps the opened note visible for one cryptographically sampled 5–15 second settle before parsing collection metrics, using DOM fallbacks, or reading comments. It checks for a visible challenge again after the settle. Ordinary creator previews, search, failed clicks, capture timeouts, and risk responses do not incur this dwell; every successfully opened complete-mode note incurs it exactly once.
+
 Every run uses a unique mode-`0700` directory and mode-`0600` artifacts. Media@Missher never creates Feishu artifacts or performs a remote Feishu write.
 
 ## Test commands
@@ -72,7 +76,7 @@ Run the complete offline suite with all sockets disabled:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
-  --with pytest --with pytest-asyncio --with pytest-socket \
+  --with pytest --with pytest-asyncio --with pytest-socket --with playwright \
   python -m pytest -q -p no:cacheprovider --disable-socket
 ```
 
@@ -86,37 +90,31 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-The current source baseline passes 659 tests with Playwright installed, zero failures, and zero skips. The full suite runs with sockets disabled. All 53 Python source and test files compile, all five runtime entrypoints accept `--help`, the active residual scanner returns zero for the source tree, and the Codex skill validator accepts the package.
+The Media@Missher V12 source baseline passes 664 tests with Playwright installed, zero failures, and zero skips. The full suite runs with sockets disabled. All five runtime entrypoints accept `--help`, the active residual scanner returns zero for the three source package roots, and the official skill validator accepts both packages. An independent final review also passed 143 Xiaohongshu and packaging tests with no P0/P1 findings.
 
 ## Live acceptance
 
 Live acceptance is a separate authorized stage. The latest sequential count-`1` run at `~/.local/share/media-missher/state/runs/run-20260803T183331Z-yio893cc` produced one current record for every platform in 51.704 seconds with no timeout, risk signal, or Feishu artifact. Bilibili complete mode passed with 35 fields. Douyin and Weibo passed with 24 and 22 fields. Xiaohongshu matched the expected note, consumed a fresh official detail response, and produced 53 fields including body, author, publish time, location, media, tags, and the other engagement values, but remained incomplete only because `collected` was unknown.
 
-The old active implementation distinguishes a missing or `null` detail API count from an explicitly present empty string: missing/`null` remains unknown, while present-empty means zero. The independent runtime had collapsed both cases to unknown. It now restores that narrow detail-API-only distinction without changing list, search, DOM, or global count parsing. Missing values, `null`, and placeholders remain incomplete; no stale preview value is promoted to fresh detail evidence. The fix passes 109 Xiaohongshu tests, the 659-test full suite, and independent static review.
+The old active implementation distinguishes a missing or `null` detail API count from an explicitly present empty string: missing/`null` remains unknown, while present-empty means zero. The independent runtime had collapsed both cases to unknown. It now restores that narrow detail-API-only distinction without changing list, search, DOM, or global count parsing. Missing values, `null`, and placeholders remain incomplete; no stale preview value is promoted to fresh detail evidence.
 
-The safe live artifact intentionally excludes raw payload shape, so the prior run cannot prove whether its source field was absent/`null` or present-empty. The corrected runtime release `20260803T183949270349Z-139870f4` is installed and passes all 14 live preflight checks, but the retry budget is exhausted. One future explicitly authorized fresh four-platform acceptance is still required before active-skill cutover or recovery of replaced directories. Do not treat the prior partial run or the offline compatibility fix as that final live proof.
+The explicitly authorized post-compatibility Xiaohongshu run at `~/.local/share/media-missher/state/runs/run-20260804T011422Z-waihwmir` opened one exact note, captured a current target-bound detail API response, and produced one complete 50-field record with a non-null numeric `collected` value. It finished in 43.997 seconds with no timeout, risk signal, or Feishu artifact.
 
-Before cutover, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. Then run one sequential count-`1` creator collection across all four platforms. The runtime controller checks selected pages and visible login state before creating output. With explicit navigation authorization, the controller prepares one temporary page per selected platform and closes only those pages after the run.
+The later 5–15 second Xiaohongshu open-note settle changes timing only; it does not change target selection, response binding, detail parsing, schema, or other platforms. It passes 113 Xiaohongshu tests, including minimum/maximum timing, exactly once per note, ordinary/search exclusion, immediate HTTP risk stop, post-settle challenge stop, modal cleanup, and existing collection fallbacks. To avoid unnecessary additional account traffic, no real collection was repeated immediately after this dwell-only change. A future explicitly authorized live run may confirm wall-clock dwell, but must not be represented as already completed.
 
-Use Bilibili and Xiaohongshu complete modes with bounded Xiaohongshu comments. Validate native IDs, links, current timestamps, completeness, counts, no timeout, no risk stop, and no Feishu artifact.
+Before any future live acceptance, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. The runtime controller checks selected pages and visible login state before creating output. With explicit navigation authorization, it prepares temporary pages and closes only those pages after the run.
 
 Open a temporary page only with explicit navigation authorization. Close only the temporary page after validation. Do not retry a risk stop.
 
 ## Cutover
 
-Cutover remains pending until offline, compatibility, staged skill, and live acceptance gates all pass.
+The local atomic cutover completed with release `20260804T014259715054Z-e8a088d6`. Before installation, the three source roots were frozen at SHA-256 `af820b6ca4fa62f291d179a4f0aefe931e7719935233c54f8a7cd3206fb2a07b`; the hash was unchanged after staged installation and before full cutover.
 
-The authorized sequence is:
+The installer synchronized the shared runtime, dependency environment, Codex skill, and OpenClaw skill to the same release. Both installed skills pass live CDP preflight, every installed tree matches its source tree apart from release markers and caches, active residual scans return zero, state is mode `0700`, and release markers are mode `0600`.
 
-1. Record read-only manifests, sizes, hashes, and versions for exact active targets and freeze a content hash for `runtime/`, `media-missher/`, and `openclaw-media-missher/`
-2. Run `python3 tools/install_media_missher.py --runtime-only`
-3. Preflight staged Codex and OpenClaw packages against the shared home
-4. Complete authorized four-platform live acceptance
-5. Prove the frozen source hash is unchanged, then run `python3 tools/install_media_missher.py` for atomic full installation and verify all three installed trees against that same source
-6. If old residual-bearing skills are to leave recovery, move only the exact `codex_previous` and `openclaw_previous` paths reported by the installer JSON to unique Trash destinations with exact `/bin/mv` arguments; never move either new `*_current` path
-7. Rerun preflight, five help commands, validation, permission checks, and active residual scans
+The prior residual-bearing 578MB OpenClaw recovery tree was moved recoverably to `~/.Trash/Media-Missher-old-openclaw-20260804T014259Z/`. The active OpenClaw skill is a compact 24KB package; the active Codex skill is 136KB. The zero-residual claim applies to the repository source roots and active installed Media@Missher trees, not intentionally retained Trash contents or third-party packages in the owned virtual environment.
 
-Never use recursive deletion for cutover.
+Never use recursive deletion for cutover or recovery.
 
 ## Recovery
 
@@ -128,10 +126,10 @@ Keep runtime outputs and historical evidence during rollback.
 
 ## Current limitations
 
-- One fresh post-compatibility-fix four-platform live acceptance and active cutover are pending
-- The active OpenClaw skill still contains the recoverable pre-cutover tree; zero replaced-implementation residue is not yet claimed
+- The randomized Xiaohongshu open-note dwell is fully offline-tested and installed, but has not been followed by another real collection; do not claim post-dwell live proof without a future explicit authorization
+- Xiaohongshu complete batches add 5–15 seconds per successfully opened note; increase `--platform-timeout` for larger counts rather than reducing or removing the dwell
 - Platform response schemas, login markers, and challenge behavior can change without notice
 - Creator collection needs a non-empty UID for every selected platform; search does not
 - Navigation is disabled unless the current run has explicit authorization
 - A failed non-risk prerequisite permits one retry only after correction and fresh preflight
-- Do not recover replaced directories until the fresh live run, full installation, permission checks, and active residual scans all pass
+- The repository has no selected repository-wide public-distribution license; local installation is complete, but a combined public bundle is not authorized
