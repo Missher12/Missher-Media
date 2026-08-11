@@ -100,13 +100,13 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-Current V15 offline evidence (2026-08-11): the focused sockets-disabled suite passed 605 tests and the complete sockets-disabled suite passed 870 tests, with zero failures and zero skips. The one warning is the expected `pytest-socket` warning from the test that proves AF_INET and AF_INET6 remain blocked while Unix sockets are allowed. Runtime compilation, all five `--help` entrypoints, the active residual scan, installer version output, both skill validators, and `git diff --check` also passed. This is source-only offline evidence and is not installation or live-platform acceptance.
+Current V15 offline evidence (2026-08-11): the focused sockets-disabled suite passed 605 tests and the complete sockets-disabled suite passed 870 tests, with zero failures and zero skips. The one warning is the expected `pytest-socket` warning from the test that proves AF_INET and AF_INET6 remain blocked while Unix sockets are allowed. Runtime compilation, all five `--help` entrypoints, the active residual scan, installer version output, both skill validators, and `git diff --check` also passed. This remains offline evidence and is not live-platform acceptance; installed-state evidence is recorded separately below.
 
 Historical V12 evidence: the V12 source baseline passed 664 tests with Playwright installed, zero failures, and zero skips. The full suite ran with sockets disabled. All five runtime entrypoints accepted `--help`, the active residual scanner returned zero for the three source package roots, and the official skill validator accepted both packages. These dated results remain historical evidence and are not V15 proof.
 
 ## Live acceptance
 
-V15 live acceptance has not been performed. No V15 real-platform collection, BrowserSkill session, installation, tag, GitHub push, or release has been executed during implementation. The following evidence is retained solely as historical V12 behavior and must not be presented as current V15 acceptance.
+V15 live acceptance has not been performed. No V15 real-platform collection or BrowserSkill session was executed during implementation or installation. The following evidence is retained solely as historical V12 behavior and must not be presented as current V15 acceptance.
 
 Live acceptance is a separate authorized stage. The latest sequential count-`1` run at `~/.local/share/media-missher/state/runs/run-20260803T183331Z-yio893cc` produced one current record for every platform in 51.704 seconds with no timeout, risk signal, or Feishu artifact. Bilibili complete mode passed with 35 fields. Douyin and Weibo passed with 24 and 22 fields. Xiaohongshu matched the expected note, consumed a fresh official detail response, and produced 53 fields including body, author, publish time, location, media, tags, and the other engagement values, but remained incomplete only because `collected` was unknown.
 
@@ -119,6 +119,12 @@ The later 5–15 second Xiaohongshu open-note settle changes timing only; it doe
 Before any future live acceptance, run live preflight against the existing browser. This probes the CDP endpoint but does not prove platform page or login state. The runtime controller checks selected pages and visible login state before creating output. With explicit navigation authorization, it prepares temporary pages and closes only those pages after the run.
 
 Open a temporary page only with explicit navigation authorization. Close only the temporary page after validation. Do not retry a risk stop.
+
+## V15 Cutover
+
+The local Codex-only atomic cutover completed on 2026-08-11 from source commit `6d28d8f` with release `20260811T100928226412Z-697819cc`. The installer synchronized `current/`, `venv/`, and `~/.codex/skills/media-missher` to the same release marker while leaving `~/.openclaw` absent. The prior runtime, dependency environment, and Codex skill remain recoverable at the exact paths reported by the installer under `previous-20260811T100928226412Z-697819cc`, `venv.previous-20260811T100928226412Z-697819cc`, and `recovery/codex/media-missher.previous-20260811T100928226412Z-697819cc`.
+
+Post-cutover verification proved version `15.0.0`, matching release markers, byte-equivalent runtime and Codex skill source trees apart from deployment metadata, mode-`0700` runtime/state directories, mode-`0600` release markers, all five installed entrypoints, installed runtime and Playwright imports, the installed Codex skill validator, and both offline and existing-CDP live preflight. The optional BrowserSkill bridge passed its installed read-only preflight against CLI 0.1.10 and extension 0.1.6 with one browser and zero sessions before and after the check. This verification started no BrowserSkill session and performed no platform collection.
 
 ## Historical V12 Cutover
 
@@ -140,8 +146,8 @@ Keep runtime outputs and historical evidence during rollback.
 
 ## Current limitations
 
-- V15 live acceptance, installation, and release remain pending final supervision; offline tests do not prove current platform DOM compatibility
-- The randomized Xiaohongshu open-note dwell is fully offline-tested in the V15 source but V15 is not installed; do not claim installed or live post-dwell proof without a future explicitly authorized cutover and collection
+- V15 is installed and passes offline and read-only preflight gates, but live platform acceptance remains pending; those checks do not prove current platform DOM compatibility
+- The randomized Xiaohongshu open-note dwell is installed and fully offline-tested, but has no V15 real-platform collection evidence; do not claim live post-dwell proof without a future explicitly authorized collection
 - Xiaohongshu complete batches add 5–15 seconds per successfully opened note; increase `--platform-timeout` for larger counts rather than reducing or removing the dwell
 - Platform response schemas, login markers, and challenge behavior can change without notice
 - Creator collection needs a non-empty UID for every selected platform; search does not
