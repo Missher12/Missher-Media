@@ -1659,7 +1659,11 @@ def _run_collection_request_unlocked(
         }
 
     run_dir = create_run_directory(data_root)
-    started_ns = time.time_ns()
+    # Compare evidence mtimes to a timestamp from the same filesystem. Some
+    # filesystems can report a newly-created file slightly behind the process
+    # wall clock even though it was written afterwards. The run directory is
+    # unique, private, and created immediately before this cutoff.
+    started_ns = run_dir.stat().st_mtime_ns
     try:
         command = build_engine_command(
             request, run_dir, layout=layout, cdp_url=cdp_url

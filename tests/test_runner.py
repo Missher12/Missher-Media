@@ -342,7 +342,7 @@ def test_discover_current_json_rejects_stale_files(tmp_path):
     inner.mkdir(mode=0o700)
     stale = inner / "stale.json"
     stale.write_text("[]", encoding="utf-8")
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     os.utime(stale, ns=(started_ns - 10_000, started_ns - 10_000))
     current = inner / "bilibili.json"
     current.write_text("[]", encoding="utf-8")
@@ -370,7 +370,7 @@ def test_discover_current_json_rejects_stale_files(tmp_path):
 
 
 def test_discover_current_json_rejects_multiple_fresh_inner_runs(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     for name in ("run-one", "run-two"):
         inner = tmp_path / name
         inner.mkdir(mode=0o700)
@@ -384,7 +384,7 @@ def test_discover_current_json_rejects_multiple_fresh_inner_runs(tmp_path):
 
 
 def test_discover_current_json_rejects_single_run_legacy_four_key_manifest(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     artifact = inner / "bilibili.json"
@@ -406,7 +406,7 @@ def test_discover_current_json_rejects_single_run_legacy_four_key_manifest(tmp_p
 
 
 def test_discover_current_json_rejects_unexpected_manifest_path_key(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     (inner / "unexpected.json").write_text("[]", encoding="utf-8")
@@ -439,7 +439,7 @@ def test_discover_current_json_rejects_unexpected_manifest_path_key(tmp_path):
 def test_discover_current_json_rejects_non_strict_diagnostics(
     tmp_path, diagnostics
 ):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     artifact = inner / "xhs.json"
@@ -462,7 +462,7 @@ def test_discover_current_json_rejects_non_strict_diagnostics(
 
 
 def test_discover_current_json_requires_path_for_completed_platform(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     (inner / "manifest.json").write_text(
@@ -483,7 +483,7 @@ def test_discover_current_json_requires_path_for_completed_platform(tmp_path):
 
 
 def test_discover_current_json_rejects_duplicate_manifest_keys(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     (inner / "manifest.json").write_text(
@@ -496,7 +496,7 @@ def test_discover_current_json_rejects_duplicate_manifest_keys(tmp_path):
 
 
 def test_discover_current_json_rejects_invalid_xhs_checkpoint(tmp_path):
-    started_ns = time.time_ns()
+    started_ns = tmp_path.stat().st_mtime_ns
     inner = tmp_path / "run-current"
     inner.mkdir(mode=0o700)
     (inner / "xhs.json").write_text("[]", encoding="utf-8")
@@ -546,6 +546,28 @@ def test_run_collection_returns_success_with_current_evidence(fake_engine_root, 
     assert manifest_diagnostic["platforms"] == {
         "douyin": {"kind": "ok", "code": "ok"}
     }
+
+
+def test_run_collection_uses_filesystem_freshness_cutoff(
+    fake_engine_root, tmp_path, monkeypatch
+):
+    layout = make_runtime_layout(fake_engine_root)
+    monkeypatch.setattr(adapter.time, "time_ns", lambda: 2**63 - 1)
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("douyin",),
+            count=1,
+            platform_uids={"douyin": "douyin-user"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+    )
+
+    assert summary["status"] == "success"
+    assert summary["validation"]["counts"] == {"douyin": 1}
 
 
 def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
