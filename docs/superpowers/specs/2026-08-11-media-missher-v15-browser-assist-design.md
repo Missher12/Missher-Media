@@ -1,7 +1,7 @@
 # Media@Missher V15 Browser Assist and Screenshot Design
 
-**Date:** 2026-08-11  
-**Target version:** `15.0.0`  
+**Date:** 2026-08-11
+**Target version:** `15.0.0`
 **Status:** Approved design
 
 ## 1. Goal
@@ -31,7 +31,7 @@ The existing behavior remains the default. BrowserSkill is opt-in:
 --browser-assist off|browserskill
 ```
 
-`off` is the default. `browserskill` requires the locally installed `bsk` CLI, a healthy extension, the existing Media@Missher browser context, and explicit `--allow-navigation` authorization for a real collection or live acceptance run.
+`off` is the default. `browserskill` requires the locally installed `bsk` CLI, a healthy extension, the existing Media@Missher browser context, and explicit `--allow-navigation` authorization for a real collection or live acceptance run. The V15 compatibility baseline is `bsk` CLI `0.1.10` with extension `0.1.6`; preflight rejects an unrecognized interface instead of assuming later versions are compatible.
 
 Screenshots are independently opt-in:
 
@@ -90,7 +90,7 @@ Lifecycle cleanup runs after success, non-risk failure, risk stop, cancellation,
 
 ### 6.1 Xiaohongshu
 
-Ordinary collection uses the existing list/preview evidence. With BrowserSkill assistance enabled, an exact note is opened only when a required field such as `collected` or `shares` remains unknown and the record has an exact `note_id`.
+Ordinary collection uses the existing list/preview evidence. With BrowserSkill assistance enabled, an exact note is opened only when at least one engagement field in `liked`, `comments`, `collected`, or `shares` remains unknown and the record has an exact `note_id`. An explicit numeric zero is known and does not trigger fallback.
 
 Complete mode retains its stronger evidence contract: every selected note is opened once even when preview metrics appear populated, because completeness requires a fresh exact detail response. Media@Missher registers the existing exact detail-response listener before BrowserSkill clicks the exact note target. It then validates response URL, request identity, status, payload risk, and `note_id` before merging values. The existing cryptographically sampled 5-15 second settle and post-settle challenge check remain unchanged.
 
@@ -98,7 +98,7 @@ Missing, `null`, placeholder, and explicit zero semantics remain unchanged. A re
 
 ### 6.2 Bilibili dynamics
 
-Existing video detail behavior remains unchanged. For a non-video dynamic, BrowserSkill fallback is eligible only when required data is missing or screenshot mode `all` explicitly requires a detail view, and only when an exact `dynamic_id` is available.
+Existing video detail behavior remains unchanged. For a non-video dynamic, BrowserSkill fallback is eligible only when at least one engagement field in `liked`, `comments`, `collected`, or `shares` remains unknown, or screenshot mode `all` explicitly requires a detail view, and only when an exact `dynamic_id` is available. An explicit numeric zero is known and does not trigger fallback.
 
 The coordinator opens the exact dynamic and accepts only authoritative response or DOM evidence bound to the same `dynamic_id`. Pure text and image dynamics are valid records; they must not be discarded merely because they have no `bvid`. If required data remains missing after the exact open, the record stays incomplete. A successful click alone never proves completeness.
 
