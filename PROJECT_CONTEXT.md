@@ -126,6 +126,8 @@ The final local Codex-only atomic cutover completed on 2026-08-11 from source co
 
 Post-cutover verification proved version `15.0.0`, matching release markers, byte-equivalent runtime and Codex skill source trees apart from deployment metadata, mode-`0700` runtime/state directories, mode-`0600` release markers, all five installed entrypoints, installed runtime and Playwright imports, the installed Codex skill validator, and both offline and existing-CDP live preflight. The optional BrowserSkill bridge passed its installed read-only preflight against CLI 0.1.10 and extension 0.1.6 with one browser and zero sessions before and after the check. This verification started no BrowserSkill session and performed no platform collection.
 
+The private GitHub repository `Missher12/media-missher` is marked for Missher use. Its default `main` branch preserves the complete independently authored source history, and safe local development branches plus the `v12.0.0` and `v15.0.0` tags are mirrored remotely. Historical V7.1/V8 raw bundles are represented only by a hash-and-provenance index because they contain private identifiers, obsolete integration paths, and third-party source without a packaged compatible license. Runtime data, browser material, and installed recovery trees are not source releases and are never uploaded.
+
 ## Historical V12 Cutover
 
 The local atomic cutover completed with release `20260804T014259715054Z-e8a088d6`. Before installation, the three source roots were frozen at SHA-256 `af820b6ca4fa62f291d179a4f0aefe931e7719935233c54f8a7cd3206fb2a07b`; the hash was unchanged after staged installation and before full cutover.
