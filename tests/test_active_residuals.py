@@ -106,3 +106,13 @@ def test_active_documentation_has_no_obsolete_root_api_or_personal_absolute_path
             failures.append(f"{path}:personal absolute path")
 
     assert failures == []
+
+
+def test_project_context_does_not_claim_v15_live_acceptance() -> None:
+    text = Path("PROJECT_CONTEXT.md").read_text(encoding="utf-8")
+
+    assert "V15 live acceptance has not been performed" in text
+    assert not re.search(
+        r"(?i)V15.{0,80}(?:live acceptance (?:passed|completed)|live[- ]verified)",
+        text,
+    )

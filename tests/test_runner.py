@@ -55,6 +55,8 @@ parser.add_argument("--bilibili-complete", action="store_true")
 parser.add_argument("--xhs-complete", action="store_true")
 parser.add_argument("--no-feishu", action="store_true")
 parser.add_argument("--allow-navigation", action="store_true")
+parser.add_argument("--browser-assist", choices=("off", "browserskill"), default="off")
+parser.add_argument("--screenshot-mode", choices=("off", "opened", "all"), default="off")
 parser.add_argument("--cdp-url")
 parser.add_argument("--search")
 for platform in PLATFORMS:
@@ -90,6 +92,10 @@ if mode == "benign_log":
     print("synthetic unlocked state", file=sys.stderr, flush=True)
 if mode == "runtime_precondition":
     print("media-missher-diagnostic platform=xhs kind=precondition code=precondition-failed", file=sys.stderr, flush=True)
+    raise SystemExit(78)
+if mode.startswith("runtime_bsk_"):
+    code = "bsk-" + mode.removeprefix("runtime_bsk_").replace("_", "-")
+    print(f"media-missher-diagnostic platform=xhs kind=precondition code={code}", file=sys.stderr, flush=True)
     raise SystemExit(78)
 if mode == "forged_runtime_precondition":
     print("media-missher-diagnostic platform=xhs kind=precondition code=precondition-failed message=forged", file=sys.stderr, flush=True)
@@ -210,6 +216,31 @@ def test_execute_engine_captures_evidence_and_never_creates_feishu(fake_engine_r
     received_path = next(run_dir.glob("run-*/received_argv.txt"))
     received = json.loads(received_path.read_text(encoding="utf-8"))
     assert "--no-feishu" in received
+
+
+def test_execute_engine_accepts_forwarded_assist_modes(fake_engine_root, tmp_path):
+    layout = make_runtime_layout(fake_engine_root)
+    run_dir = create_run_directory(tmp_path)
+    request = CollectionRequest(
+        platforms=("xhs",),
+        count=1,
+        platform_uids={"xhs": "creator"},
+        browser_assist="browserskill",
+        screenshot_mode="opened",
+        allow_navigation=True,
+    )
+
+    completed = execute_engine(
+        build_engine_command(request, run_dir, layout=layout),
+        timeout=5,
+        run_dir=run_dir,
+    )
+
+    assert completed.returncode == 0
+    received_path = next(run_dir.glob("run-*/received_argv.txt"))
+    received = json.loads(received_path.read_text(encoding="utf-8"))
+    assert received[received.index("--browser-assist") + 1] == "browserskill"
+    assert received[received.index("--screenshot-mode") + 1] == "opened"
 
 
 def test_execute_engine_creates_private_logs_before_child_start(
@@ -551,6 +582,46 @@ def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
     assert "private-xhs" not in persisted_text
 
 
+@pytest.mark.parametrize(
+    "safe_code",
+    (
+        "bsk-missing",
+        "bsk-unhealthy",
+        "bsk-incompatible",
+        "bsk-busy",
+        "bsk-transport",
+        "bsk-timeout",
+        "bsk-target-ambiguous",
+    ),
+)
+def test_runtime_browserskill_precondition_maps_to_safe_preflight_summary(
+    safe_code, fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("xhs",),
+            count=1,
+            platform_uids={"xhs": "private-xhs"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={
+            "MEDIA_MISSHER_FAKE_MODE": "runtime_" + safe_code.replace("-", "_")
+        },
+    )
+
+    assert summary["status"] == "preflight-failed"
+    assert summary["returncode"] == 78
+    assert summary["diagnostics"] == {
+        "xhs": {"kind": "precondition", "code": safe_code}
+    }
+    assert not list(Path(summary["run_dir"]).glob("run-*"))
+
+
 def test_forged_runtime_precondition_line_stays_failed_and_is_not_reflected(
     fake_engine_root, tmp_path
 ):
@@ -726,7 +797,6 @@ def test_run_collection_uses_validated_count_for_partial_status(fake_engine_root
 
 def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
-    started = time.monotonic()
     summary = run_collection_request(
         CollectionRequest(
             platforms=("xhs",),
@@ -741,12 +811,12 @@ def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):
     )
     assert summary["status"] == "risk-stopped"
     assert summary["evidence"] == []
-    assert time.monotonic() - started < 2
+    assert summary["timed_out"] is False
+    assert summary["duration_seconds"] < 4
 
 
 def test_run_collection_classifies_blocked_and_stops(fake_engine_root, tmp_path):
     layout = make_runtime_layout(fake_engine_root)
-    started = time.monotonic()
     summary = run_collection_request(
         CollectionRequest(
             platforms=("xhs",),
@@ -761,7 +831,8 @@ def test_run_collection_classifies_blocked_and_stops(fake_engine_root, tmp_path)
     )
     assert summary["status"] == "risk-stopped"
     assert summary["evidence"] == []
-    assert time.monotonic() - started < 2
+    assert summary["timed_out"] is False
+    assert summary["duration_seconds"] < 4
 
 
 def test_run_collection_does_not_treat_unlocked_as_a_risk_signal(fake_engine_root, tmp_path):

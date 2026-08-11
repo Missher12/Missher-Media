@@ -46,6 +46,35 @@ def test_creator_parser_falls_back_to_archive_stat_and_dynamic_link() -> None:
     assert (record["liked"], record["comments"], record["shares"], record["collected"]) == (1, 2, 3, 4)
 
 
+@pytest.mark.parametrize(
+    ("native_type", "major"),
+    (
+        ("DYNAMIC_TYPE_WORD", {}),
+        ("DYNAMIC_TYPE_DRAW", {"draw": {"items": [{"src": "https://cdn.example.invalid/image.png"}]}}),
+    ),
+)
+def test_creator_parser_preserves_pure_text_and_image_dynamics_without_bvid(
+    native_type: str,
+    major: dict[str, object],
+) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import parse_creator_item
+
+    record = parse_creator_item({
+        "id_str": "123456",
+        "type": native_type,
+        "modules": {
+            "module_author": {"name": "Synthetic author", "pub_ts": 1_700_000_000},
+            "module_dynamic": {"desc": {"text": "Synthetic dynamic"}, "major": major},
+            "module_stat": {},
+        },
+    })
+
+    assert record["type"] == "dynamic"
+    assert record["dynamic_id"] == "123456"
+    assert record["bvid"] is None
+    assert record["native_id"] == "123456"
+
+
 def test_search_parser_keeps_legacy_fields_and_uniform_aliases() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import parse_search_item
 

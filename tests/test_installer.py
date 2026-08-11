@@ -87,7 +87,7 @@ def test_install_stages_runtime_and_both_compact_skills_with_private_state(tmp_p
     assert help_scripts == {"scrape_all.py", "scrape_bilibili.py", "scrape_xhs.py", "scrape_douyin.py", "scrape_weibo.py"}
 
 
-def test_install_records_v12_product_version_and_one_unique_release(tmp_path: Path) -> None:
+def test_install_records_v15_product_version_and_one_unique_release(tmp_path: Path) -> None:
     result = _install(tmp_path)
     marker_name = ".media-missher-release"
     components = (result.current, result.venv, result.codex_current, result.openclaw_current)
@@ -97,9 +97,9 @@ def test_install_records_v12_product_version_and_one_unique_release(tmp_path: Pa
     assert len(release_ids) == 1
     release = next(iter(release_ids))
     assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", release)
-    assert result.version == "12.0.0"
+    assert result.version == "15.0.0"
     assert result.release == release
-    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "12.0.0\n"
+    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "15.0.0\n"
     assert all(stat.S_IMODE(component.joinpath(marker_name).stat().st_mode) == 0o600 for component in components)
 
 
@@ -488,6 +488,69 @@ def test_runtime_only_never_inspects_or_touches_skill_sources_or_destinations(tm
     assert not list(real_openclaw.glob("*.previous-*"))
 
 
+def test_codex_only_installs_runtime_venv_and_codex_without_openclaw_root(
+    tmp_path: Path,
+) -> None:
+    from tools.install_media_missher import install
+
+    source = tmp_path / "source"
+    shutil.copytree(PROJECT_ROOT / "runtime", source / "runtime")
+    shutil.copytree(PROJECT_ROOT / "media-missher", source / "media-missher")
+    shutil.copy2(PROJECT_ROOT / "VERSION", source / "VERSION")
+    openclaw_root = tmp_path / "retired-openclaw" / "workspace" / "skills"
+
+    result = install(
+        source=source,
+        home=tmp_path / "runtime-home",
+        codex_root=tmp_path / "codex-skills",
+        openclaw_root=openclaw_root,
+        executor=FakeExecutor(),
+        codex_only=True,
+    )
+
+    assert result.current.joinpath("scripts", "scrape_all.py").is_file()
+    assert result.venv.joinpath("bin", "python").is_file()
+    assert result.codex_current is not None
+    assert result.codex_current.joinpath("SKILL.md").is_file()
+    assert result.openclaw_current is None and result.openclaw_previous is None
+    assert not (tmp_path / "retired-openclaw").exists()
+    releases = {
+        component.joinpath(".media-missher-release").read_text(encoding="ascii")
+        for component in (result.current, result.venv, result.codex_current)
+    }
+    assert releases == {result.release + "\n"}
+
+
+def test_codex_only_rotation_failure_restores_runtime_venv_and_codex(
+    tmp_path: Path,
+) -> None:
+    first = _install(tmp_path, codex_only=True)
+    targets = (first.current, first.venv, first.codex_current)
+    for target in targets:
+        assert target is not None
+        target.joinpath("old-marker").write_text(target.name, encoding="utf-8")
+    real_replace = os.replace
+
+    def fail_codex_stage(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+        source_path, target_path = Path(source), Path(target)
+        if ".staging-" in source_path.name and target_path == first.codex_current:
+            raise OSError("synthetic codex-only rotation failure")
+        real_replace(source, target)
+
+    with pytest.raises(OSError, match="codex-only"):
+        _install(tmp_path, codex_only=True, renamer=fail_codex_stage)
+
+    for target in targets:
+        assert target is not None
+        assert target.joinpath("old-marker").is_file()
+    assert not (tmp_path / "openclaw-skills").exists()
+
+
+def test_installer_modes_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _install(tmp_path, runtime_only=True, codex_only=True)
+
+
 def test_installer_rejects_a_symlinked_source_package_root(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -533,10 +596,24 @@ def test_installer_cli_exposes_runtime_only_safety_gate() -> None:
 
     assert completed.returncode == 0
     assert "--runtime-only" in completed.stdout
+    assert "--codex-only" in completed.stdout
     assert "--python" in completed.stdout
 
 
-def test_installer_cli_reports_media_missher_v12_product_version() -> None:
+def test_installer_cli_rejects_runtime_only_with_codex_only() -> None:
+    script = PROJECT_ROOT / "tools" / "install_media_missher.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--runtime-only", "--codex-only"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "not allowed with argument" in completed.stderr
+
+
+def test_installer_cli_reports_media_missher_v15_product_version() -> None:
     script = PROJECT_ROOT / "tools" / "install_media_missher.py"
     completed = subprocess.run(
         [sys.executable, str(script), "--version"],
@@ -546,7 +623,47 @@ def test_installer_cli_reports_media_missher_v12_product_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "Media@Missher 12.0.0"
+    assert completed.stdout.strip() == "Media@Missher 15.0.0"
+
+
+def test_installer_excludes_private_browser_runtime_and_screenshot_artifacts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    for name in ("runtime", "media-missher", "openclaw-media-missher"):
+        shutil.copytree(PROJECT_ROOT / name, source / name)
+    shutil.copy2(PROJECT_ROOT / "VERSION", source / "VERSION")
+    private_relatives = (
+        ".superpowers/preview.html",
+        ".env",
+        ".env.production",
+        "browser-profile/Preferences",
+        "cookies/export.json",
+        "state/private.json",
+        "recovery/previous.json",
+        "screenshots/evidence.png",
+        "capture.trace.json",
+    )
+    for root_name in ("runtime", "media-missher", "openclaw-media-missher"):
+        root = source / root_name
+        for relative in private_relatives:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"synthetic-private")
+
+    result = _install(tmp_path, source=source)
+
+    installed_roots = (
+        result.current,
+        result.codex_current,
+        result.openclaw_current,
+    )
+    for root in installed_roots:
+        assert root is not None
+        installed = root
+        assert not any(
+            installed.joinpath(relative).exists() for relative in private_relatives
+        )
 
 
 def test_installer_cli_reports_exact_current_and_recovery_paths(

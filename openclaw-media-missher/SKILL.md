@@ -3,7 +3,7 @@ name: media-missher
 description: Use when collecting authorized creator posts or keyword search results from Bilibili, Xiaohongshu, Douyin, or Weibo through an existing signed-in Chrome session.
 ---
 
-# Media@Missher V12
+# Media@Missher V15
 
 Use the shared local runtime. Run preflight before collection, keep platforms sequential, and stop immediately when the runtime reports a risk status.
 
@@ -26,6 +26,8 @@ The runtime home defaults to `~/.local/share/media-missher`. Set `MEDIA_MISSHER_
 - Use `--bilibili-complete`, `--xhs-complete`, and `--xhs-comments` only when those details are required.
 - Preserve the automatic randomized 5–15 second settle after each Xiaohongshu complete-mode note opens; allow enough platform timeout for the requested count.
 - Runtime staging is private JSON. Any CSV, JSONL, or SQLite conversion belongs to the installed Codex adapter.
+- Browser assistance and screenshots default to `off`. On Bilibili or Xiaohongshu only, explicitly authorized runs may add `--browser-assist browserskill` and `--screenshot-mode opened|all` together with `--allow-navigation`.
+- BrowserSkill is optional; Playwright/CDP retains response capture, identifier validation, risk stops, and private screenshots.
 - Do not retry a `risk-stopped` result.
 
 ## Troubleshooting

@@ -8,6 +8,7 @@ not persisted.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import secrets
@@ -20,8 +21,10 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunp
 from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PreconditionError
+from ..detail_open import matches_exact_detail_page, missing_engagement_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
+from ..screenshots import ScreenshotError
 
 try:
     from playwright.async_api import Error as PlaywrightError
@@ -89,6 +92,17 @@ class CaptureTimeout(TimeoutError):
         super().__init__(code)
 
 
+def _should_open_detail(
+    request: CollectionRequest, record: Mapping[str, Any]
+) -> bool:
+    if request.complete or request.screenshot_mode == "all":
+        return True
+    return (
+        request.browser_assist == "browserskill"
+        and bool(missing_engagement_fields(record))
+    )
+
+
 @dataclass(slots=True)
 class XhsCollector:
     request: CollectionRequest
@@ -136,11 +150,14 @@ class XhsCollector:
                 raise CaptureTimeout("creator-capture-timeout") from error
         else:
             records = await self._collect_creator_pages(page, response)
-        if self.request.complete:
-            for record in records:
-                await self._complete_record(page, record)
-        else:
-            for record in records:
+        for record in records:
+            if _should_open_detail(self.request, record):
+                await self._open_record(
+                    page,
+                    record,
+                    completion_required=self.request.complete,
+                )
+            else:
                 record.update({"complete": False, "detail_completed": False, "detail_attempted": False, "missing_fields": []})
         return records
 
@@ -173,6 +190,9 @@ class XhsCollector:
             except PlaywrightTimeoutError as error:
                 await _raise_for_challenge(page)
                 raise CaptureTimeout("creator-capture-timeout") from error
+        for record in records:
+            if _should_open_detail(self.request, record):
+                await self._open_record(page, record, completion_required=False)
         return records
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
@@ -203,66 +223,110 @@ class XhsCollector:
         return records
 
     async def _complete_record(self, page: Any, record: dict[str, Any]) -> None:
+        await self._open_record(page, record, completion_required=True)
+
+    async def _open_record(
+        self,
+        page: Any,
+        record: dict[str, Any],
+        *,
+        completion_required: bool,
+    ) -> None:
         note_id = record.get("note_id")
         record["detail_attempted"] = False
         record["detail_completed"] = False
         if not _safe_note_id(note_id):
-            record["missing_fields"] = _missing_completion(record)
+            self._mark_required_screenshot_failed(record)
+            record["missing_fields"] = (
+                _missing_completion(record) if completion_required else []
+            )
             record["complete"] = False
             return
         await _raise_for_challenge(page)
         if not await _wait_for_note_card(page, note_id):
-            record["missing_fields"] = _missing_completion(record)
+            self._mark_required_screenshot_failed(record)
+            record["missing_fields"] = (
+                _missing_completion(record) if completion_required else []
+            )
             record["complete"] = False
             return
         record["detail_attempted"] = True
         primary_error: BaseException | None = None
+        detail_page = page
         try:
             attempt_started_at = datetime.now(UTC)
+
+            async def click_exact_note() -> Any:
+                nonlocal detail_page
+                assisted_browser = (
+                    self.browser
+                    if self.request.browser_assist == "browserskill"
+                    or self.request.screenshot_mode == "all"
+                    else None
+                )
+                detail_page = await _click_note_and_check(
+                    page,
+                    note_id,
+                    browser=assisted_browser,
+                )
+                return detail_page
+
             try:
-                response = await _capture_while(
+                response = await _capture_detail_while(
                     page,
                     lambda candidate: _is_detail_response(candidate, note_id),
-                    lambda: _click_note_and_check(page, note_id),
+                    click_exact_note,
                 )
             except PlaywrightTimeoutError as error:
-                await _raise_for_challenge(page)
-                raise CaptureTimeout("detail-capture-timeout") from error
-            payload = await _response_payload(response)
-            attempt_finished_at = datetime.now(UTC)
-            await _wait_after_detail_open(page)
-            card = _detail_card(
-                payload,
-                note_id,
-                attempt_started_at=attempt_started_at,
-                attempt_finished_at=attempt_finished_at,
-            )
-            if card is not None:
-                observed_at = _detail_server_observed_at(
+                await _raise_for_challenge(detail_page)
+                if completion_required:
+                    raise CaptureTimeout("detail-capture-timeout") from error
+                html = await _read_detail_html(detail_page)
+                _raise_for_observation(html)
+                _merge_detail_html(record, html)
+            else:
+                payload = await _response_payload(response)
+                attempt_finished_at = datetime.now(UTC)
+                if completion_required:
+                    await _wait_after_detail_open(detail_page)
+                card = _detail_card(
                     payload,
+                    note_id,
                     attempt_started_at=attempt_started_at,
                     attempt_finished_at=attempt_finished_at,
                 )
-                if observed_at is None:  # defensive: _detail_card already requires this
-                    raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
-                _merge_detail(record, card, engagement_observed_at=observed_at)
-                record["detail_completed"] = True
-                missing_metrics = _missing_required_metrics(record)
-                if missing_metrics:
-                    html = await _wait_for_detail_metrics(page, missing_metrics)
-                    _supplement_missing_detail_html(record, html)
-            elif _has_current_detail_time(
-                payload,
-                attempt_started_at=attempt_started_at,
-                attempt_finished_at=attempt_finished_at,
+                if card is not None:
+                    observed_at = _detail_server_observed_at(
+                        payload,
+                        attempt_started_at=attempt_started_at,
+                        attempt_finished_at=attempt_finished_at,
+                    )
+                    if observed_at is None:  # defensive: _detail_card already requires this
+                        raise SourceResponseError("Xiaohongshu detail payload has invalid current_time")
+                    _merge_detail(record, card, engagement_observed_at=observed_at)
+                    record["detail_completed"] = True
+                    missing_metrics = _missing_required_metrics(record)
+                    if missing_metrics:
+                        html = await _wait_for_detail_metrics(detail_page, missing_metrics)
+                        _supplement_missing_detail_html(record, html)
+                elif _has_current_detail_time(
+                    payload,
+                    attempt_started_at=attempt_started_at,
+                    attempt_finished_at=attempt_finished_at,
+                ):
+                    # Keep a non-authoritative DOM observation useful, but never
+                    # manufacture a publish time or mark it complete from HTML.
+                    html = await _read_detail_html(detail_page)
+                    _raise_for_observation(html)
+                    _merge_detail_html(record, html)
+            if (
+                completion_required
+                and self.request.comment_limit > 0
+                and record["detail_completed"]
             ):
-                # Keep a non-authoritative DOM observation useful, but never
-                # manufacture a publish time or mark it complete from HTML.
-                html = await _read_detail_html(page)
-                _raise_for_observation(html)
-                _merge_detail_html(record, html)
-            if self.request.comment_limit > 0 and record["detail_completed"]:
-                comments = await _read_comments(page, self.request.comment_limit)
+                comments = await _read_comments(
+                    detail_page, self.request.comment_limit
+                )
                 _raise_for_observation(comments)
                 comments_data = _safe_comments(
                     _as_sequence(comments.get("comments")),
@@ -273,21 +337,91 @@ class XhsCollector:
                 # comment IDs, account IDs, request tokens, or raw payloads.
                 record["comments_detail"] = comments_data
                 record["comments_fetched"] = len(comments_data)
+            if self.request.screenshot_mode in {"opened", "all"}:
+                await self._capture_screenshot(detail_page, record, note_id)
+        except PlaywrightError as error:
+            if completion_required or self.request.screenshot_mode != "all":
+                primary_error = error
+                raise
+            self._mark_required_screenshot_failed(record)
         except BaseException as error:
             primary_error = error
             raise
         finally:
+            cleanup_error: BaseException | None = None
             try:
-                await _close_modal(page)
-            except CollectionStopped:
-                raise
-            except BaseException:
-                if primary_error is None:
-                    raise
-        missing = _missing_completion(record)
-        record["missing_fields"] = missing
-        record["complete"] = not missing
+                await _close_modal(detail_page)
+            except BaseException as error:
+                cleanup_error = error
+            coordinator = getattr(self.browser, "detail_open", None)
+            if detail_page is not page and coordinator is not None:
+                release = getattr(coordinator, "release", None)
+                if release is not None:
+                    try:
+                        await release(detail_page)
+                    except BaseException as error:
+                        if cleanup_error is None:
+                            cleanup_error = error
+            if isinstance(cleanup_error, CollectionStopped):
+                raise cleanup_error
+            if primary_error is None and cleanup_error is not None:
+                raise cleanup_error
+        if completion_required:
+            missing = _missing_completion(record)
+            record["missing_fields"] = missing
+            record["complete"] = not missing
+        else:
+            record["missing_fields"] = list(missing_engagement_fields(record))
+            record["complete"] = False
         _annotate_legacy_quality(record)
+
+    def _mark_required_screenshot_failed(self, record: dict[str, Any]) -> None:
+        if self.request.screenshot_mode == "all":
+            record.update(
+                {
+                    "screenshot_status": "failed",
+                    "screenshot_error_code": "capture-failed",
+                }
+            )
+
+    async def _capture_screenshot(
+        self, page: Any, record: dict[str, Any], note_id: str
+    ) -> None:
+        if not matches_exact_detail_page(page, "xhs", note_id):
+            record.update(
+                {
+                    "screenshot_status": "failed",
+                    "screenshot_error_code": "capture-failed",
+                }
+            )
+            return
+        service = getattr(self.browser, "screenshots", None)
+        if service is None:
+            record.update(
+                {
+                    "screenshot_status": "failed",
+                    "screenshot_error_code": "capture-failed",
+                }
+            )
+            return
+        try:
+            artifact = await service.capture(
+                page,
+                platform="xhs",
+                native_id=note_id,
+                request_mode=self.request.screenshot_mode,
+            )
+        except ScreenshotError as error:
+            if str(error) == "risk-page":
+                raise CollectionStopped("challenge") from error
+            record.update(
+                {
+                    "screenshot_status": "failed",
+                    "screenshot_error_code": "capture-failed",
+                }
+            )
+        else:
+            record.update(artifact.as_record_fields())
 
     async def _navigate_and_check(self, page: Any, target: str) -> None:
         response = await self.browser.navigate(page, target, allowed_hosts=_HOSTS)
@@ -377,6 +511,56 @@ async def _capture_while(page: Any, predicate: Callable[[Any], bool], action: Ca
     async with page.expect_response(predicate, timeout=10_000) as response_info:
         await action()
     return await response_info.value
+
+
+def _response_page(response: Any) -> Any:
+    return getattr(getattr(response, "frame", None), "page", None)
+
+
+async def _capture_detail_while(
+    page: Any,
+    predicate: Callable[[Any], bool],
+    action: Callable[[], Any],
+) -> Any:
+    context = getattr(page, "context", None)
+    on = getattr(context, "on", None)
+    remove_listener = getattr(context, "remove_listener", None)
+    if not callable(on) or not callable(remove_listener):
+        async with page.expect_response(predicate, timeout=10_000) as response_info:
+            detail_page = await action()
+        response = await response_info.value
+        response_page = _response_page(response)
+        if response_page is not None and response_page is not detail_page:
+            raise PlaywrightTimeoutError("detail response page mismatch")
+        return response
+
+    candidates: list[Any] = []
+    changed = asyncio.Event()
+
+    def observe(response: Any) -> None:
+        if predicate(response):
+            candidates.append(response)
+            changed.set()
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10.0
+    on("response", observe)
+    try:
+        detail_page = await action()
+        while True:
+            changed.clear()
+            for response in candidates:
+                if _response_page(response) is detail_page:
+                    return response
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise PlaywrightTimeoutError("detail response timeout")
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=remaining)
+            except TimeoutError as error:
+                raise PlaywrightTimeoutError("detail response timeout") from error
+    finally:
+        remove_listener("response", observe)
 
 
 def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool:
@@ -1289,7 +1473,7 @@ async def _wait_for_note_card(page: Any, note_id: str) -> bool:
             const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
             const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
             if (challenge || phrases.some((word) => body.includes(word))) return true;
-            return Array.from(document.querySelectorAll('#userPostedFeeds .note-item[data-note-id]'))
+            return Array.from(document.querySelectorAll('#userPostedFeeds .note-item[data-note-id], .feeds-page .note-item[data-note-id]'))
                 .some((item) => item.getAttribute('data-note-id') === expected);
         }""", arg=note_id, timeout=10_000)
     except PlaywrightTimeoutError:
@@ -1328,11 +1512,17 @@ _EXACT_CREATOR_TARGET_SCRIPT = """(item, args) => {
 }"""
 
 
-async def _click_note_and_check(page: Any, note_id: str) -> None:
+async def _click_note_and_check(
+    page: Any,
+    note_id: str,
+    *,
+    browser: BrowserSession | Any | None = None,
+) -> Any:
     await _raise_for_challenge(page)
     starting_url = getattr(page, "url", "")
     cards = await page.locator(
-        "#userPostedFeeds .note-item[data-note-id]"
+        "#userPostedFeeds .note-item[data-note-id], "
+        ".feeds-page .note-item[data-note-id]"
     ).element_handles()
     selected_card = None
     click_target = None
@@ -1367,8 +1557,21 @@ async def _click_note_and_check(page: Any, note_id: str) -> None:
             or getattr(page, "url", "") != starting_url
         ):
             raise PlaywrightError("current note card is unavailable")
-        await click_target.click(timeout=5_000)
-        await _raise_for_challenge(page)
+        if browser is None:
+            await click_target.click(timeout=5_000)
+            detail_page = page
+        else:
+            coordinator = getattr(browser, "detail_open", None)
+            if coordinator is None:
+                raise PreconditionError("BrowserSkill detail coordinator is unavailable")
+            detail_page = await coordinator.click_exact(
+                page,
+                click_target,
+                platform="xhs",
+                native_id=note_id,
+            )
+        await _raise_for_challenge(detail_page)
+        return detail_page
     finally:
         await _dispose_element_handle(click_target)
         for card in cards:

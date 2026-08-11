@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -93,11 +94,31 @@ class BrowserSession:
     _playwright: Any
     _browser: Any
     allow_navigation: bool = False
+    bridge: Any = None
     _prepared_pages: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _temporary_pages: list[Any] = field(default_factory=list, init=False, repr=False)
+    detail_open: Any = field(init=False, repr=False)
+    screenshots: Any = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        from .detail_open import DetailOpenCoordinator
+
+        self.detail_open = DetailOpenCoordinator(
+            bridge=self.bridge,
+            register_temporary_page=self._register_temporary_page,
+            release_temporary_page=self._release_temporary_page,
+        )
 
     @classmethod
-    async def connect(cls, cdp_url: str, *, allow_navigation: bool = False) -> "BrowserSession":
+    async def connect(
+        cls,
+        cdp_url: str,
+        *,
+        allow_navigation: bool = False,
+        browser_assist: str = "off",
+    ) -> "BrowserSession":
+        if browser_assist not in {"off", "browserskill"}:
+            raise ValueError("unsupported browser assist mode")
         factory = async_playwright
         if factory is None:
             from playwright.async_api import async_playwright as factory
@@ -110,7 +131,44 @@ class BrowserSession:
             except BaseException:
                 pass
             raise
-        return cls(playwright, browser, allow_navigation=allow_navigation)
+        bridge = None
+        if browser_assist == "browserskill":
+            from .browser_skill import BrowserSkillBridge
+
+            bridge = BrowserSkillBridge()
+        return cls(
+            playwright,
+            browser,
+            allow_navigation=allow_navigation,
+            bridge=bridge,
+        )
+
+    def _register_temporary_page(self, page: Any) -> None:
+        if not any(page is candidate for candidate in self._temporary_pages):
+            self._temporary_pages.append(page)
+
+    async def _release_temporary_page(self, page: Any) -> None:
+        if not any(page is candidate for candidate in self._temporary_pages):
+            return
+        if not _page_is_closed(page):
+            await page.close()
+        self._temporary_pages = [
+            candidate for candidate in self._temporary_pages if candidate is not page
+        ]
+        self._prepared_pages = {
+            platform: candidate
+            for platform, candidate in self._prepared_pages.items()
+            if candidate is not page
+        }
+
+    async def preflight_browser_assist(self) -> None:
+        if self.bridge is not None:
+            await self.bridge.preflight()
+
+    def bind_store(self, store: Any) -> None:
+        from .screenshots import EvidenceScreenshot
+
+        self.screenshots = EvidenceScreenshot(store)
 
     def require_page(self, platform: str) -> Any:
         hosts = _HOSTS.get(platform)
@@ -207,6 +265,22 @@ class BrowserSession:
     async def close(self) -> None:
         failure: BaseException | None = None
         try:
+            if self.bridge is not None:
+                for attempt in range(2):
+                    try:
+                        await self.bridge.close()
+                    except BaseException as error:
+                        failure = error
+                        if isinstance(
+                            error,
+                            (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
+                        ):
+                            break
+                        if attempt == 0:
+                            continue
+                    else:
+                        failure = None
+                    break
             for page in reversed(self._temporary_pages):
                 try:
                     if not _page_is_closed(page):

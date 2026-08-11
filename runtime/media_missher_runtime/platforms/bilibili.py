@@ -12,12 +12,16 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PageJson, PreconditionError
+from ..detail_open import missing_engagement_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
+from ..screenshots import ScreenshotError
 
 try:
+    from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:  # pragma: no cover - production browser dependency is optional in unit tests
+    PlaywrightError = RuntimeError
     PlaywrightTimeoutError = TimeoutError
 
 
@@ -37,6 +41,7 @@ _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问
 _CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _MAX_TITLE_CHARS = 100
 _MAX_DESC_CHARS = 20_000
+_DYNAMIC_TARGET_TIMEOUT_MS = 5_000
 _SENSITIVE_URL_PART = re.compile(
     r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec|auth|signature|sign|expires?|expiry)",
     re.IGNORECASE,
@@ -49,6 +54,24 @@ class CollectionStopped(RuntimeError):
 
 class SourceResponseError(RuntimeError):
     """A browser-generated source response could not be consumed safely."""
+
+
+def _needs_dynamic_open(
+    request: CollectionRequest, record: Mapping[str, Any]
+) -> bool:
+    dynamic_id = record.get("dynamic_id")
+    return (
+        record.get("bvid") is None
+        and isinstance(dynamic_id, str)
+        and bool(dynamic_id)
+        and (
+            request.screenshot_mode == "all"
+            or (
+                request.browser_assist == "browserskill"
+                and bool(missing_engagement_fields(record))
+            )
+        )
+    )
 
 
 @dataclass(slots=True)
@@ -68,15 +91,47 @@ class BilibiliCollector:
             lambda: self._navigate(page, _creator_page_url(self.request.uid)),
         )
         records = await self._collect_feed_pages(page, response)
-        if self.request.complete:
-            for record in records:
-                await self._complete_record(page, record)
-        else:
-            for record in records:
+        for record in records:
+            opened_video = False
+            if self.request.complete:
+                opened_video = await self._complete_record(page, record)
+            else:
                 record["complete"] = False
                 record["detail_completed"] = False
                 record["missing_fields"] = []
+            if _needs_dynamic_open(self.request, record):
+                await self._ensure_creator_feed(page, record["dynamic_id"])
+                await self._open_dynamic_record(page, record)
+            elif (
+                isinstance(record.get("bvid"), str)
+                and self.request.screenshot_mode == "all"
+                and not opened_video
+            ):
+                await self._open_video_for_screenshot(page, record)
+            elif opened_video and self.request.screenshot_mode in {"opened", "all"}:
+                await self._capture_verified_video_screenshot(
+                    page,
+                    record,
+                    record["bvid"],
+                )
         return records
+
+    async def _ensure_creator_feed(self, page: Any, dynamic_id: str) -> None:
+        if self.request.uid is None:
+            raise ValueError("creator collection requires uid")
+        creator_url = _creator_page_url(self.request.uid)
+        if getattr(page, "url", None) != creator_url:
+            await self._navigate(page, creator_url)
+        try:
+            await _wait_for_exact_dynamic_target(page, dynamic_id)
+        except PlaywrightTimeoutError as error:
+            observation = await _read_dynamic_feed_risk(page)
+            _raise_for_risk_observation(observation)
+            raise PreconditionError(
+                "exact Bilibili dynamic target unavailable"
+            ) from error
+        observation = await _read_dynamic_feed_risk(page)
+        _raise_for_risk_observation(observation)
 
     async def _collect_feed_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -127,7 +182,7 @@ class BilibiliCollector:
                 break
         return records
 
-    async def _complete_record(self, page: Any, record: dict[str, Any]) -> None:
+    async def _complete_record(self, page: Any, record: dict[str, Any]) -> bool:
         detail_received = False
         detail_attempted = False
         bvid = record.get("bvid")
@@ -152,6 +207,105 @@ class BilibiliCollector:
         record["complete"] = not missing
         record["missing_fields"] = missing
         record["quality_score"] = _quality_score(record)
+        return detail_attempted
+
+    async def _open_dynamic_record(self, page: Any, record: dict[str, Any]) -> None:
+        dynamic_id = record.get("dynamic_id")
+        if not isinstance(dynamic_id, str) or not dynamic_id:
+            raise PreconditionError("exact Bilibili dynamic identifier is invalid")
+        coordinator = getattr(self.browser, "detail_open", None)
+        if coordinator is None:
+            raise PreconditionError("exact detail coordinator is unavailable")
+        target = await _find_exact_dynamic_target(page, dynamic_id)
+        detail_page = page
+        try:
+            record["detail_attempted"] = True
+            detail_page = await coordinator.click_exact(
+                page,
+                target,
+                platform="bilibili",
+                native_id=dynamic_id,
+            )
+            observation = await _read_dynamic_detail(detail_page, dynamic_id)
+            _raise_for_risk_observation(observation)
+            merged = _merge_dynamic_detail(record, observation)
+            missing_engagement = list(missing_engagement_fields(record))
+            record["detail_source"] = "detail_dom" if merged else "list_api"
+            record["detail_completed"] = not missing_engagement
+            missing = _missing_completion_fields(
+                record,
+                detail_received=not missing_engagement,
+                detail_required=False,
+            )
+            record["missing_fields"] = missing
+            record["complete"] = not missing
+            record["quality_score"] = _quality_score(record)
+            if self.request.screenshot_mode in {"opened", "all"}:
+                await self._capture_screenshot(detail_page, record, dynamic_id)
+        finally:
+            await _dispose_element_handle(target)
+            if detail_page is not page:
+                release = getattr(coordinator, "release", None)
+                if release is not None:
+                    await release(detail_page)
+
+    async def _open_video_for_screenshot(
+        self, page: Any, record: dict[str, Any]
+    ) -> None:
+        bvid = record.get("bvid")
+        if not isinstance(bvid, str) or not bvid:
+            raise PreconditionError("exact Bilibili video identifier is invalid")
+        record["detail_attempted"] = True
+        await self._navigate(page, _video_page_url(bvid))
+        observation = await _read_video_detail(page)
+        _raise_for_risk_observation(observation)
+        await self._capture_verified_video_screenshot(
+            page,
+            record,
+            bvid,
+            observation=observation,
+        )
+
+    async def _capture_verified_video_screenshot(
+        self,
+        page: Any,
+        record: dict[str, Any],
+        bvid: str,
+        *,
+        observation: Mapping[str, Any] | None = None,
+    ) -> None:
+        if observation is None:
+            observation = await _read_video_detail(page)
+            _raise_for_risk_observation(observation)
+        video_data = _mapping(observation.get("videoData"))
+        if (
+            not _valid_video_detail_url(getattr(page, "url", None), bvid)
+            or video_data.get("bvid") != bvid
+        ):
+            _mark_screenshot_failed(record)
+            return
+        await self._capture_screenshot(page, record, bvid)
+
+    async def _capture_screenshot(
+        self, page: Any, record: dict[str, Any], native_id: str
+    ) -> None:
+        service = getattr(self.browser, "screenshots", None)
+        if service is None:
+            _mark_screenshot_failed(record)
+            return
+        try:
+            artifact = await service.capture(
+                page,
+                platform="bilibili",
+                native_id=native_id,
+                request_mode=self.request.screenshot_mode,
+            )
+        except ScreenshotError as error:
+            if str(error) == "risk-page":
+                raise CollectionStopped("challenge") from error
+            _mark_screenshot_failed(record)
+        else:
+            record.update(artifact.as_record_fields())
 
     async def _navigate(self, page: Any, url: str) -> None:
         response = await self.browser.navigate(page, url, allowed_hosts=_BILIBILI_HOSTS)
@@ -168,6 +322,15 @@ async def collect_creator(request: CollectionRequest, browser: BrowserSession | 
 
 async def search(request: CollectionRequest, browser: BrowserSession | Any) -> list[dict[str, Any]]:
     return await BilibiliCollector(request, browser).search()
+
+
+def _mark_screenshot_failed(record: dict[str, Any]) -> None:
+    record.update(
+        {
+            "screenshot_status": "failed",
+            "screenshot_error_code": "capture-failed",
+        }
+    )
 
 
 def parse_creator_item(item: Mapping[str, Any], *, observed_at: str | None = None) -> dict[str, Any]:
@@ -602,6 +765,274 @@ async def _read_video_detail(page: Any) -> Mapping[str, Any]:
     return _mapping(observation)
 
 
+async def _wait_for_exact_dynamic_target(page: Any, dynamic_id: str) -> None:
+    await page.wait_for_function(
+        """/* MEDIA_MISSHER_WAIT_EXACT_DYNAMIC_TARGET */ (expectedId) => {
+            const candidates = document.querySelectorAll(
+                'a[href*="t.bilibili.com/"], a[href*="/opus/"], '
+                '[data-did], [dyn-id], [data-dynamic-id]'
+            );
+            return Array.from(candidates).some((node) => {
+                if (!node.isConnected) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                const role = node.getAttribute('role');
+                const actionable = node.matches('a[href], button')
+                    || role === 'link' || role === 'button';
+                if (!actionable || node.matches(':disabled, [aria-disabled="true"]')
+                    || rect.width <= 0 || rect.height <= 0
+                    || style.display === 'none' || style.visibility === 'hidden'
+                    || style.pointerEvents === 'none') return false;
+                for (const name of ['data-did', 'dyn-id', 'data-dynamic-id']) {
+                    if (node.getAttribute(name) === expectedId) return true;
+                }
+                const rawHref = node.getAttribute('href');
+                if (!rawHref) return false;
+                try {
+                    const parsed = new URL(rawHref, window.location.href);
+                    const segments = parsed.pathname.split('/').filter(Boolean);
+                    return parsed.protocol === 'https:'
+                        && ['t.bilibili.com', 'www.bilibili.com'].includes(parsed.hostname)
+                        && segments.length > 0
+                        && decodeURIComponent(segments[segments.length - 1]) === expectedId;
+                } catch (_error) {
+                    return false;
+                }
+            });
+        }""",
+        arg=dynamic_id,
+        timeout=_DYNAMIC_TARGET_TIMEOUT_MS,
+    )
+
+
+async def _read_dynamic_feed_risk(page: Any) -> Mapping[str, Any]:
+    observation = await page.evaluate(
+        """/* MEDIA_MISSHER_DYNAMIC_FEED_RISK */ () => {
+            const bodyText = document.body?.innerText || '';
+            const challengeSelector = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, '
+                'iframe[src*="geetest"], [class*="captcha"]'
+            );
+            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
+            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
+            return {risk_text: challengeSelector ? 'challenge-selector' : phrase};
+        }"""
+    )
+    return _mapping(observation)
+
+
+async def _find_exact_dynamic_target(page: Any, dynamic_id: str) -> Any:
+    if not isinstance(dynamic_id, str) or not dynamic_id or "/" in dynamic_id:
+        raise PreconditionError("exact Bilibili dynamic identifier is invalid")
+    locator = page.locator(
+        'a[href*="t.bilibili.com/"], '
+        'a[href*="/opus/"], '
+        '[data-did], [dyn-id], [data-dynamic-id]'
+    )
+    handles = await locator.element_handles()
+    candidates = []
+    try:
+        for element in handles:
+            try:
+                matches = await element.evaluate(
+                    """/* MEDIA_MISSHER_EXACT_DYNAMIC_TARGET */ (node, expectedId) => {
+                if (!node.isConnected) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                const role = node.getAttribute('role');
+                const actionable = node.matches('a[href], button')
+                    || role === 'link' || role === 'button';
+                if (!actionable || node.matches(':disabled, [aria-disabled="true"]')
+                    || rect.width <= 0 || rect.height <= 0
+                    || style.display === 'none' || style.visibility === 'hidden'
+                    || style.pointerEvents === 'none') return false;
+                for (const name of ['data-did', 'dyn-id', 'data-dynamic-id']) {
+                    if (node.getAttribute(name) === expectedId) return true;
+                }
+                const rawHref = node.getAttribute('href');
+                if (!rawHref) return false;
+                let parsed;
+                try {
+                    parsed = new URL(rawHref, window.location.href);
+                } catch (_error) {
+                    return false;
+                }
+                if (parsed.protocol !== 'https:') return false;
+                if (!['t.bilibili.com', 'www.bilibili.com'].includes(parsed.hostname)) {
+                    return false;
+                }
+                const segments = parsed.pathname.split('/').filter(Boolean);
+                return segments.length > 0
+                    && decodeURIComponent(segments[segments.length - 1]) === expectedId;
+            }""",
+                    dynamic_id,
+                )
+            except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TypeError):
+                matches = False
+            if matches is True:
+                candidates.append(element)
+        if len(candidates) != 1:
+            raise PreconditionError("exact Bilibili dynamic target is ambiguous")
+        selected = candidates[0]
+        for element in handles:
+            if element is not selected:
+                await _dispose_element_handle(element)
+        return selected
+    except BaseException:
+        for element in handles:
+            await _dispose_element_handle(element)
+        raise
+
+
+async def _dispose_element_handle(handle: Any) -> None:
+    try:
+        await handle.dispose()
+    except (AttributeError, PlaywrightError, PlaywrightTimeoutError, TypeError):
+        pass
+
+
+def _valid_video_detail_url(url: object, expected_bvid: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.hostname in {"bilibili.com", "www.bilibili.com"}
+        and [segment for segment in parsed.path.split("/") if segment]
+        == ["video", expected_bvid]
+    )
+
+
+def _valid_dynamic_detail_url(url: object, expected_dynamic_id: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if parsed.hostname == "t.bilibili.com":
+        return segments == [expected_dynamic_id]
+    return (
+        parsed.hostname in {"bilibili.com", "www.bilibili.com"}
+        and segments in (["opus", expected_dynamic_id], ["dynamic", expected_dynamic_id])
+    )
+
+
+async def _read_dynamic_detail(
+    page: Any, expected_dynamic_id: str
+) -> Mapping[str, Any]:
+    if not _valid_dynamic_detail_url(getattr(page, "url", None), expected_dynamic_id):
+        raise PreconditionError("Bilibili detail identifier mismatch")
+    observation = await page.evaluate(
+        r"""/* MEDIA_MISSHER_DYNAMIC_DETAIL */ (expectedId) => {
+            const bodyText = document.body?.innerText || '';
+            const challengeSelector = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], '
+                + 'iframe[src*="captcha"], [class*="captcha"], .challenge-page, .challenge-overlay'
+            );
+            const phrases = [
+                '请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控',
+                'risk', 'locked', 'blocked', 'cooldown', 'challenge'
+            ];
+            const phrase = phrases.find((value) =>
+                bodyText.toLocaleLowerCase().includes(value.toLocaleLowerCase())
+            ) || '';
+            const riskText = challengeSelector ? 'challenge-selector' : phrase;
+            const containers = Array.from(document.querySelectorAll(
+                'main article, .opus-detail, .opus-detail-container, .bili-dyn-item'
+            )).filter((node) => {
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0
+                    && style.display !== 'none' && style.visibility !== 'hidden';
+            });
+            const empty = {
+                dynamic_id: containers.length === 1 || riskText ? expectedId : null,
+                risk_text: riskText,
+                liked: null,
+                comments: null,
+                shares: null,
+                collected: null,
+            };
+            if (riskText || containers.length !== 1) return empty;
+            const container = containers[0];
+            const parseMetric = (value) => {
+                if (typeof value !== 'string') return null;
+                const normalized = value.replace(/,/g, '').trim();
+                const match = normalized.match(/(\d+(?:\.\d+)?)\s*([万亿]?)/);
+                if (!match) return null;
+                const multiplier = match[2] === '亿' ? 100000000 : match[2] === '万' ? 10000 : 1;
+                const number = Number(match[1]) * multiplier;
+                return Number.isFinite(number) && number >= 0 ? number : null;
+            };
+            const metric = (selectors) => {
+                for (const selector of selectors) {
+                    const node = container.querySelector(selector);
+                    if (!node) continue;
+                    for (const value of [
+                        node.getAttribute('aria-label'),
+                        node.getAttribute('title'),
+                        node.textContent,
+                    ]) {
+                        const parsed = parseMetric(value);
+                        if (parsed !== null) return parsed;
+                    }
+                }
+                return null;
+            };
+            return {
+                dynamic_id: expectedId,
+                risk_text: '',
+                liked: metric(['[aria-label*="点赞"]', '.like', '.like-text']),
+                comments: metric(['[aria-label*="评论"]', '.comment', '.comment-text']),
+                shares: metric(['[aria-label*="转发"]', '.forward', '.share']),
+                collected: metric(['[aria-label*="收藏"]', '.favorite', '.collect']),
+            };
+        }""",
+        expected_dynamic_id,
+    )
+    detail = _mapping(observation)
+    if detail.get("dynamic_id") != expected_dynamic_id:
+        raise PreconditionError("Bilibili detail identifier mismatch")
+    return {
+        "dynamic_id": detail.get("dynamic_id"),
+        "risk_text": detail.get("risk_text"),
+        "liked": detail.get("liked"),
+        "comments": detail.get("comments"),
+        "shares": detail.get("shares"),
+        "collected": detail.get("collected"),
+    }
+
+
+def _merge_dynamic_detail(
+    record: dict[str, Any], detail: Mapping[str, Any]
+) -> bool:
+    merged = False
+    for field in ("liked", "comments", "shares", "collected"):
+        value = detail.get(field)
+        if isinstance(value, Real) and not isinstance(value, bool):
+            try:
+                valid = math.isfinite(float(value)) and value >= 0
+            except (OverflowError, TypeError, ValueError):
+                valid = False
+            if valid:
+                record[field] = value
+                merged = True
+    return merged
+
+
 async def _wait_for_search_change(page: Any, previous_ids: list[str]) -> None:
     await page.wait_for_function(
         """(previousIds) => {
@@ -675,6 +1106,10 @@ def _search_page_url(keyword: str) -> str:
 
 def _video_page_url(bvid: str) -> str:
     return f"https://www.bilibili.com/video/{bvid}"
+
+
+def _dynamic_page_url(dynamic_id: str) -> str:
+    return f"https://t.bilibili.com/{dynamic_id}"
 
 
 def _mapping(value: object) -> Mapping[str, Any]:

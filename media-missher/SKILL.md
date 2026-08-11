@@ -3,7 +3,7 @@ name: media-missher
 description: Operate and validate the shared Media@Missher runtime for Bilibili, Xiaohongshu, Douyin, and Weibo. Use for authorized creator collection, single-platform keyword search, complete Bilibili or Xiaohongshu evidence, fresh-run validation, and diagnosis of CDP, login, timeout, lock, cooldown, or risk failures. Keep review and planning read-only, and never perform a remote Feishu write.
 ---
 
-# Media@Missher V12
+# Media@Missher V15
 
 Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 
@@ -28,6 +28,14 @@ Read [commands](references/commands.md) before collection or installation. Read 
 4. Stop immediately on `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, `blocked`, or cooldown signals. Do not retry a risk stop.
 5. Validate only artifacts from the current run and its recorded start time. Reject `latest`, reused directories, old artifacts, symlinks, exit codes, and console checkmarks as proof.
 6. Report counts, statuses, and absolute evidence paths. Limit samples to three metadata-only objects with platform and field count.
+
+## Use optional browser assistance
+
+Browser assistance and screenshots both default to `off`. Enable BrowserSkill only with `--browser-assist browserskill --allow-navigation`; request evidence with `--screenshot-mode opened|all --allow-navigation`. These modes support only Bilibili and Xiaohongshu. `opened` captures a detail page only when the collection already had to open it; `all` opens and captures every selected record.
+
+BrowserSkill 0.1.10 with extension 0.1.6 is an optional external compatibility baseline, not a bundled runtime dependency. BrowserSkill may health-check, start one bounded session, borrow Media@Missher's one marked temporary tab, snapshot, click one exact target, return the tab, and stop. Playwright/CDP remains responsible for response listeners, identifier binding, risk checks, field parsing, and screenshots. Do not use BrowserSkill to read cookies or storage, bypass verification, rotate proxies, or implement anti-detection behavior.
+
+Screenshots are private PNG evidence. The runtime prefers one visible article container and falls back once to `full_page_fallback`. Each successful record carries `screenshot_path`, `screenshot_mode`, `screenshot_capture_kind`, `screenshot_observed_at`, and `screenshot_sha256`; a failed requested capture yields `screenshot-shortfall` without discarding verified structured fields.
 
 ## Preserve safety controls
 

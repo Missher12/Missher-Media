@@ -111,6 +111,157 @@ def test_count_zero_requires_explicit_safe_intent():
     assert request.count == 0
 
 
+def test_opened_screenshot_mode_allows_explicit_unbounded_creator_collection():
+    request = CollectionRequest(
+        platforms=("xhs",),
+        count=0,
+        collect_as_much_as_safe=True,
+        platform_uids={"xhs": "creator"},
+        screenshot_mode="opened",
+        allow_navigation=True,
+    )
+
+    assert request.count == 0
+
+
+def test_adapter_screenshot_all_uses_each_selected_platform_effective_count():
+    request = CollectionRequest(
+        platforms=("bilibili", "xhs"),
+        count=0,
+        platform_counts={"bilibili": 2, "xhs": 3},
+        platform_uids={"bilibili": "b", "xhs": "x"},
+        screenshot_mode="all",
+        allow_navigation=True,
+    )
+
+    assert request.platform_counts == {"bilibili": 2, "xhs": 3}
+
+
+@pytest.mark.parametrize(
+    "platform_counts",
+    (
+        {"bilibili": 2},
+        {"bilibili": 2, "xhs": 0},
+    ),
+)
+def test_adapter_screenshot_all_rejects_any_zero_effective_count(platform_counts):
+    with pytest.raises(ConfigurationError, match="positive"):
+        CollectionRequest(
+            platforms=("bilibili", "xhs"),
+            count=0,
+            platform_counts=platform_counts,
+            platform_uids={"bilibili": "b", "xhs": "x"},
+            collect_as_much_as_safe=True,
+            screenshot_mode="all",
+            allow_navigation=True,
+        )
+
+
+def test_adapter_request_accepts_safe_assist_and_screenshot_modes():
+    request = CollectionRequest(
+        platforms=("xhs",),
+        count=1,
+        platform_uids={"xhs": "creator"},
+        browser_assist="browserskill",
+        screenshot_mode="opened",
+        allow_navigation=True,
+    )
+
+    assert request.browser_assist == "browserskill"
+    assert request.screenshot_mode == "opened"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"browser_assist": "stealth"}, "unsupported"),
+        ({"screenshot_mode": "background"}, "unsupported"),
+        ({"browser_assist": "browserskill"}, "navigation"),
+        ({"screenshot_mode": "all"}, "navigation"),
+        (
+            {
+                "platforms": ("douyin",),
+                "platform_uids": {"douyin": "creator"},
+                "browser_assist": "browserskill",
+                "allow_navigation": True,
+            },
+            "bilibili and xhs",
+        ),
+    ),
+)
+def test_adapter_request_rejects_unsafe_assist_modes(changes, message):
+    values = {
+        "platforms": ("xhs",),
+        "count": 1,
+        "platform_uids": {"xhs": "creator"},
+    }
+    values.update(changes)
+    with pytest.raises(ConfigurationError, match=message):
+        CollectionRequest(**values)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {
+            "platforms": ("xhs",),
+            "count": 0,
+            "collect_as_much_as_safe": True,
+            "screenshot_mode": "all",
+            "allow_navigation": True,
+        },
+        {
+            "platforms": ("bilibili",),
+            "platform_uids": {},
+            "search": "topic",
+            "browser_assist": "browserskill",
+            "allow_navigation": True,
+        },
+        {
+            "platforms": ("bilibili",),
+            "platform_uids": {},
+            "search": "topic",
+            "screenshot_mode": "all",
+            "allow_navigation": True,
+        },
+    ),
+)
+def test_adapter_rejects_unbounded_or_bilibili_search_advanced_modes(changes):
+    values = {
+        "platforms": ("xhs",),
+        "count": 1,
+        "platform_uids": {"xhs": "creator"},
+    }
+    values.update(changes)
+
+    with pytest.raises(ConfigurationError, match="positive|not supported"):
+        CollectionRequest(**values)
+
+
+def test_engine_command_forwards_only_non_default_assist_modes(fake_engine_root, tmp_path):
+    passive = build_engine_command(
+        creator_request(platform_uids={"bilibili": "b", "xhs": "x"}),
+        tmp_path / "passive",
+        layout=runtime_layout(fake_engine_root, tmp_path),
+    )
+    assisted = build_engine_command(
+        creator_request(
+            platforms=("xhs",),
+            platform_uids={"xhs": "x"},
+            browser_assist="browserskill",
+            screenshot_mode="all",
+            allow_navigation=True,
+        ),
+        tmp_path / "assisted",
+        layout=runtime_layout(fake_engine_root, tmp_path),
+    )
+
+    assert "--browser-assist" not in passive.argv
+    assert "--screenshot-mode" not in passive.argv
+    assert assisted.argv[assisted.argv.index("--browser-assist") + 1] == "browserskill"
+    assert assisted.argv[assisted.argv.index("--screenshot-mode") + 1] == "all"
+
+
 def test_collection_cli_exposes_compatibility_options():
     script = Path(__file__).resolve().parents[1] / "media-missher" / "scripts" / "run_collection.py"
     completed = subprocess.run(
@@ -128,6 +279,8 @@ def test_collection_cli_exposes_compatibility_options():
         "--complete",
         "--xhs-comments",
         "--allow-navigation",
+        "--browser-assist",
+        "--screenshot-mode",
         "--no-feishu",
         "--json-summary",
     ):
@@ -271,3 +424,29 @@ def test_collection_cli_requires_explicit_navigation_authorization(
         ]
     ) == 0
     assert captured["request"].allow_navigation is expected
+
+
+def test_collection_cli_carries_assist_modes(monkeypatch):
+    captured = {}
+
+    def capture(request, **_kwargs):
+        captured["request"] = request
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", capture)
+
+    assert run_collection.main(
+        [
+            "--platform",
+            "xhs",
+            "--xhs-uid",
+            "creator",
+            "--browser-assist",
+            "browserskill",
+            "--screenshot-mode",
+            "opened",
+            "--allow-navigation",
+        ]
+    ) == 0
+    assert captured["request"].browser_assist == "browserskill"
+    assert captured["request"].screenshot_mode == "opened"

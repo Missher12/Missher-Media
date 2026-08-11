@@ -48,6 +48,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly authorize exact-host browser navigation for this run",
     )
     parser.add_argument(
+        "--browser-assist",
+        choices=("off", "browserskill"),
+        default="off",
+    )
+    parser.add_argument(
+        "--screenshot-mode",
+        choices=("off", "opened", "all"),
+        default="off",
+    )
+    parser.add_argument(
         "--collect-as-much-as-safe",
         action="store_true",
         help="Explicitly authorize count zero within the engine safety cap",
@@ -129,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
             output_format=args.format,
             collect_as_much_as_safe=args.collect_as_much_as_safe,
             allow_navigation=args.allow_navigation,
+            browser_assist=args.browser_assist,
+            screenshot_mode=args.screenshot_mode,
         )
         cdp_url = (
             args.cdp_url

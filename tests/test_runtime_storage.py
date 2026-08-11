@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 
+PNG = b"\x89PNG\r\n\x1a\nsynthetic"
+
+
 def test_run_store_creates_a_private_unique_run_directory(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.storage import RunStore
 
@@ -230,3 +233,104 @@ def test_atomic_json_syncs_file_and_containing_directory(tmp_path: Path, monkeyp
     assert events.count("fsync-file") == 1
     assert events[-3:] == ["open-directory", "fsync-directory", "close-directory"]
     assert events.index("replace") < events.index("fsync-directory")
+
+
+def test_run_store_writes_private_png_atomically(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "png")
+    target = store.write_private_bytes("screenshots/xhs-note-123.png", PNG)
+
+    assert target.read_bytes() == PNG
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "/tmp/private.png",
+        "../private.png",
+        "screenshots/../private.png",
+        "other/private.png",
+        "screenshots/private.jpg",
+        "screenshots/.png",
+    ),
+)
+def test_private_png_writer_rejects_unsafe_paths(tmp_path: Path, name: str) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "unsafe-png")
+
+    with pytest.raises(ValueError):
+        store.write_private_bytes(name, PNG)
+
+
+@pytest.mark.parametrize("payload", (b"not-png", b""))
+def test_private_png_writer_rejects_non_png_payload(
+    tmp_path: Path, payload: bytes
+) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "invalid-png")
+
+    with pytest.raises(ValueError, match="PNG"):
+        store.write_private_bytes("screenshots/xhs-note.png", payload)
+
+
+def test_private_png_writer_never_overwrites_file_or_symlink(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "occupied-png")
+    screenshot_dir = store.path / "screenshots"
+    screenshot_dir.mkdir(mode=0o700)
+    target = screenshot_dir / "xhs-note.png"
+    target.write_bytes(b"protected")
+
+    with pytest.raises(FileExistsError):
+        store.write_private_bytes("screenshots/xhs-note.png", PNG)
+    assert target.read_bytes() == b"protected"
+
+    target.unlink()
+    protected = tmp_path / "protected.png"
+    protected.write_bytes(b"protected")
+    target.symlink_to(protected)
+    with pytest.raises(FileExistsError):
+        store.write_private_bytes("screenshots/xhs-note.png", PNG)
+    assert protected.read_bytes() == b"protected"
+
+
+def test_private_png_writer_rejects_symlink_screenshot_directory(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.storage import RunStore
+
+    store = RunStore.create(tmp_path, "symlink-dir")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (store.path / "screenshots").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="directory"):
+        store.write_private_bytes("screenshots/xhs-note.png", PNG)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_private_png_writer_closes_descriptor_when_fdopen_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from runtime.media_missher_runtime import storage
+
+    store = storage.RunStore.create(tmp_path, "fdopen-failure")
+    captured: list[int] = []
+
+    def fail_fdopen(descriptor: int, *_args: object, **_kwargs: object) -> object:
+        captured.append(descriptor)
+        raise RuntimeError("synthetic fdopen failure")
+
+    monkeypatch.setattr(storage.os, "fdopen", fail_fdopen)
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        store.write_private_bytes("screenshots/xhs-note.png", PNG)
+
+    assert len(captured) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured[0])

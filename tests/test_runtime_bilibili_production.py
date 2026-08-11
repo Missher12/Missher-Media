@@ -59,7 +59,10 @@ class CapturePage:
     evaluations: list[str] = field(default_factory=list)
     cards: list[list[dict[str, Any]]] = field(default_factory=list)
     details: list[dict[str, Any]] = field(default_factory=list)
-    waits: list[list[str]] = field(default_factory=list)
+    dynamic_details: list[dict[str, Any]] = field(default_factory=list)
+    dynamic_elements: list[Any] = field(default_factory=list)
+    dynamic_targets_require_feed: bool = False
+    waits: list[Any] = field(default_factory=list)
 
     def expect_response(self, predicate: Any, **kwargs: Any) -> ResponseWaiter:
         response = self.responses.pop(0)
@@ -70,15 +73,34 @@ class CapturePage:
         self.url = url
         self.gotos.append(url)
 
-    async def evaluate(self, script: str) -> Any:
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
         self.evaluations.append(script)
+        if "MEDIA_MISSHER_DYNAMIC_DETAIL" in script:
+            return self.dynamic_details.pop(0) if self.dynamic_details else {
+                "dynamic_id": arg,
+                "risk_text": "",
+                "liked": None,
+                "comments": None,
+                "shares": None,
+                "collected": None,
+            }
         if "__INITIAL_STATE__" in script:
             return self.details.pop(0) if self.details else {"videoData": None, "risk_text": ""}
         if "bili-video-card" in script:
             return self.cards.pop(0) if self.cards else []
         return None
 
-    async def wait_for_function(self, script: str, *, arg: list[str], timeout: int) -> None:
+    def locator(self, _selector: str) -> "DynamicLocator":
+        elements = self.dynamic_elements
+        if self.dynamic_targets_require_feed and not self.url.endswith("/dynamic"):
+            elements = []
+        return DynamicLocator(elements)
+
+    async def wait_for_function(self, script: str, *, arg: Any, timeout: int) -> None:
+        if "MEDIA_MISSHER_WAIT_EXACT_DYNAMIC_TARGET" in script:
+            assert timeout == 5_000
+            self.waits.append(arg)
+            return
         assert timeout == 10_000
         self.waits.append(arg)
 
@@ -89,6 +111,8 @@ class ProductionBrowser:
     allow_navigation: bool = True
     navigations: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     navigation_result: object = None
+    detail_open: Any = None
+    screenshots: Any = None
 
     def require_page(self, platform: str) -> CapturePage:
         assert platform == "bilibili"
@@ -109,7 +133,7 @@ class DelayedSearchPage(CapturePage):
     state_index: int = 0
     wait_args: list[list[str]] = field(default_factory=list)
 
-    async def evaluate(self, script: str) -> Any:
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
         self.evaluations.append(script)
         if "bili-video-card" in script:
             return {"risk_text": "", "cards": self.card_states[self.state_index]}
@@ -122,6 +146,124 @@ class DelayedSearchPage(CapturePage):
         if outcome == "timeout":
             raise PlaywrightTimeoutError("synthetic timeout")
         self.state_index += 1
+
+
+@dataclass
+class DelayedDynamicPage(CapturePage):
+    dynamic_states_after_wait: list[list[Any]] = field(default_factory=list)
+    dynamic_wait_outcomes: list[str] = field(default_factory=list)
+    dynamic_wait_args: list[str] = field(default_factory=list)
+    dynamic_feed_risks: list[str] = field(default_factory=list)
+    dynamic_risk_checks: int = 0
+
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
+        if "MEDIA_MISSHER_DYNAMIC_FEED_RISK" in script:
+            self.dynamic_risk_checks += 1
+            return {
+                "risk_text": self.dynamic_feed_risks.pop(0)
+                if self.dynamic_feed_risks
+                else ""
+            }
+        return await super().evaluate(script, arg)
+
+    async def wait_for_function(self, script: str, *, arg: Any, timeout: int) -> None:
+        if "MEDIA_MISSHER_WAIT_EXACT_DYNAMIC_TARGET" not in script:
+            await super().wait_for_function(script, arg=arg, timeout=timeout)
+            return
+        assert timeout == 5_000
+        assert isinstance(arg, str)
+        self.dynamic_wait_args.append(arg)
+        outcome = self.dynamic_wait_outcomes.pop(0) if self.dynamic_wait_outcomes else "ready"
+        if outcome == "timeout":
+            raise PlaywrightTimeoutError("synthetic dynamic timeout")
+        if self.dynamic_states_after_wait:
+            self.dynamic_elements = self.dynamic_states_after_wait.pop(0)
+
+
+@dataclass
+class DynamicElement:
+    dynamic_id: str | None = None
+    href: str | None = None
+    clickable: bool = True
+    disposed: bool = False
+
+    async def evaluate(self, script: str, expected: str) -> bool:
+        assert "MEDIA_MISSHER_EXACT_DYNAMIC_TARGET" in script
+        return self.clickable and (self.dynamic_id == expected or self.href in {
+            f"https://t.bilibili.com/{expected}",
+            f"https://www.bilibili.com/opus/{expected}",
+        })
+
+    async def dispose(self) -> None:
+        self.disposed = True
+
+
+@dataclass
+class DynamicLocator:
+    elements: list[Any]
+
+    async def element_handles(self) -> list[Any]:
+        return self.elements
+
+
+@dataclass
+class AssistedCoordinator:
+    result_page: CapturePage | None = None
+    clicks: list[str] = field(default_factory=list)
+    released: list[CapturePage] = field(default_factory=list)
+
+    async def click_exact(
+        self,
+        page: CapturePage,
+        element: DynamicElement,
+        *,
+        platform: str,
+        native_id: str,
+    ) -> CapturePage:
+        assert platform == "bilibili"
+        assert element.dynamic_id == native_id or element.href is not None
+        self.clicks.append(native_id)
+        target = self.result_page or page
+        target.url = f"https://t.bilibili.com/{native_id}"
+        return target
+
+    async def release(self, page: CapturePage) -> None:
+        self.released.append(page)
+
+
+@dataclass(frozen=True)
+class ScreenshotArtifact:
+    native_id: str
+    request_mode: str
+
+    def as_record_fields(self) -> dict[str, str]:
+        return {
+            "screenshot_path": f"screenshots/bilibili-{self.native_id}.png",
+            "screenshot_mode": self.request_mode,
+            "screenshot_capture_kind": "article",
+            "screenshot_observed_at": "2026-08-11T00:00:00+00:00",
+            "screenshot_sha256": "b" * 64,
+            "screenshot_status": "complete",
+        }
+
+
+@dataclass
+class Screenshots:
+    failure: BaseException | None = None
+    captures: list[tuple[str, str, str]] = field(default_factory=list)
+
+    async def capture(
+        self,
+        _page: CapturePage,
+        *,
+        platform: str,
+        native_id: str,
+        request_mode: str,
+    ) -> ScreenshotArtifact:
+        self.captures.append((platform, native_id, request_mode))
+        if self.failure is not None:
+            raise self.failure
+        return ScreenshotArtifact(native_id, request_mode)
 
 
 def _item(identifier: str, *, bvid: str | None = None, comment: object = {"count": 0}) -> dict[str, Any]:
@@ -464,3 +606,550 @@ def test_complete_keeps_a_placeholder_detail_title_incomplete() -> None:
     assert record["detail_completed"] is True
     assert record["complete"] is False
     assert record["missing_fields"] == ["title"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_target_finder_requires_one_exact_id_match() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        _find_exact_dynamic_target,
+    )
+
+    other = DynamicElement(dynamic_id="other")
+    hidden = DynamicElement(dynamic_id="123456", clickable=False)
+    expected = DynamicElement(dynamic_id="123456")
+    page = CapturePage(dynamic_elements=[other, hidden, expected])
+
+    assert await _find_exact_dynamic_target(page, "123456") is expected
+    assert other.disposed is True
+    assert hidden.disposed is True
+    assert expected.disposed is False
+
+    duplicate = DynamicElement(href="https://t.bilibili.com/123456")
+    page.dynamic_elements.append(duplicate)
+    with pytest.raises(PreconditionError, match="exact Bilibili dynamic target is ambiguous"):
+        await _find_exact_dynamic_target(page, "123456")
+    assert all(element.disposed for element in page.dynamic_elements)
+
+
+def test_creator_restores_feed_between_video_and_dynamic_records() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    dynamic = DynamicElement(dynamic_id="second")
+    page = DelayedDynamicPage(
+        responses=[
+            _feed(
+                _item("first", bvid="BVfirst1"),
+                _item("second"),
+                has_more=False,
+            )
+        ],
+        details=[{
+            "risk_text": "",
+            "videoData": {
+                "bvid": "BVfirst1",
+                "title": "First",
+                "pubdate": 1_700_000_010,
+                "desc": "First video",
+                "stat": {"like": 3, "reply": 0, "share": 1, "favorite": 2},
+            },
+        }],
+        dynamic_details=[{
+            "dynamic_id": "second",
+            "risk_text": "",
+            "liked": 3,
+            "comments": 4,
+            "shares": 5,
+            "collected": 6,
+        }],
+        dynamic_elements=[],
+        dynamic_states_after_wait=[[dynamic]],
+        dynamic_targets_require_feed=True,
+    )
+    coordinator = AssistedCoordinator()
+
+    records = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=2,
+            uid="synthetic-user",
+            complete=True,
+            browser_assist="browserskill",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))
+
+    assert [record["native_id"] for record in records] == ["first", "second"]
+    assert page.gotos == [
+        "https://space.bilibili.com/synthetic-user/dynamic",
+        "https://www.bilibili.com/video/BVfirst1",
+        "https://space.bilibili.com/synthetic-user/dynamic",
+    ]
+    assert coordinator.clicks == ["second"]
+    assert page.dynamic_wait_args == ["second"]
+    assert page.dynamic_risk_checks == 1
+    assert dynamic.disposed is True
+
+
+def test_creator_restores_feed_between_two_same_page_dynamics() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    first = DynamicElement(dynamic_id="first")
+    second = DynamicElement(dynamic_id="second")
+    page = DelayedDynamicPage(
+        responses=[_feed(_item("first"), _item("second"), has_more=False)],
+        dynamic_details=[
+            {"dynamic_id": "first", "risk_text": "", "liked": 1, "comments": 2, "shares": 3, "collected": 4},
+            {"dynamic_id": "second", "risk_text": "", "liked": 5, "comments": 6, "shares": 7, "collected": 8},
+        ],
+        dynamic_elements=[],
+        dynamic_states_after_wait=[[first], [second]],
+        dynamic_targets_require_feed=True,
+    )
+    coordinator = AssistedCoordinator()
+
+    records = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=2,
+            uid="synthetic-user",
+            browser_assist="browserskill",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))
+
+    assert [record["native_id"] for record in records] == ["first", "second"]
+    assert coordinator.clicks == ["first", "second"]
+    assert page.dynamic_wait_args == ["first", "second"]
+    assert page.dynamic_risk_checks == 2
+    assert page.gotos == [
+        "https://space.bilibili.com/synthetic-user/dynamic",
+        "https://space.bilibili.com/synthetic-user/dynamic",
+    ]
+    assert first.disposed is True
+    assert second.disposed is True
+
+
+def test_creator_dynamic_target_wait_timeout_fails_without_clicking() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = DelayedDynamicPage(
+        responses=[_feed(_item("delayed"), has_more=False)],
+        dynamic_wait_outcomes=["timeout"],
+    )
+    coordinator = AssistedCoordinator()
+
+    with pytest.raises(PreconditionError, match="exact Bilibili dynamic target unavailable"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                browser_assist="browserskill",
+            ),
+            ProductionBrowser(page, detail_open=coordinator),
+        ))
+
+    assert coordinator.clicks == []
+    assert page.dynamic_wait_args == ["delayed"]
+    assert page.dynamic_risk_checks == 1
+
+
+def test_creator_dynamic_target_wait_rechecks_risk_before_finding_target() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        CollectionStopped,
+        collect_creator,
+    )
+
+    target = DynamicElement(dynamic_id="blocked")
+    page = DelayedDynamicPage(
+        responses=[_feed(_item("blocked"), has_more=False)],
+        dynamic_states_after_wait=[[target]],
+        dynamic_feed_risks=["请完成验证"],
+    )
+    coordinator = AssistedCoordinator()
+
+    with pytest.raises(CollectionStopped, match="请完成验证"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                browser_assist="browserskill",
+            ),
+            ProductionBrowser(page, detail_open=coordinator),
+        ))
+
+    assert coordinator.clicks == []
+    assert page.dynamic_risk_checks == 1
+
+
+def test_popup_dynamic_is_released_immediately_after_record() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    target = DynamicElement(dynamic_id="123456")
+    popup = CapturePage(dynamic_details=[{
+        "dynamic_id": "123456",
+        "risk_text": "",
+        "liked": 3,
+        "comments": 4,
+        "shares": 5,
+        "collected": 6,
+    }])
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[target],
+    )
+    coordinator = AssistedCoordinator(result_page=popup)
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            browser_assist="browserskill",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))[0]
+
+    assert record["detail_completed"] is True
+    assert coordinator.released == [popup]
+    assert target.disposed is True
+    assert page.url == "https://space.bilibili.com/synthetic-user/dynamic"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_detail_reader_requires_exact_https_url_and_same_id() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import _read_dynamic_detail
+
+    detail = {
+        "dynamic_id": "123456",
+        "risk_text": "",
+        "liked": 3,
+        "comments": 0,
+        "shares": 2,
+        "collected": 1,
+    }
+    page = CapturePage(
+        url="https://t.bilibili.com/123456",
+        dynamic_details=[detail],
+    )
+    assert await _read_dynamic_detail(page, "123456") == detail
+
+    wrong_url = CapturePage(
+        url="https://t.bilibili.com/other",
+        dynamic_details=[detail],
+    )
+    with pytest.raises(PreconditionError, match="detail identifier mismatch"):
+        await _read_dynamic_detail(wrong_url, "123456")
+
+    cross_id = CapturePage(
+        url="https://t.bilibili.com/123456",
+        dynamic_details=[{**detail, "dynamic_id": "other"}],
+    )
+    with pytest.raises(PreconditionError, match="detail identifier mismatch"):
+        await _read_dynamic_detail(cross_id, "123456")
+
+
+def test_assist_opens_unknown_dynamic_and_merges_only_same_id_numeric_metrics() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": None,
+            "comments": 7,
+            "shares": 8,
+            "collected": 9,
+        }],
+    )
+    coordinator = AssistedCoordinator()
+    browser = ProductionBrowser(page, detail_open=coordinator)
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            browser_assist="browserskill",
+        ),
+        browser,
+    ))[0]
+
+    assert coordinator.clicks == ["123456"]
+    assert record["detail_attempted"] is True
+    assert record["detail_completed"] is True
+    assert record["liked"] == 3
+    assert (record["comments"], record["shares"], record["collected"]) == (7, 8, 9)
+    assert record["complete"] is True
+    assert record["missing_fields"] == []
+
+
+def test_assist_does_not_open_dynamic_when_all_engagement_values_are_known_zero() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    item = _item("123456")
+    item["modules"]["module_stat"] = {
+        "comment": {"count": 0},
+        "forward": {"count": 0},
+        "like": {"count": 0},
+        "favorite": {"count": 0},
+    }
+    coordinator = AssistedCoordinator()
+    page = CapturePage(
+        responses=[_feed(item, has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+    )
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            browser_assist="browserskill",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))[0]
+
+    assert coordinator.clicks == []
+    assert record["detail_attempted"] is False
+    assert record["complete"] is False
+
+
+def test_dynamic_open_remains_incomplete_when_detail_metrics_are_unknown() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": None,
+            "comments": None,
+            "shares": None,
+            "collected": None,
+        }],
+    )
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            browser_assist="browserskill",
+        ),
+        ProductionBrowser(page, detail_open=AssistedCoordinator()),
+    ))[0]
+
+    assert record["detail_attempted"] is True
+    assert record["detail_completed"] is False
+    assert record["complete"] is False
+    assert record["missing_fields"] == ["collected"]
+
+
+@pytest.mark.parametrize("mode", ("opened", "all"))
+def test_dynamic_screenshot_modes_capture_only_an_opened_exact_dynamic(mode: str) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    screenshots = Screenshots()
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": 3,
+            "comments": 0,
+            "shares": 2,
+            "collected": 1,
+        }],
+    )
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            browser_assist="browserskill" if mode == "opened" else "off",
+            screenshot_mode=mode,
+        ),
+        ProductionBrowser(
+            page,
+            detail_open=AssistedCoordinator(),
+            screenshots=screenshots,
+        ),
+    ))[0]
+
+    assert screenshots.captures == [("bilibili", "123456", mode)]
+    assert record["screenshot_status"] == "complete"
+    assert record["screenshot_path"] == "screenshots/bilibili-123456.png"
+
+
+def test_opened_screenshot_mode_does_not_cause_a_dynamic_open() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    coordinator = AssistedCoordinator()
+    screenshots = Screenshots()
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+    )
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            screenshot_mode="opened",
+        ),
+        ProductionBrowser(page, detail_open=coordinator, screenshots=screenshots),
+    ))[0]
+
+    assert coordinator.clicks == []
+    assert screenshots.captures == []
+    assert "screenshot_status" not in record
+
+
+def test_dynamic_risk_stops_before_screenshot() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        CollectionStopped,
+        collect_creator,
+    )
+
+    screenshots = Screenshots()
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "challenge-selector",
+            "liked": None,
+            "comments": None,
+            "shares": None,
+            "collected": None,
+        }],
+    )
+
+    with pytest.raises(CollectionStopped, match="challenge"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                screenshot_mode="all",
+            ),
+            ProductionBrowser(
+                page,
+                detail_open=AssistedCoordinator(),
+                screenshots=screenshots,
+            ),
+        ))
+    assert screenshots.captures == []
+
+
+def test_dynamic_screenshot_failure_preserves_verified_metrics() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+    from runtime.media_missher_runtime.screenshots import ScreenshotError
+
+    screenshots = Screenshots(ScreenshotError("capture-failed"))
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": 3,
+            "comments": 4,
+            "shares": 5,
+            "collected": 6,
+        }],
+    )
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            screenshot_mode="all",
+        ),
+        ProductionBrowser(
+            page,
+            detail_open=AssistedCoordinator(),
+            screenshots=screenshots,
+        ),
+    ))[0]
+
+    assert (record["liked"], record["comments"], record["shares"], record["collected"]) == (3, 4, 5, 6)
+    assert record["screenshot_status"] == "failed"
+    assert record["screenshot_error_code"] == "capture-failed"
+
+
+@pytest.mark.parametrize(
+    ("final_url", "observed_bvid"),
+    (
+        ("https://passport.bilibili.com/login", "BVscreen1"),
+        ("https://www.bilibili.com/video/BVscreen1", "BVwrong1"),
+    ),
+)
+def test_video_screenshot_requires_exact_final_url_and_same_observed_bvid(
+    final_url: str,
+    observed_bvid: str,
+) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    @dataclass
+    class FinalUrlPage(CapturePage):
+        async def goto(self, url: str, **kwargs: Any) -> None:
+            await super().goto(url, **kwargs)
+            if "/video/" in url:
+                self.url = final_url
+
+    screenshots = Screenshots()
+    page = FinalUrlPage(
+        responses=[_feed(_item("first", bvid="BVscreen1"), has_more=False)],
+        details=[{
+            "risk_text": "",
+            "videoData": {"bvid": observed_bvid},
+        }],
+    )
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            screenshot_mode="all",
+        ),
+        ProductionBrowser(page, screenshots=screenshots),
+    ))[0]
+
+    assert screenshots.captures == []
+    assert record["screenshot_status"] == "failed"
+    assert record["screenshot_error_code"] == "capture-failed"
+
+
+def test_video_screenshot_captures_only_after_exact_page_verification() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    screenshots = Screenshots()
+    page = CapturePage(
+        responses=[_feed(_item("first", bvid="BVscreen1"), has_more=False)],
+        details=[{
+            "risk_text": "",
+            "videoData": {"bvid": "BVscreen1"},
+        }],
+    )
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            screenshot_mode="all",
+        ),
+        ProductionBrowser(page, screenshots=screenshots),
+    ))[0]
+
+    assert screenshots.captures == [("bilibili", "BVscreen1", "all")]
+    assert record["screenshot_status"] == "complete"

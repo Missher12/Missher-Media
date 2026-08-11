@@ -1,8 +1,8 @@
-# Media@Missher V12 project context
+# Media@Missher V15 project context
 
 Media@Missher collects and validates Bilibili, Xiaohongshu, Douyin, and Weibo records through one independently authored shared runtime. This file records the architecture, verification workflow, deployment state, and recovery boundaries for future work.
 
-The current product version is Media@Missher V12 (`12.0.0`), recorded once in the repository `VERSION` file. Product versioning is separate from the installer's unique UTC timestamp-and-random-suffix deployment release so repeated upgrades and exact rollback paths remain collision-free.
+The current source product version is Media@Missher V15 (`15.0.0`), recorded once in the repository `VERSION` file. Product versioning is separate from the installer's unique UTC timestamp-and-random-suffix deployment release so repeated upgrades and exact rollback paths remain collision-free.
 
 ## Project goal
 
@@ -29,16 +29,23 @@ The repository separates source, deployed runtime, adapters, and installed skill
 
 `current/` contains the deployed source, product `VERSION`, and five entrypoints. `venv/` contains Python 3.11 or newer dependencies. Mode-`0700` `state/` contains locks, cache, checkpoints, reports, and default private runs.
 
-The runtime home uses `.media-missher-owner.json` to prove installer ownership and `.media-missher-install.lock` to serialize installation against launch. One `.media-missher-release` value must match `current/`, `venv/`, the Codex skill, and the OpenClaw skill.
+The runtime home uses `.media-missher-owner.json` to prove installer ownership and `.media-missher-install.lock` to serialize installation against launch. In the current recommended `--codex-only` mode, one `.media-missher-release` value must match `current/`, `venv/`, and the Codex skill. The backward-compatible default dual-skill mode additionally includes the OpenClaw skill.
+
+V15 adds an optional BrowserSkill bridge while preserving Playwright/CDP as the collection authority. BrowserSkill 0.1.10 with extension 0.1.6 may health-check, create one bounded session, borrow the one exact marked Media@Missher temporary tab, snapshot, click, return, and stop. It never owns response capture, identifiers, risk policy, parsing, screenshots, cookies, browser storage, anti-detection, or verification bypass.
+
+Bilibili and Xiaohongshu creator collection may request `--browser-assist browserskill` or `--screenshot-mode opened|all`; both default to `off` and any non-default mode requires explicit `--allow-navigation`. Bilibili search rejects these advanced modes. Bilibili pure text/image dynamics are bound by exact `dynamic_id`; Xiaohongshu keeps its exact response listener and applies the 5–15 second settle only to complete mode. Screenshots remain private mode-`0600` PNG files under the current run and carry run-relative path, `article` or `full_page_fallback` capture kind, `screenshot_observed_at`, and `screenshot_sha256` metadata. `all` requires a positive count; `opened` may retain count `0` because it creates no additional opens.
+
+BrowserSkill 0.1.10 performs its own upstream bundled skill sync whenever an explicitly assisted run executes `bsk session start`; JSON output only hides the hint. Media@Missher does not bypass that behavior. Its preflight remains read-only, starts no session, and downloads or upgrades neither the BrowserSkill binary nor its extension.
 
 ### Adapter boundary
 
 `media-missher/` is the Codex skill and standard-library adapter. It resolves `RuntimeLayout`, validates requests, invokes the shared runtime, validates current evidence, and owns CSV, JSONL, and SQLite conversion.
 
-`openclaw-media-missher/` is a compact OpenClaw package. Both installed skills use the same release markers and shared runtime:
+`openclaw-media-missher/` is retained as a compact backward-compatibility package. OpenClaw was retired from the current machine and `~/.openclaw` is absent, so current installation must not recreate it. The supported current Codex path is:
 
 - `~/.codex/skills/media-missher`
-- `~/.openclaw/workspace/skills/media-missher`
+
+Historical dual-skill environments may also use `~/.openclaw/workspace/skills/media-missher` through the installer's no-mode compatibility behavior.
 
 Neither skill contains a platform implementation, dependency environment, user data, or personal absolute path.
 
@@ -47,7 +54,7 @@ Neither skill contains a platform implementation, dependency environment, user d
 Installed skills are optional. The repository adapter is the supported no-skill entrypoint and invokes the shared Python 3.11-or-newer runtime:
 
 ```bash
-python3 tools/install_media_missher.py --runtime-only
+python3 tools/install_media_missher.py --codex-only
 python3 media-missher/scripts/preflight.py --profile "$PROFILE_PATH" --live --json
 python3 media-missher/scripts/run_collection.py \
   --profile "$PROFILE_PATH" \
@@ -76,23 +83,30 @@ Run the complete offline suite with all sockets disabled:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
-  --with pytest --with pytest-asyncio --with pytest-socket --with playwright \
-  python -m pytest -q -p no:cacheprovider --disable-socket
+  --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket
 ```
 
 Run the documentation and active residual tests with:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
+  --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_packaging.py tests/test_active_residuals.py
 ```
 
 Run `python3 tools/scan_active_residuals.py --root .` after each documentation or packaging change. Run compile checks and all five entrypoint help commands before deployment.
 
-The Media@Missher V12 source baseline passes 664 tests with Playwright installed, zero failures, and zero skips. The full suite runs with sockets disabled. All five runtime entrypoints accept `--help`, the active residual scanner returns zero for the three source package roots, and the official skill validator accepts both packages. An independent final review also passed 143 Xiaohongshu and packaging tests with no P0/P1 findings.
+Current V15 offline evidence (2026-08-11): the focused sockets-disabled suite passed 605 tests and the complete sockets-disabled suite passed 870 tests, with zero failures and zero skips. The one warning is the expected `pytest-socket` warning from the test that proves AF_INET and AF_INET6 remain blocked while Unix sockets are allowed. Runtime compilation, all five `--help` entrypoints, the active residual scan, installer version output, both skill validators, and `git diff --check` also passed. This is source-only offline evidence and is not installation or live-platform acceptance.
+
+Historical V12 evidence: the V12 source baseline passed 664 tests with Playwright installed, zero failures, and zero skips. The full suite ran with sockets disabled. All five runtime entrypoints accepted `--help`, the active residual scanner returned zero for the three source package roots, and the official skill validator accepted both packages. These dated results remain historical evidence and are not V15 proof.
 
 ## Live acceptance
+
+V15 live acceptance has not been performed. No V15 real-platform collection, BrowserSkill session, installation, tag, GitHub push, or release has been executed during implementation. The following evidence is retained solely as historical V12 behavior and must not be presented as current V15 acceptance.
 
 Live acceptance is a separate authorized stage. The latest sequential count-`1` run at `~/.local/share/media-missher/state/runs/run-20260803T183331Z-yio893cc` produced one current record for every platform in 51.704 seconds with no timeout, risk signal, or Feishu artifact. Bilibili complete mode passed with 35 fields. Douyin and Weibo passed with 24 and 22 fields. Xiaohongshu matched the expected note, consumed a fresh official detail response, and produced 53 fields including body, author, publish time, location, media, tags, and the other engagement values, but remained incomplete only because `collected` was unknown.
 
@@ -106,7 +120,7 @@ Before any future live acceptance, run live preflight against the existing brows
 
 Open a temporary page only with explicit navigation authorization. Close only the temporary page after validation. Do not retry a risk stop.
 
-## Cutover
+## Historical V12 Cutover
 
 The local atomic cutover completed with release `20260804T014259715054Z-e8a088d6`. Before installation, the three source roots were frozen at SHA-256 `af820b6ca4fa62f291d179a4f0aefe931e7719935233c54f8a7cd3206fb2a07b`; the hash was unchanged after staged installation and before full cutover.
 
@@ -126,7 +140,8 @@ Keep runtime outputs and historical evidence during rollback.
 
 ## Current limitations
 
-- The randomized Xiaohongshu open-note dwell is fully offline-tested and installed, but has not been followed by another real collection; do not claim post-dwell live proof without a future explicit authorization
+- V15 live acceptance, installation, and release remain pending final supervision; offline tests do not prove current platform DOM compatibility
+- The randomized Xiaohongshu open-note dwell is fully offline-tested in the V15 source but V15 is not installed; do not claim installed or live post-dwell proof without a future explicitly authorized cutover and collection
 - Xiaohongshu complete batches add 5–15 seconds per successfully opened note; increase `--platform-timeout` for larger counts rather than reducing or removing the dwell
 - Platform response schemas, login markers, and challenge behavior can change without notice
 - Creator collection needs a non-empty UID for every selected platform; search does not

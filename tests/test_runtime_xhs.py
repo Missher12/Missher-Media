@@ -30,6 +30,11 @@ class Response:
     url: str = "https://www.xiaohongshu.com/api/sns/web/v1/user_posted"
     error: Exception | None = None
     request: object | None = None
+    page: object | None = None
+
+    @property
+    def frame(self) -> object:
+        return type("Frame", (), {"page": self.page})()
 
     async def json(self) -> object:
         if self.error:
@@ -73,6 +78,8 @@ class Waiter:
             while self.page.responses:
                 response = self.page.responses.pop(0)
                 if self.predicate(response):
+                    if response.page is None:
+                        response.page = self.page
                     return response
                 self.page.ignored_responses += 1
             if self.page.challenge_on_response_timeout:
@@ -117,9 +124,13 @@ class Locator:
         self.page.synthetic_clicks.append(note_id)
         self.page.clicked.append(note_id)
         self.page.modal_visible = True
+        self.page.url = f"https://www.xiaohongshu.com/explore/{note_id}"
 
     async def element_handles(self) -> list["ElementHandle"]:
-        assert self.selector == "#userPostedFeeds .note-item[data-note-id]"
+        assert self.selector == (
+            "#userPostedFeeds .note-item[data-note-id], "
+            ".feeds-page .note-item[data-note-id]"
+        )
         return [ElementHandle(self.page, card) for card in self.page.cards]
 
 
@@ -187,6 +198,7 @@ class ElementHandle:
         self.page.handle_clicks.append((note_id, self.selector))
         self.page.clicked.append(note_id)
         self.page.modal_visible = True
+        self.page.url = f"https://www.xiaohongshu.com/explore/{note_id}"
         if self.page.detail_response_on_click is not None:
             self.page.responses.append(self.page.detail_response_on_click)
             self.page.detail_response_on_click = None
@@ -376,6 +388,8 @@ class Browser:
     navigations: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     navigation_status: int | None = None
     navigation_url_override: str | None = None
+    detail_open: Any = None
+    screenshots: Any = None
 
     def require_page(self, platform: str) -> Page:
         assert platform == "xhs"
@@ -393,10 +407,85 @@ class Browser:
         return type("NavigationResponse", (), {"status": self.navigation_status})()
 
 
-def note(note_id: str, *, title: object = "Nice note", liked: object = 0) -> dict[str, Any]:
+@dataclass
+class AssistedCoordinator:
+    clicks: list[str] = field(default_factory=list)
+    released: list[Page] = field(default_factory=list)
+
+    async def click_exact(
+        self,
+        page: Page,
+        element: ElementHandle,
+        *,
+        platform: str,
+        native_id: str,
+    ) -> Page:
+        assert platform == "xhs"
+        assert page.listeners == 1
+        page.events.append("assist-click")
+        self.clicks.append(native_id)
+        await element.click(timeout=5_000)
+        return page
+
+    async def release(self, page: Page) -> None:
+        self.released.append(page)
+
+
+@dataclass(frozen=True)
+class ScreenshotArtifact:
+    native_id: str
+    request_mode: str
+
+    def as_record_fields(self) -> dict[str, str]:
+        return {
+            "screenshot_path": f"screenshots/xhs-{self.native_id}.png",
+            "screenshot_mode": self.request_mode,
+            "screenshot_capture_kind": "article",
+            "screenshot_observed_at": "2026-08-11T00:00:00+00:00",
+            "screenshot_sha256": "a" * 64,
+            "screenshot_status": "complete",
+        }
+
+
+@dataclass
+class Screenshots:
+    failure: BaseException | None = None
+    captures: list[tuple[str, str, str]] = field(default_factory=list)
+
+    async def capture(
+        self,
+        _page: Page,
+        *,
+        platform: str,
+        native_id: str,
+        request_mode: str,
+    ) -> ScreenshotArtifact:
+        self.captures.append((platform, native_id, request_mode))
+        if self.failure is not None:
+            raise self.failure
+        return ScreenshotArtifact(native_id, request_mode)
+
+
+def note(
+    note_id: str,
+    *,
+    title: object = "Nice note",
+    liked: object = 0,
+    comments: object = None,
+    collected: object = None,
+    shares: object = None,
+) -> dict[str, Any]:
+    interact_info = {"liked_count": liked, "liked": True, "sticky": False}
+    for key, value in (
+        ("comment_count", comments),
+        ("collected_count", collected),
+        ("share_count", shares),
+    ):
+        if value is not None:
+            interact_info[key] = value
     return {
         "note_id": note_id, "type": "normal", "display_title": title,
-        "interact_info": {"liked_count": liked, "liked": True, "sticky": False},
+        "interact_info": interact_info,
         "user": {"nickname": "Creator", "user_id": "must-not-leak"}, "xsec_token": "must-not-leak",
     }
 
@@ -447,6 +536,347 @@ def test_creator_count_stops_without_extra_scroll_and_disabled_navigation_requir
         run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u"), Browser(Page(url="https://www.xiaohongshu.com/search_result?keyword=x"), allow_navigation=False)))
 
 
+def test_ordinary_browser_assist_opens_only_missing_engagement_and_stays_incomplete() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                browser_assist="browserskill",
+            ),
+            Browser(page, detail_open=coordinator),
+        )
+    )[0]
+
+    assert coordinator.clicks == ["one"]
+    assert page.events[-2:] == ["listener", "assist-click"]
+    assert record["comments"] == 2
+    assert record["collected"] == 3
+    assert record["shares"] == 4
+    assert record["detail_completed"] is True
+    assert record["complete"] is False
+    assert page.detail_open_waits == []
+
+
+def test_known_zero_engagement_never_triggers_ordinary_assist() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[
+            creator_response(
+                note("zero", liked=0, comments=0, collected=0, shares=0)
+            )
+        ],
+        cards=[{"note_id": "zero"}],
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                browser_assist="browserskill",
+            ),
+            Browser(page, detail_open=coordinator),
+        )
+    )[0]
+
+    assert coordinator.clicks == []
+    assert page.clicked == []
+    assert page.detail_open_waits == []
+    assert record["liked"] == record["comments"] == 0
+    assert record["collected"] == record["shares"] == 0
+
+
+def test_complete_browser_assist_registers_listener_before_exact_click() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                complete=True,
+                browser_assist="browserskill",
+            ),
+            Browser(page, detail_open=coordinator),
+        )
+    )[0]
+
+    assert coordinator.clicks == ["one"]
+    assert page.events[-2:] == ["listener", "assist-click"]
+    assert record["complete"] is True
+
+
+def test_screenshot_all_opens_and_captures_each_record() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    screenshots = Screenshots()
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                screenshot_mode="all",
+            ),
+            Browser(page, detail_open=coordinator, screenshots=screenshots),
+        )
+    )[0]
+
+    assert page.clicked == ["one"]
+    assert coordinator.clicks == ["one"]
+    assert screenshots.captures == [("xhs", "one", "all")]
+    assert record["screenshot_status"] == "complete"
+    assert record["screenshot_path"] == "screenshots/xhs-one.png"
+    assert record["complete"] is False
+
+
+def test_screenshot_opened_does_not_cause_an_unneeded_open() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    screenshots = Screenshots()
+    page = Page(
+        responses=[
+            creator_response(
+                note("known", liked=0, comments=0, collected=0, shares=0)
+            )
+        ],
+        cards=[{"note_id": "known"}],
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                screenshot_mode="opened",
+            ),
+            Browser(page, screenshots=screenshots),
+        )
+    )[0]
+
+    assert page.clicked == []
+    assert screenshots.captures == []
+    assert "screenshot_status" not in record
+
+
+def test_screenshot_failure_preserves_verified_structured_fields() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+    from runtime.media_missher_runtime.screenshots import ScreenshotError
+
+    screenshots = Screenshots(ScreenshotError("capture-failed"))
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                complete=True,
+                screenshot_mode="opened",
+            ),
+            Browser(page, screenshots=screenshots),
+        )
+    )[0]
+
+    assert record["detail_completed"] is True
+    assert record["comments"] == 2
+    assert record["screenshot_status"] == "failed"
+    assert record["screenshot_error_code"] == "capture-failed"
+
+
+def test_noncomplete_browser_assist_timeout_keeps_partial_record_and_screenshot() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    screenshots = Screenshots()
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[creator_response(note("one"))],
+        cards=[{"note_id": "one"}],
+        detail_metrics={"liked": "3", "comments": "4"},
+    )
+
+    record = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                browser_assist="browserskill",
+                screenshot_mode="opened",
+            ),
+            Browser(page, detail_open=coordinator, screenshots=screenshots),
+        )
+    )[0]
+
+    assert record["complete"] is False
+    assert record["detail_attempted"] is True
+    assert record["screenshot_status"] == "complete"
+    assert screenshots.captures == [("xhs", "one", "opened")]
+    assert page.detail_open_waits == []
+
+
+def test_screenshot_all_marks_missing_card_and_invalid_id_as_failed() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import XhsCollector, collect_creator
+
+    missing_card = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                screenshot_mode="all",
+            ),
+            Browser(Page(responses=[creator_response(note("one"))], cards=[])),
+        )
+    )[0]
+    invalid_id = {"note_id": "../unsafe", "complete": False}
+    request = CollectionRequest(
+        platform="xhs",
+        count=1,
+        uid="u",
+        screenshot_mode="all",
+    )
+    run(
+        XhsCollector(request, Browser(Page()))._open_record(
+            Page(), invalid_id, completion_required=False
+        )
+    )
+
+    for record in (missing_card, invalid_id):
+        assert record["screenshot_status"] == "failed"
+        assert record["screenshot_error_code"] == "capture-failed"
+
+
+@pytest.mark.asyncio
+async def test_popup_detail_listener_ignores_same_id_response_from_wrong_page_and_releases_popup() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    original = Page(
+        responses=[creator_response(note("one"))],
+        cards=[{"note_id": "one"}],
+    )
+    popup = Page(url="https://www.xiaohongshu.com/explore/one")
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages = [original, popup]
+            self.listeners: list[Any] = []
+
+        def on(self, event: str, listener: Any) -> None:
+            assert event == "response"
+            self.listeners.append(listener)
+
+        def remove_listener(self, event: str, listener: Any) -> None:
+            assert event == "response"
+            self.listeners.remove(listener)
+
+        def emit(self, response: Response) -> None:
+            for listener in tuple(self.listeners):
+                listener(response)
+
+    context = Context()
+    original.context = context  # type: ignore[attr-defined]
+    popup.context = context  # type: ignore[attr-defined]
+
+    @dataclass
+    class PopupCoordinator:
+        released: list[Page] = field(default_factory=list)
+
+        async def click_exact(
+            self,
+            _page: Page,
+            _element: ElementHandle,
+            *,
+            platform: str,
+            native_id: str,
+        ) -> Page:
+            assert platform == "xhs" and native_id == "one"
+            assert context.listeners
+            wrong = detail_response("one")
+            wrong.page = original
+            right = detail_response("one")
+            right.page = popup
+            context.emit(wrong)
+            context.emit(right)
+            return popup
+
+        async def release(self, page: Page) -> None:
+            self.released.append(page)
+
+    coordinator = PopupCoordinator()
+    records = await collect_creator(
+        CollectionRequest(
+            platform="xhs",
+            count=1,
+            uid="u",
+            complete=True,
+            browser_assist="browserskill",
+        ),
+        Browser(original, detail_open=coordinator),
+    )
+
+    assert records[0]["complete"] is True
+    assert coordinator.released == [popup]
+    assert context.listeners == []
+
+
+def test_risk_detail_response_stops_before_screenshot() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import (
+        CollectionStopped,
+        collect_creator,
+    )
+
+    detail = detail_response("one")
+    detail.status = 403
+    screenshots = Screenshots()
+    page = Page(
+        responses=[creator_response(note("one")), detail],
+        cards=[{"note_id": "one"}],
+    )
+
+    with pytest.raises(CollectionStopped, match="http-403"):
+        run(
+            collect_creator(
+                CollectionRequest(
+                    platform="xhs",
+                    count=1,
+                    uid="u",
+                    complete=True,
+                    screenshot_mode="opened",
+                ),
+                Browser(page, screenshots=screenshots),
+            )
+        )
+
+    assert screenshots.captures == []
+
+
 def test_search_reads_dom_cards_canonicalizes_links_and_never_completes() -> None:
     from runtime.media_missher_runtime.platforms.xhs import search
     page = Page(cards=[{"note_id": "abc_1", "title": "T", "desc": "D", "author": "N", "liked": "1.2万", "href": "/explore/abc_1?xsec_token=must-not-leak"}])
@@ -463,6 +893,43 @@ def test_search_reads_dom_cards_canonicalizes_links_and_never_completes() -> Non
     assert page.detail_open_waits == []
     with pytest.raises(ValueError, match="complete search"):
         run(search(CollectionRequest(platform="xhs", count=1, keyword="term", complete=True), Browser(page)))
+
+
+def test_search_screenshot_all_opens_and_captures_exact_note() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import search
+
+    screenshots = Screenshots()
+    coordinator = AssistedCoordinator()
+    page = Page(
+        responses=[detail_response("search-one")],
+        cards=[
+            {
+                "note_id": "search-one",
+                "title": "Search result",
+                "liked": 1,
+                "visible": True,
+            }
+        ],
+    )
+
+    record = run(
+        search(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                keyword="term",
+                screenshot_mode="all",
+            ),
+            Browser(page, detail_open=coordinator, screenshots=screenshots),
+        )
+    )[0]
+
+    assert page.clicked == ["search-one"]
+    assert coordinator.clicks == ["search-one"]
+    assert screenshots.captures == [("xhs", "search-one", "all")]
+    assert record["screenshot_status"] == "complete"
+    assert record["complete"] is False
+    assert page.detail_open_waits == []
 
 
 def test_search_preserves_only_observable_safe_business_fields() -> None:

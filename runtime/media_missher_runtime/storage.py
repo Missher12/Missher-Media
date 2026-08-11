@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,13 +10,29 @@ from typing import Any, Mapping
 
 
 PLATFORMS = frozenset({"bilibili", "xhs", "douyin", "weibo"})
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+MAX_PRIVATE_BYTES = 50 * 1024 * 1024
+_PNG_BASENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,191}\.png")
 
 DIAGNOSTIC_CODES = {
     "ok": frozenset({"ok"}),
-    "result": frozenset({"count-shortfall", "incomplete-record"}),
+    "result": frozenset(
+        {"count-shortfall", "incomplete-record", "screenshot-shortfall"}
+    ),
     "not-run": frozenset({"preflight-aborted", "prior-risk-stop"}),
     "dependency": frozenset({"module-not-found"}),
-    "precondition": frozenset({"precondition-failed"}),
+    "precondition": frozenset(
+        {
+            "precondition-failed",
+            "bsk-missing",
+            "bsk-unhealthy",
+            "bsk-incompatible",
+            "bsk-busy",
+            "bsk-transport",
+            "bsk-timeout",
+            "bsk-target-ambiguous",
+        }
+    ),
     "source-response": frozenset({"source-response-failed"}),
     "risk-stop": frozenset(
         {
@@ -71,9 +88,13 @@ def _validate_diagnostic(status: object, value: object) -> None:
     exact_result = {
         "complete": ("ok", "ok"),
         "shortfall": ("result", "count-shortfall"),
-        "incomplete": ("result", "incomplete-record"),
     }.get(status)
     if exact_result is not None and (kind, code) != exact_result:
+        raise ValueError("manifest status and diagnostic do not match")
+    if status == "incomplete" and (kind, code) not in {
+        ("result", "incomplete-record"),
+        ("result", "screenshot-shortfall"),
+    }:
         raise ValueError("manifest status and diagnostic do not match")
 
 
@@ -113,6 +134,70 @@ class RunStore:
                 os.close(directory_descriptor)
         finally:
             if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+        return target
+
+    def write_private_bytes(self, relative_name: str, payload: bytes) -> Path:
+        if not isinstance(relative_name, str):
+            raise ValueError("private artifact path must be a string")
+        relative = Path(relative_name)
+        if (
+            relative.is_absolute()
+            or len(relative.parts) != 2
+            or relative.parts[0] != "screenshots"
+            or relative.parts[1] in {".", ".."}
+            or _PNG_BASENAME.fullmatch(relative.parts[1]) is None
+        ):
+            raise ValueError("private PNG path is unsafe")
+        if (
+            not isinstance(payload, bytes)
+            or not payload.startswith(PNG_SIGNATURE)
+            or len(payload) > MAX_PRIVATE_BYTES
+        ):
+            raise ValueError("private artifact must be a bounded PNG")
+
+        screenshot_dir = self.path / "screenshots"
+        if os.path.lexists(screenshot_dir):
+            if screenshot_dir.is_symlink() or not screenshot_dir.is_dir():
+                raise ValueError("screenshot directory is unsafe")
+        else:
+            screenshot_dir.mkdir(mode=0o700)
+        os.chmod(screenshot_dir, 0o700)
+
+        target = screenshot_dir / relative.parts[1]
+        if os.path.lexists(target):
+            raise FileExistsError(target)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".tmp-", suffix=".png", dir=screenshot_dir
+        )
+        try:
+            try:
+                os.fchmod(descriptor, 0o600)
+                handle = os.fdopen(descriptor, "wb")
+            except BaseException:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise
+            with handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.path.lexists(target):
+                raise FileExistsError(target)
+            os.replace(temporary_name, target)
+            os.chmod(target, 0o600)
+            directory_descriptor = os.open(
+                screenshot_dir,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            if os.path.lexists(temporary_name):
                 os.unlink(temporary_name)
         return target
 

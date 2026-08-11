@@ -285,7 +285,9 @@ def _run_cli(
     run_dirs = list(output.glob("run-*"))
     assert len(run_dirs) == 1, completed.stderr
     run_dir = run_dirs[0]
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest_path = run_dir / "manifest.json"
+    assert manifest_path.exists(), completed.stderr
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     artifact = run_dir / f"{case.platform}.json"
     records = json.loads(artifact.read_text(encoding="utf-8")) if artifact.exists() else []
     return completed, run_dir, manifest, records

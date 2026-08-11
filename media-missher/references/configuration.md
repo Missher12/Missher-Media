@@ -4,9 +4,9 @@ This reference defines the shared runtime layout, configuration precedence, priv
 
 ## Resolve the runtime home
 
-The repository `VERSION` file is the authoritative product version. Media@Missher V12 uses `12.0.0`. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
+The repository `VERSION` file is the authoritative product version. Media@Missher V15 uses `15.0.0`. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
 
-`MEDIA_MISSHER_HOME` selects one shared home for the Codex and OpenClaw skills. When it is unset, both use `~/.local/share/media-missher`.
+`MEDIA_MISSHER_HOME` selects the shared runtime home. When it is unset, the runtime and installed skills use `~/.local/share/media-missher`. OpenClaw is retired on the current machine; its source package and dual-skill installer mode remain only for backward compatibility with historical environments.
 
 The home contains these paths:
 
@@ -14,7 +14,7 @@ The home contains these paths:
 - `venv/`: Python 3.11 or newer dependency environment
 - `state/`: mode-`0700` locks, checkpoints, cache, reports, and default `runs/`
 
-The runtime installer writes mode-`0600` `.media-missher-owner.json` and `.media-missher-release` markers. The release value must match across `current/`, `venv/`, the Codex skill, and the OpenClaw skill. Installation holds `.media-missher-install.lock`; launchers take a shared lock before using a release.
+The runtime installer writes mode-`0600` `.media-missher-owner.json` and `.media-missher-release` markers. With the recommended `--codex-only` mode, the release value must match across `current/`, `venv/`, and the Codex skill; the backward-compatible default additionally requires the OpenClaw skill to match. Installation holds `.media-missher-install.lock`; launchers take a shared lock before using a release.
 
 Preflight rejects missing or inconsistent markers, symlinked path components, a non-private state directory, an unwritable state directory, missing dependencies, broken entrypoints, and a timed-out install lock.
 
@@ -59,3 +59,13 @@ Creator mode requires a non-empty `platform_uids` value for every selected platf
 The adapter rejects a profile inside the repository or installed skill. It also rejects permissions other than `0600`, unknown platforms, empty targets, negative or fractional counts, and negative or non-finite timeouts.
 
 The profile must not contain Feishu credentials. Media@Missher never performs a remote Feishu write.
+
+## Configure optional V15 browser modes
+
+`--browser-assist` defaults to `off`; `--screenshot-mode` defaults to `off`. The accepted values are `--browser-assist off|browserskill` and `--screenshot-mode off|opened|all`. Any non-default value requires `--allow-navigation` and a Bilibili or Xiaohongshu request.
+
+BrowserSkill is an external optional dependency. The compatibility baseline is BrowserSkill 0.1.10 and extension 0.1.6. Media@Missher does not download, install, upgrade, or launch that dependency during preflight. Playwright/CDP remains the authority for response listening, native-ID validation, risk checks, and screenshot capture.
+
+BrowserSkill 0.1.10 performs its own upstream bundled skill sync whenever an explicitly requested assisted run actually executes `bsk session start`; JSON mode hides the upstream hint but does not suppress that sync. Media@Missher does not bypass this upstream behavior. Its preflight remains read-only and does not start a session or download or upgrade the BrowserSkill binary or extension.
+
+`--screenshot-mode all` requires a positive effective count. Count `0` remains available with `off` or `opened`. Bilibili search rejects non-`off` browser assistance and screenshot modes; creator dynamics are the supported Bilibili advanced-mode path.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -27,6 +28,34 @@ from typing import Callable, Mapping
 
 
 PLATFORMS = ("bilibili", "xhs", "douyin", "weibo")
+_BROWSER_ASSIST_MODES = frozenset({"off", "browserskill"})
+_SCREENSHOT_MODES = frozenset({"off", "opened", "all"})
+MAX_SCREENSHOT_BYTES = 50 * 1024 * 1024
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_SAFE_SCREENSHOT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SCREENSHOT_COMPLETE_FIELDS = frozenset(
+    {
+        "screenshot_path",
+        "screenshot_mode",
+        "screenshot_capture_kind",
+        "screenshot_observed_at",
+        "screenshot_sha256",
+        "screenshot_status",
+    }
+)
+_SCREENSHOT_FIELDS = _SCREENSHOT_COMPLETE_FIELDS | {"screenshot_error_code"}
+_SAFE_PRECONDITION_CODES = frozenset(
+    {
+        "precondition-failed",
+        "bsk-missing",
+        "bsk-unhealthy",
+        "bsk-incompatible",
+        "bsk-busy",
+        "bsk-transport",
+        "bsk-timeout",
+        "bsk-target-ambiguous",
+    }
+)
 RUNTIME_ENTRYPOINTS = (
     "scrape_all.py",
     "scrape_bilibili.py",
@@ -49,10 +78,12 @@ _MANIFEST_KEYS = frozenset(
 )
 _DIAGNOSTIC_CODES = {
     "ok": frozenset({"ok"}),
-    "result": frozenset({"count-shortfall", "incomplete-record"}),
+    "result": frozenset(
+        {"count-shortfall", "incomplete-record", "screenshot-shortfall"}
+    ),
     "not-run": frozenset({"preflight-aborted", "prior-risk-stop"}),
     "dependency": frozenset({"module-not-found"}),
-    "precondition": frozenset({"precondition-failed"}),
+    "precondition": _SAFE_PRECONDITION_CODES,
     "source-response": frozenset({"source-response-failed"}),
     "risk-stop": frozenset(
         {
@@ -141,9 +172,13 @@ def _validated_manifest_diagnostics(manifest: object) -> dict[str, dict[str, str
         expected = {
             "complete": ("ok", "ok"),
             "shortfall": ("result", "count-shortfall"),
-            "incomplete": ("result", "incomplete-record"),
         }.get(platform_status)
         if expected is not None and (kind, code) != expected:
+            raise ConfigurationError("runtime manifest status and diagnostic differ")
+        if platform_status == "incomplete" and (kind, code) not in {
+            ("result", "incomplete-record"),
+            ("result", "screenshot-shortfall"),
+        }:
             raise ConfigurationError("runtime manifest status and diagnostic differ")
         sanitized[platform] = {"kind": kind, "code": code}
     overall = manifest.get("status")
@@ -182,6 +217,8 @@ class CollectionRequest:
     output_format: str = "json"
     collect_as_much_as_safe: bool = False
     allow_navigation: bool = False
+    browser_assist: str = "off"
+    screenshot_mode: str = "off"
 
     def __post_init__(self):
         requested = tuple(dict.fromkeys(str(item).strip().lower() for item in self.platforms))
@@ -202,8 +239,12 @@ class CollectionRequest:
             normalized_counts[key] = parse_non_negative_int(value)
         object.__setattr__(self, "platform_counts", normalized_counts)
 
-        zero_requested = count == 0 or any(value == 0 for value in normalized_counts.values())
-        if zero_requested and not self.collect_as_much_as_safe:
+        effective_counts = {
+            platform: normalized_counts.get(platform, count)
+            for platform in requested
+        }
+        zero_effective_count = any(value == 0 for value in effective_counts.values())
+        if zero_effective_count and not self.collect_as_much_as_safe:
             raise ConfigurationError(
                 "count zero requires explicit collect-as-much-as-safe intent"
             )
@@ -253,6 +294,19 @@ class CollectionRequest:
             raise ConfigurationError("output format must be json, csv, jsonl, or sqlite")
         if not isinstance(self.allow_navigation, bool):
             raise ConfigurationError("navigation authorization must be an explicit boolean")
+        if self.browser_assist not in _BROWSER_ASSIST_MODES:
+            raise ConfigurationError("unsupported browser assist mode")
+        if self.screenshot_mode not in _SCREENSHOT_MODES:
+            raise ConfigurationError("unsupported screenshot mode")
+        if self.screenshot_mode == "all" and zero_effective_count:
+            raise ConfigurationError("screenshot mode all requires a positive count")
+        assisted = self.browser_assist != "off" or self.screenshot_mode != "off"
+        if assisted and not self.allow_navigation:
+            raise ConfigurationError("browser assist and screenshots require navigation authorization")
+        if assisted and any(platform not in {"bilibili", "xhs"} for platform in requested):
+            raise ConfigurationError("browser assist and screenshots support only bilibili and xhs")
+        if assisted and search and requested == ("bilibili",):
+            raise ConfigurationError("Bilibili search advanced modes are not supported")
 
 
 @dataclass(frozen=True)
@@ -625,6 +679,10 @@ def build_engine_command(
     argv.extend(("--cdp-url", str(cdp_url)))
     if request.allow_navigation:
         argv.append("--allow-navigation")
+    if request.browser_assist != "off":
+        argv.extend(("--browser-assist", request.browser_assist))
+    if request.screenshot_mode != "off":
+        argv.extend(("--screenshot-mode", request.screenshot_mode))
     argv.extend(("--format", "json", "--output", str(staging)))
     environment = {
         "MEDIA_MISSHER_HOME": str(layout.home),
@@ -1213,6 +1271,140 @@ def _xhs_complete(record: Mapping, started_ns: int) -> bool:
     )
 
 
+def _screenshot_native_id(record: Mapping, platform: str) -> str | None:
+    keys = (
+        ("bvid", "dynamic_id")
+        if platform == "bilibili"
+        else _NATIVE_ID_KEYS[platform]
+    )
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str) and _SAFE_SCREENSHOT_ID.fullmatch(value):
+            return value
+    return None
+
+
+def _validate_screenshot_record(
+    record: dict,
+    *,
+    platform: str,
+    source_json: Path,
+    request_mode: str,
+    started_ns: int,
+) -> str | None:
+    present = {
+        field for field in _SCREENSHOT_FIELDS if record.get(field) is not None
+    }
+    required = request_mode == "all" or (
+        request_mode == "opened" and record.get("detail_attempted") is True
+    )
+    if not present:
+        return "screenshot evidence is missing" if required else None
+
+    status = record.get("screenshot_status")
+    if status == "failed":
+        if present != {"screenshot_status", "screenshot_error_code"} or record.get(
+            "screenshot_error_code"
+        ) != "capture-failed":
+            return "screenshot failure metadata is invalid"
+        return "screenshot capture failed"
+    if status != "complete" or present != _SCREENSHOT_COMPLETE_FIELDS:
+        return "screenshot metadata group is incomplete"
+    if request_mode == "off" or record.get("screenshot_mode") != request_mode:
+        return "screenshot request mode does not match"
+    if record.get("screenshot_capture_kind") not in {
+        "article",
+        "full_page_fallback",
+    }:
+        return "screenshot capture kind is invalid"
+
+    observed_at = record.get("screenshot_observed_at")
+    if not isinstance(observed_at, str):
+        return "screenshot observation time is invalid"
+    try:
+        parsed_observed_at = datetime.fromisoformat(
+            observed_at.replace("Z", "+00:00")
+        )
+    except ValueError:
+        return "screenshot observation time is invalid"
+    offset = parsed_observed_at.utcoffset()
+    if (
+        parsed_observed_at.tzinfo is None
+        or offset is None
+        or offset.total_seconds() != 0
+        or int(parsed_observed_at.timestamp() * 1_000_000_000) < started_ns
+    ):
+        return "screenshot observation time is invalid"
+
+    native_id = _screenshot_native_id(record, platform)
+    raw_path = record.get("screenshot_path")
+    expected_path = (
+        f"screenshots/{platform}-{native_id}.png" if native_id is not None else None
+    )
+    if (
+        not isinstance(raw_path, str)
+        or expected_path is None
+        or raw_path != expected_path
+    ):
+        return "screenshot path is invalid"
+    relative = Path(raw_path)
+    if relative.is_absolute() or len(relative.parts) != 2:
+        return "screenshot path is invalid"
+
+    source_root = source_json.parent.resolve()
+    screenshot_dir = source_json.parent / "screenshots"
+    screenshot = source_json.parent / relative
+    if (
+        not source_json.parent.name.startswith("run-")
+        or screenshot_dir.is_symlink()
+        or screenshot.is_symlink()
+    ):
+        return "screenshot path is unsafe"
+    try:
+        resolved = screenshot.resolve(strict=True)
+        resolved.relative_to(source_root)
+    except (OSError, ValueError):
+        return "screenshot path is unsafe"
+    if resolved.parent != (source_root / "screenshots"):
+        return "screenshot path is unsafe"
+
+    descriptor = -1
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(screenshot, flags)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_mtime_ns < started_ns
+            or metadata.st_size > MAX_SCREENSHOT_BYTES
+        ):
+            return "screenshot file is stale or unsafe"
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            payload = handle.read(MAX_SCREENSHOT_BYTES + 1)
+    except OSError:
+        return "screenshot file cannot be read safely"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(payload) > MAX_SCREENSHOT_BYTES or not payload.startswith(
+        _PNG_SIGNATURE
+    ):
+        return "screenshot file is not a bounded PNG"
+
+    expected_digest = record.get("screenshot_sha256")
+    if (
+        not isinstance(expected_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None
+        or hashlib.sha256(payload).hexdigest() != expected_digest
+    ):
+        return "screenshot digest does not match"
+
+    record["screenshot_path"] = f"{source_json.parent.name}/{raw_path}"
+    return None
+
+
 def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
     errors: list[str] = []
     evidence: list[str] = []
@@ -1338,6 +1530,15 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
             if not _has_minimum_content(record, platform):
                 errors.append(f"record lacks a native content identity or link in {path}")
                 continue
+            screenshot_error = _validate_screenshot_record(
+                record,
+                platform=platform,
+                source_json=path,
+                request_mode=request.screenshot_mode,
+                started_ns=started_ns,
+            )
+            if screenshot_error is not None:
+                errors.append(f"{platform} screenshot validation failed: {screenshot_error}")
             collected[platform].append(record)
             accepted_record = True
         if accepted_record:
@@ -1402,7 +1603,9 @@ _RISK_PATTERN = re.compile(
 _RUNTIME_PRECONDITION_PATTERN = re.compile(
     r"\Amedia-missher-diagnostic "
     r"platform=(bilibili|xhs|douyin|weibo) "
-    r"kind=precondition code=precondition-failed\r?\n?\Z"
+    r"kind=precondition code=("
+    + "|".join(re.escape(code) for code in sorted(_SAFE_PRECONDITION_CODES))
+    + r")\r?\n?\Z"
 )
 
 
@@ -1417,7 +1620,7 @@ def _runtime_precondition_diagnostics(
     return {
         match.group(1): {
             "kind": "precondition",
-            "code": "precondition-failed",
+            "code": match.group(2),
         }
     }
 

@@ -8,7 +8,7 @@ Run `scripts/preflight.py --json`. Check `MEDIA_MISSHER_HOME`, which defaults to
 
 Preflight requires `current/`, `venv/`, mode-`0700` writable `state/`, ownership and matching release markers, Python 3.11 or newer, Playwright, runtime imports, and all five entrypoint help checks. It rejects symlinked path components and an unavailable shared install lock.
 
-Run `python3 tools/install_media_missher.py --runtime-only` from the source repository only when installation is authorized. Do not create a dependency environment inside an installed skill.
+On the current Codex-only machine, run `python3 tools/install_media_missher.py --codex-only` from the source repository only when installation is authorized. This does not create or require an OpenClaw root. Use `--runtime-only` only for an explicitly adapter-only installation; the two flags are mutually exclusive. Do not create a dependency environment inside an installed skill.
 
 ## CDP endpoint is unavailable
 
@@ -25,6 +25,14 @@ The runtime controller checks each selected platform page and visible login stat
 When Chrome exposes multiple browser contexts, the controller uses the unique context that already contains a matching platform page. If no unique context can be proven, it fails closed instead of guessing an account environment. Entry navigation must return a successful response; `403`, `429`, or a visible challenge is a non-retryable risk stop even when it occurs before output creation.
 
 Never add `--allow-navigation` to a read-only review. Retry one non-risk page failure only after the page or authorization prerequisite is corrected and live preflight passes.
+
+## BrowserSkill assistance fails closed
+
+BrowserSkill is optional and is used only when `--browser-assist browserskill` is explicitly requested. The safe preflight codes are `bsk-missing`, `bsk-unhealthy`, `bsk-incompatible`, `bsk-busy`, `bsk-transport`, `bsk-timeout`, and `bsk-target-ambiguous`. They return `preflight-failed` before a runtime run directory is created; raw BrowserSkill stdout and stderr are never copied into the manifest or adapter summary.
+
+Use only read-only diagnosis first: `bsk status --json` and `bsk session list --json`. After correcting one concrete non-risk cause, `bsk doctor` may be run once as a read-only diagnostic before one retry. Do not start a BrowserSkill session manually, inspect cookies or browser storage, or retry any risk/challenge/cooldown result.
+
+BrowserSkill 0.1.10 performs an upstream bundled skill sync whenever an explicitly assisted collection actually runs `bsk session start`. This is upstream behavior, not a Media@Missher preflight action: Media preflight never starts a session and never downloads or upgrades the BrowserSkill binary or extension.
 
 ## Collection times out
 

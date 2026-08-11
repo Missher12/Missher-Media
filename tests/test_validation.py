@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from media_missher_adapter import CollectionRequest, validate_run
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+PNG = b"\x89PNG\r\n\x1a\nsynthetic-private-evidence"
 
 
 def copy_fixture(tmp_path, name, *, started_ns=None):
@@ -20,6 +22,67 @@ def copy_fixture(tmp_path, name, *, started_ns=None):
     if started_ns is not None:
         os.utime(destination, ns=(started_ns + 1, started_ns + 1))
     return destination
+
+
+def screenshot_evidence(tmp_path, *, case="valid", request_mode="all"):
+    started_ns = time.time_ns() - 1_000_000_000
+    inner = tmp_path / "run-engine"
+    screenshot_dir = inner / "screenshots"
+    screenshot_dir.mkdir(parents=True)
+    records = json.loads(
+        (FIXTURES / "bilibili_creator.json").read_text(encoding="utf-8")
+    )
+    identity = records[0].get("bvid") or records[0]["dynamic_id"]
+    filename = f"bilibili-{identity}.png"
+    screenshot = screenshot_dir / filename
+    screenshot.write_bytes(PNG if case != "non-png" else b"not-a-png")
+    screenshot.chmod(0o600)
+    os.utime(screenshot, ns=(started_ns + 1, started_ns + 1))
+    record = records[0]
+    record.update(
+        {
+            "screenshot_path": f"screenshots/{filename}",
+            "screenshot_mode": request_mode,
+            "screenshot_capture_kind": "article",
+            "screenshot_observed_at": datetime.now(timezone.utc).isoformat(),
+            "screenshot_sha256": hashlib.sha256(PNG).hexdigest(),
+            "screenshot_status": "complete",
+        }
+    )
+    if case == "partial":
+        record.pop("screenshot_sha256")
+    elif case == "absolute":
+        record["screenshot_path"] = str(screenshot)
+    elif case == "traversal":
+        record["screenshot_path"] = f"../screenshots/{filename}"
+    elif case == "foreign-run":
+        record["screenshot_path"] = f"../run-foreign/screenshots/{filename}"
+    elif case == "symlink":
+        target = tmp_path / "outside.png"
+        target.write_bytes(PNG)
+        target.chmod(0o600)
+        screenshot.unlink()
+        screenshot.symlink_to(target)
+    elif case == "stale":
+        os.utime(screenshot, ns=(started_ns - 1, started_ns - 1))
+    elif case == "wrong-mode":
+        record["screenshot_mode"] = "opened" if request_mode == "all" else "all"
+    elif case == "wrong-hash":
+        record["screenshot_sha256"] = "0" * 64
+    elif case == "wrong-kind":
+        record["screenshot_capture_kind"] = "viewport"
+    elif case == "non-utc":
+        record["screenshot_observed_at"] = "2026-08-11T08:00:00+08:00"
+    source = inner / "bilibili.json"
+    source.write_text(json.dumps(records), encoding="utf-8")
+    os.utime(source, ns=(started_ns + 1, started_ns + 1))
+    request = CollectionRequest(
+        platforms=("bilibili",),
+        count=1,
+        screenshot_mode=request_mode,
+        allow_navigation=True,
+    )
+    return source, request, started_ns, filename
 
 
 @pytest.mark.parametrize(
@@ -44,7 +107,7 @@ def test_synthetic_platform_contracts_validate(tmp_path, platform, fixture):
         CollectionRequest(platforms=(platform,), count=1, search=search),
         started_ns,
     )
-    assert result["status"] == "success"
+    assert result["status"] == "success", result["errors"]
     assert result["counts"] == {platform: 1}
     assert len(result["records"]) == 1
 
@@ -57,6 +120,118 @@ def test_validation_reports_count_shortfall_as_partial(tmp_path):
     )
     assert result["status"] == "partial"
     assert any("expected 2" in error for error in result["errors"])
+
+
+def test_validation_accepts_and_rewrites_a_private_screenshot_reference(tmp_path):
+    source, request, started_ns, filename = screenshot_evidence(tmp_path)
+
+    result = validate_run((source,), request, started_ns)
+
+    assert result["status"] == "success", result["errors"]
+    assert result["records"][0]["screenshot_path"] == (
+        f"run-engine/screenshots/{filename}"
+    )
+
+
+def test_opened_mode_without_a_detail_open_has_no_screenshot_obligation(tmp_path):
+    started_ns = time.time_ns() - 1_000_000
+    source = copy_fixture(
+        tmp_path, "bilibili_creator.json", started_ns=started_ns
+    )
+
+    result = validate_run(
+        (source,),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            screenshot_mode="opened",
+            allow_navigation=True,
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "success"
+
+
+def test_failed_screenshot_is_a_partial_result_without_losing_the_record(tmp_path):
+    started_ns = time.time_ns() - 1_000_000
+    records = json.loads(
+        (FIXTURES / "bilibili_creator.json").read_text(encoding="utf-8")
+    )
+    records[0].update(
+        {
+            "detail_attempted": True,
+            "screenshot_status": "failed",
+            "screenshot_error_code": "capture-failed",
+        }
+    )
+    source = tmp_path / "bilibili.json"
+    source.write_text(json.dumps(records), encoding="utf-8")
+    os.utime(source, ns=(started_ns + 1, started_ns + 1))
+
+    result = validate_run(
+        (source,),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            screenshot_mode="opened",
+            allow_navigation=True,
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+    assert result["counts"] == {"bilibili": 1}
+    assert any("screenshot" in error.lower() for error in result["errors"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "partial",
+        "absolute",
+        "traversal",
+        "foreign-run",
+        "symlink",
+        "stale",
+        "wrong-mode",
+        "wrong-hash",
+        "wrong-kind",
+        "non-utc",
+        "non-png",
+    ),
+)
+def test_validation_rejects_invalid_screenshot_evidence(tmp_path, case):
+    source, request, started_ns, _filename = screenshot_evidence(
+        tmp_path, case=case
+    )
+
+    result = validate_run((source,), request, started_ns)
+
+    assert result["status"] == "partial"
+    assert result["counts"] == {"bilibili": 1}
+    assert any("screenshot" in error.lower() for error in result["errors"])
+
+
+def test_screenshot_all_requires_evidence_for_every_record(tmp_path):
+    started_ns = time.time_ns() - 1_000_000
+    source = copy_fixture(
+        tmp_path, "bilibili_creator.json", started_ns=started_ns
+    )
+
+    result = validate_run(
+        (source,),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            screenshot_mode="all",
+            allow_navigation=True,
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+    assert any("screenshot" in error.lower() for error in result["errors"])
 
 
 @pytest.mark.parametrize(

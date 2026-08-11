@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .browser import BrowserRiskError, BrowserSession, PreconditionError
+from .browser_skill import BrowserSkillError
 from .models import CollectionRequest
 from .platforms import bilibili, douyin, weibo, xhs
 from .storage import RunStore
@@ -19,6 +20,17 @@ from .storage import RunStore
 
 PLATFORMS = ("bilibili", "xhs", "douyin", "weibo")
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+_SAFE_BROWSER_SKILL_CODES = frozenset(
+    {
+        "bsk-missing",
+        "bsk-unhealthy",
+        "bsk-incompatible",
+        "bsk-busy",
+        "bsk-transport",
+        "bsk-timeout",
+        "bsk-target-ambiguous",
+    }
+)
 
 _COLLECTORS = {
     "bilibili": (bilibili.collect_creator, bilibili.search),
@@ -93,6 +105,12 @@ class PlatformPreflightError(RuntimeError):
             raise ValueError("invalid platform preflight failure")
         self.platform = platform
         self.cause = cause
+        self.code = (
+            cause.code
+            if isinstance(cause, BrowserSkillError)
+            and cause.code in _SAFE_BROWSER_SKILL_CODES
+            else "precondition-failed"
+        )
         super().__init__("platform preflight failed")
 
 
@@ -114,14 +132,23 @@ class PlatformRiskPreflightError(RuntimeError):
 class RuntimeDispatcher:
     """Own one connection to the user's existing browser for a serial run."""
 
-    def __init__(self, cdp_url: str, *, allow_navigation: bool = False) -> None:
+    def __init__(
+        self,
+        cdp_url: str,
+        *,
+        allow_navigation: bool = False,
+        browser_assist: str = "off",
+    ) -> None:
         self.cdp_url = cdp_url
         self.allow_navigation = allow_navigation
+        self.browser_assist = browser_assist
         self.browser: BrowserSession | None = None
 
     async def __aenter__(self) -> "RuntimeDispatcher":
         self.browser = await BrowserSession.connect(
-            self.cdp_url, allow_navigation=self.allow_navigation
+            self.cdp_url,
+            allow_navigation=self.allow_navigation,
+            browser_assist=self.browser_assist,
         )
         return self
 
@@ -136,6 +163,13 @@ class RuntimeDispatcher:
     async def preflight(self, requests: Sequence[CollectionRequest]) -> None:
         if self.browser is None:
             raise RuntimeError("browser dispatcher is not connected")
+        assist_preflight = getattr(self.browser, "preflight_browser_assist", None)
+        if assist_preflight is not None:
+            try:
+                await assist_preflight()
+            except PreconditionError as error:
+                platform = requests[0].platform if requests else PLATFORMS[0]
+                raise PlatformPreflightError(platform, error) from error
         for platform in dict.fromkeys(request.platform for request in requests):
             try:
                 await self.browser.require_authenticated_page(platform)
@@ -154,6 +188,13 @@ class RuntimeDispatcher:
         except _PLATFORM_STOPS as exc:
             reason = exc.args[0] if len(exc.args) == 1 else None
             raise RiskStop(reason) from exc
+
+    def bind_store(self, store: RunStore) -> None:
+        if self.browser is None:
+            raise RuntimeError("browser dispatcher is not connected")
+        bind_store = getattr(self.browser, "bind_store", None)
+        if bind_store is not None:
+            bind_store(store)
 
 
 def _non_negative_int(value: str) -> int:
@@ -182,6 +223,16 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
         "--allow-navigation",
         action="store_true",
         help="Explicitly authorize exact-host browser navigation for this run",
+    )
+    parser.add_argument(
+        "--browser-assist",
+        choices=("off", "browserskill"),
+        default="off",
+    )
+    parser.add_argument(
+        "--screenshot-mode",
+        choices=("off", "opened", "all"),
+        default="off",
     )
     parser.add_argument("--output-dir", "--output", dest="output_dir", type=Path, required=True, help="Private JSON output root")
     parser.add_argument("--format", choices=("json",), default="json", help="Runtime staging format (JSON only)")
@@ -256,16 +307,50 @@ def _requests_from_args(parser: argparse.ArgumentParser, args: argparse.Namespac
         keyword = args.keyword.strip()
         if not keyword:
             parser.error("keyword must not be empty")
-        return [CollectionRequest(platform=args.platform, count=args.count, keyword=keyword)]
+        platforms = (args.platform,)
+        assisted = args.browser_assist != "off" or args.screenshot_mode != "off"
+        if assisted and not args.allow_navigation:
+            parser.error("browser assist and screenshots require --allow-navigation")
+        if assisted and any(platform not in {"bilibili", "xhs"} for platform in platforms):
+            parser.error("browser assist and screenshots support only bilibili and xhs")
+        if assisted and args.platform == "bilibili":
+            parser.error("Bilibili search advanced modes are not supported")
+        if args.screenshot_mode == "all" and args.count == 0:
+            parser.error("screenshot mode all requires a positive count")
+        return [
+            CollectionRequest(
+                platform=args.platform,
+                count=args.count,
+                keyword=keyword,
+                browser_assist=args.browser_assist,
+                screenshot_mode=args.screenshot_mode,
+            )
+        ]
 
     platforms = _selected_platforms(parser, args.platforms)
+    assisted = args.browser_assist != "off" or args.screenshot_mode != "off"
+    if assisted and not args.allow_navigation:
+        parser.error("browser assist and screenshots require --allow-navigation")
+    if assisted and any(platform not in {"bilibili", "xhs"} for platform in platforms):
+        parser.error("browser assist and screenshots support only bilibili and xhs")
+    effective_counts = {
+        platform: (
+            args.count
+            if getattr(args, f"{platform}_count") is None
+            else getattr(args, f"{platform}_count")
+        )
+        for platform in platforms
+    }
+    if args.screenshot_mode == "all" and any(
+        count == 0 for count in effective_counts.values()
+    ):
+        parser.error("screenshot mode all requires a positive count")
     requests: list[CollectionRequest] = []
     for platform in platforms:
         uid = getattr(args, f"{platform}_uid")
         if uid is None or not uid.strip():
             parser.error(f"--{platform}-uid is required for creator collection")
-        override = getattr(args, f"{platform}_count")
-        count = args.count if override is None else override
+        count = effective_counts[platform]
         complete = bool(
             (args.complete and platform in {"bilibili", "xhs"})
             or (platform == "bilibili" and args.bilibili_complete)
@@ -278,6 +363,8 @@ def _requests_from_args(parser: argparse.ArgumentParser, args: argparse.Namespac
                 uid=uid.strip(),
                 complete=complete,
                 comment_limit=args.xhs_comments if platform == "xhs" else 0,
+                browser_assist=args.browser_assist,
+                screenshot_mode=args.screenshot_mode,
             )
         )
     return requests
@@ -293,9 +380,28 @@ def _create_store(output_dir: Path) -> RunStore:
     return RunStore.create(root, run_id)
 
 
+def _has_screenshot_shortfall(
+    request: CollectionRequest,
+    records: Sequence[dict[str, Any]],
+) -> bool:
+    for record in records:
+        status = record.get("screenshot_status")
+        if status == "failed":
+            return True
+        required = request.screenshot_mode == "all" or (
+            request.screenshot_mode == "opened"
+            and record.get("detail_attempted") is True
+        )
+        if required and status not in {"complete", "failed"}:
+            return True
+    return False
+
+
 def _result_status(request: CollectionRequest, records: Sequence[dict[str, Any]]) -> str:
     if request.count > 0 and len(records) < request.count:
         return "shortfall"
+    if _has_screenshot_shortfall(request, records):
+        return "incomplete"
     if request.complete and any(record.get("complete") is not True for record in records):
         return "incomplete"
     return "complete"
@@ -319,17 +425,28 @@ def _write_xhs_artifacts(
     return {"xhs_report": report_path.name, "xhs_checkpoint": checkpoint_path.name}
 
 
-def _result_diagnostic(status: str) -> dict[str, str]:
+def _result_diagnostic(
+    request: CollectionRequest,
+    status: str,
+    records: Sequence[dict[str, Any]] = (),
+) -> dict[str, str]:
     if status == "complete":
         return {"kind": "ok", "code": "ok"}
     if status == "shortfall":
         return {"kind": "result", "code": "count-shortfall"}
+    if _has_screenshot_shortfall(request, records):
+        return {"kind": "result", "code": "screenshot-shortfall"}
     return {"kind": "result", "code": "incomplete-record"}
 
 
 def _failure_diagnostic(error: BaseException) -> dict[str, str]:
     if isinstance(error, ModuleNotFoundError):
         return {"kind": "dependency", "code": "module-not-found"}
+    if (
+        isinstance(error, BrowserSkillError)
+        and error.code in _SAFE_BROWSER_SKILL_CODES
+    ):
+        return {"kind": "precondition", "code": error.code}
     if isinstance(error, PreconditionError):
         return {"kind": "precondition", "code": "precondition-failed"}
     if isinstance(error, _SOURCE_RESPONSE_ERRORS):
@@ -365,6 +482,9 @@ async def _run_requests(
         if preflight is not None:
             await preflight(requests)
         store = _create_store(output_dir)
+        bind_store = getattr(dispatcher, "bind_store", None)
+        if bind_store is not None:
+            bind_store(store)
         risk_stopped = False
         failed = False
         for request in requests:
@@ -383,7 +503,9 @@ async def _run_requests(
                 counts[platform] = len(records)
                 paths[platform] = path.name
                 statuses[platform] = _result_status(request, records)
-                diagnostics[platform] = _result_diagnostic(statuses[platform])
+                diagnostics[platform] = _result_diagnostic(
+                    request, statuses[platform], records
+                )
                 if platform == "xhs":
                     paths.update(_write_xhs_artifacts(store, records, status=statuses[platform], started_at=started_at))
                 if statuses[platform] != "complete":
@@ -463,7 +585,9 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
         dispatcher
         if injected
         else RuntimeDispatcher(
-            args.cdp_url, allow_navigation=args.allow_navigation
+            args.cdp_url,
+            allow_navigation=args.allow_navigation,
+            browser_assist=args.browser_assist,
         )
     )
     try:
@@ -479,7 +603,7 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
         print(
             "media-missher-diagnostic "
             f"platform={error.platform} "
-            "kind=precondition code=precondition-failed",
+            f"kind=precondition code={error.code}",
             file=sys.stderr,
         )
         return 78

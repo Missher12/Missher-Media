@@ -103,6 +103,8 @@ def test_creator_dispatches_sequentially_and_preserves_platform_options(tmp_path
     assert requests["xhs"].uid == "xhs-user" and requests["xhs"].count == 2
     assert requests["xhs"].complete is True and requests["xhs"].comment_limit == 4
     assert requests["douyin"].complete is False and requests["weibo"].complete is False
+    assert all(request.browser_assist == "off" for request in requests.values())
+    assert all(request.screenshot_mode == "off" for request in requests.values())
 
     run_dir, manifest = _manifest(tmp_path)
     assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700
@@ -134,6 +136,302 @@ def test_creator_dispatches_sequentially_and_preserves_platform_options(tmp_path
         {"note_id": "xhs-2", "observed_at": "2026-08-03T00:00:00Z"},
     ]}
     assert "unknown" not in report_text
+
+
+def test_runtime_cli_carries_assist_modes_into_request(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "creator",
+            "--count",
+            "1",
+            "--browser-assist",
+            "browserskill",
+            "--screenshot-mode",
+            "opened",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 0
+    assert len(dispatcher.requests) == 1
+    assert dispatcher.requests[0].browser_assist == "browserskill"
+    assert dispatcher.requests[0].screenshot_mode == "opened"
+
+
+def test_requested_screenshot_failure_marks_runtime_result_incomplete(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher({
+        "bilibili": [{
+            "platform": "bilibili",
+            "id": "bilibili-1",
+            "screenshot_status": "failed",
+            "screenshot_error_code": "capture-failed",
+        }]
+    })
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--count",
+            "1",
+            "--screenshot-mode",
+            "all",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 1
+    _, manifest = _manifest(tmp_path)
+    assert manifest["platforms"] == {"bilibili": "incomplete"}
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "result", "code": "screenshot-shortfall"}
+    }
+
+
+def test_opened_screenshot_mode_without_detail_open_has_no_runtime_obligation(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--count",
+            "1",
+            "--screenshot-mode",
+            "opened",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 0
+    _, manifest = _manifest(tmp_path)
+    assert manifest["platforms"] == {"bilibili": "complete"}
+
+
+@pytest.mark.parametrize(
+    ("mode", "record"),
+    (
+        ("all", {"platform": "bilibili", "id": "bilibili-1"}),
+        (
+            "opened",
+            {
+                "platform": "bilibili",
+                "id": "bilibili-1",
+                "detail_attempted": True,
+            },
+        ),
+    ),
+)
+def test_requested_screenshot_obligation_requires_an_explicit_terminal_status(
+    tmp_path: Path,
+    mode: str,
+    record: dict[str, object],
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--count",
+            "1",
+            "--screenshot-mode",
+            mode,
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=FakeDispatcher({"bilibili": [record]}),
+    )
+
+    assert code == 1
+    _, manifest = _manifest(tmp_path)
+    assert manifest["platforms"] == {"bilibili": "incomplete"}
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "result", "code": "screenshot-shortfall"}
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        (
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "creator",
+            "--count",
+            "0",
+            "--screenshot-mode",
+            "all",
+            "--allow-navigation",
+        ),
+        (
+            "search",
+            "--platform",
+            "bilibili",
+            "--keyword",
+            "topic",
+            "--browser-assist",
+            "browserskill",
+            "--allow-navigation",
+        ),
+        (
+            "search",
+            "--platform",
+            "bilibili",
+            "--keyword",
+            "topic",
+            "--screenshot-mode",
+            "all",
+            "--allow-navigation",
+        ),
+    ),
+)
+def test_runtime_cli_rejects_unbounded_or_bilibili_search_advanced_modes(
+    arguments: tuple[str, ...],
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    with pytest.raises(SystemExit, match="2"):
+        main(
+            [*arguments, "--output-dir", str(tmp_path)],
+            dispatcher=FakeDispatcher(),
+        )
+
+
+def test_runtime_creator_screenshot_all_uses_effective_platform_counts(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import build_parser, _requests_from_args
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "creator",
+            "--platforms",
+            "bilibili,xhs",
+            "--count",
+            "0",
+            "--bilibili-count",
+            "2",
+            "--xhs-count",
+            "3",
+            "--bilibili-uid",
+            "b",
+            "--xhs-uid",
+            "x",
+            "--screenshot-mode",
+            "all",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    requests = _requests_from_args(parser, args)
+
+    assert [(request.platform, request.count) for request in requests] == [
+        ("bilibili", 2),
+        ("xhs", 3),
+    ]
+
+
+@pytest.mark.parametrize(
+    "count_arguments",
+    (
+        ("--bilibili-count", "2"),
+        ("--bilibili-count", "2", "--xhs-count", "0"),
+    ),
+)
+def test_runtime_creator_screenshot_all_rejects_any_zero_effective_count(
+    count_arguments: tuple[str, ...],
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import build_parser, _requests_from_args
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "creator",
+            "--platforms",
+            "bilibili,xhs",
+            "--count",
+            "0",
+            *count_arguments,
+            "--bilibili-uid",
+            "b",
+            "--xhs-uid",
+            "x",
+            "--screenshot-mode",
+            "all",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        _requests_from_args(parser, args)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("--platforms", "xhs", "--xhs-uid", "creator", "--browser-assist", "browserskill"),
+        ("--platforms", "xhs", "--xhs-uid", "creator", "--screenshot-mode", "all"),
+        ("--platforms", "douyin", "--douyin-uid", "creator", "--screenshot-mode", "opened", "--allow-navigation"),
+        ("--platforms", "weibo", "--weibo-uid", "creator", "--browser-assist", "browserskill", "--allow-navigation"),
+    ),
+)
+def test_runtime_cli_rejects_unsafe_assist_combinations(
+    arguments: tuple[str, ...], tmp_path: Path
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    output = tmp_path / "runs"
+    with pytest.raises(SystemExit, match="2"):
+        main(
+            ["creator", *arguments, "--output-dir", str(output)],
+            dispatcher=dispatcher,
+        )
+
+    assert dispatcher.requests == []
+    assert not output.exists()
 
 
 def test_risk_stop_aborts_all_later_platforms_and_is_recorded_privately(tmp_path: Path) -> None:
@@ -463,6 +761,117 @@ def test_platform_preflight_failure_emits_only_a_safe_line_before_inner_output(
     assert "private-xhs" not in captured.err
 
 
+@pytest.mark.parametrize(
+    "safe_code",
+    (
+        "bsk-missing",
+        "bsk-unhealthy",
+        "bsk-incompatible",
+        "bsk-busy",
+        "bsk-transport",
+        "bsk-timeout",
+        "bsk-target-ambiguous",
+    ),
+)
+def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
+    safe_code: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from runtime.media_missher_runtime.browser_skill import BrowserSkillError
+    from runtime.media_missher_runtime.cli import PlatformPreflightError, main
+
+    class BrowserSkillPreflightFailure(FakeDispatcher):
+        async def preflight(self, requests: object) -> None:
+            try:
+                raise RuntimeError(
+                    "private subprocess output with cookies and account identifiers"
+                )
+            except RuntimeError as raw_error:
+                raise PlatformPreflightError(
+                    "xhs", BrowserSkillError(safe_code)
+                ) from raw_error
+
+    output = tmp_path / "runs"
+    dispatcher = BrowserSkillPreflightFailure()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "private-xhs",
+            "--browser-assist",
+            "browserskill",
+            "--allow-navigation",
+            "--output-dir",
+            str(output),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 78
+    assert captured.out == ""
+    assert captured.err == (
+        "media-missher-diagnostic platform=xhs "
+        f"kind=precondition code={safe_code}\n"
+    )
+    assert not list(output.glob("run-*"))
+    assert "private" not in captured.err
+    assert "cookies" not in captured.err
+
+
+def test_risk_stop_wins_over_prior_screenshot_shortfall_and_aborts_later_platform(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import RiskStop, main
+
+    dispatcher = FakeDispatcher(
+        {
+            "bilibili": [{
+                "platform": "bilibili",
+                "id": "bilibili-1",
+                "screenshot_status": "failed",
+                "screenshot_error_code": "capture-failed",
+            }],
+            "xhs": RiskStop("payload-471"),
+        }
+    )
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili,xhs,douyin",
+            "--bilibili-uid",
+            "b",
+            "--xhs-uid",
+            "x",
+            "--douyin-uid",
+            "d",
+            "--count",
+            "1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 75
+    _, manifest = _manifest(tmp_path)
+    assert manifest["status"] == "risk-stopped"
+    assert manifest["platforms"] == {
+        "bilibili": "incomplete",
+        "xhs": "risk-stopped",
+        "douyin": "not-run",
+    }
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "result", "code": "screenshot-shortfall"},
+        "xhs": {"kind": "risk-stop", "code": "payload-471"},
+        "douyin": {"kind": "not-run", "code": "prior-risk-stop"},
+    }
+
+
 def test_platform_risk_preflight_emits_only_a_safe_stop_before_inner_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -624,12 +1033,18 @@ def test_runtime_cli_requires_explicit_navigation_authorization(
 ) -> None:
     from runtime.media_missher_runtime import cli as module
 
-    constructed: list[tuple[str, bool]] = []
+    constructed: list[tuple[str, bool, str]] = []
 
     class CapturingDispatcher(FakeDispatcher):
-        def __init__(self, cdp_url: str, *, allow_navigation: bool = False) -> None:
+        def __init__(
+            self,
+            cdp_url: str,
+            *,
+            allow_navigation: bool = False,
+            browser_assist: str = "off",
+        ) -> None:
             super().__init__()
-            constructed.append((cdp_url, allow_navigation))
+            constructed.append((cdp_url, allow_navigation, browser_assist))
 
     async def run_requests(*_args: object, **_kwargs: object) -> int:
         return 0
@@ -654,7 +1069,7 @@ def test_runtime_cli_requires_explicit_navigation_authorization(
     )
 
     assert code == 0
-    assert constructed == [("http://127.0.0.1:9333", expected)]
+    assert constructed == [("http://127.0.0.1:9333", expected, "off")]
 
 
 def test_runtime_dispatcher_forwards_navigation_authorization_to_browser(
@@ -662,25 +1077,92 @@ def test_runtime_dispatcher_forwards_navigation_authorization_to_browser(
 ) -> None:
     from runtime.media_missher_runtime import cli as module
 
-    connected: list[tuple[str, bool]] = []
+    connected: list[tuple[str, bool, str]] = []
 
     class Session:
         async def close(self) -> None:
             return None
 
-    async def connect(cdp_url: str, *, allow_navigation: bool = False) -> Session:
-        connected.append((cdp_url, allow_navigation))
+    async def connect(
+        cdp_url: str,
+        *,
+        allow_navigation: bool = False,
+        browser_assist: str = "off",
+    ) -> Session:
+        connected.append((cdp_url, allow_navigation, browser_assist))
         return Session()
 
     monkeypatch.setattr(module.BrowserSession, "connect", connect)
     dispatcher = module.RuntimeDispatcher(
-        "http://127.0.0.1:9444", allow_navigation=True
+        "http://127.0.0.1:9444",
+        allow_navigation=True,
+        browser_assist="browserskill",
     )
 
     _run(dispatcher.__aenter__())
     _run(dispatcher.__aexit__())
 
-    assert connected == [("http://127.0.0.1:9444", True)]
+    assert connected == [("http://127.0.0.1:9444", True, "browserskill")]
+
+
+def test_runtime_dispatcher_runs_assist_preflight_before_platform_pages() -> None:
+    from runtime.media_missher_runtime.cli import RuntimeDispatcher
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    events: list[str] = []
+
+    class Session:
+        async def preflight_browser_assist(self) -> None:
+            events.append("assist")
+
+        async def require_authenticated_page(self, platform: str) -> object:
+            events.append(platform)
+            return object()
+
+    dispatcher = RuntimeDispatcher(
+        "http://127.0.0.1:9222", browser_assist="browserskill"
+    )
+    dispatcher.browser = Session()
+    requests = [CollectionRequest(platform="xhs", count=1, uid="one")]
+
+    _run(dispatcher.preflight(requests))
+
+    assert events == ["assist", "xhs"]
+
+
+def test_run_store_is_bound_before_collection(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    events: list[str] = []
+
+    class BindingDispatcher(FakeDispatcher):
+        def bind_store(self, store: object) -> None:
+            assert getattr(store, "path", None) is not None
+            events.append("bind")
+
+        async def collect(self, request: Any) -> list[dict[str, object]]:
+            assert events == ["bind"]
+            return await super().collect(request)
+
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--count",
+            "1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=BindingDispatcher(),
+    )
+
+    assert code == 0
+    assert events == ["bind"]
 
 
 def test_runtime_dispatcher_preflight_requires_authenticated_pages_once_per_platform() -> None:

@@ -24,7 +24,23 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
 Executor = Callable[..., None]
 Renamer = Callable[[Union[str, os.PathLike[str]], Union[str, os.PathLike[str]]], None]
 Cleaner = Callable[[Path], None]
-_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".DS_Store")
+_IGNORE = shutil.ignore_patterns(
+    "__pycache__",
+    "*.pyc",
+    ".pytest_cache",
+    ".DS_Store",
+    ".superpowers",
+    ".env",
+    ".env.*",
+    "*.trace.json",
+    "browser-profile",
+    "browser_profiles",
+    "cookies",
+    "recovery",
+    "screenshots",
+    "state",
+    "*.png",
+)
 _OWNER_MARKER = ".media-missher-owner.json"
 _OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
 _RELEASE_MARKER = ".media-missher-release"
@@ -165,21 +181,33 @@ def _validate_roots(
     openclaw_root: Path | None,
     *,
     runtime_only: bool,
+    codex_only: bool,
 ) -> None:
+    if runtime_only and codex_only:
+        raise ValueError("runtime-only and codex-only are mutually exclusive")
+    install_codex = not runtime_only
+    install_openclaw = not runtime_only and not codex_only
     roots = {"source": source, "home": home}
-    if not runtime_only:
-        if codex_root is None or openclaw_root is None:
-            raise ValueError("skill install roots are required")
-        roots.update({"codex root": codex_root, "openclaw root": openclaw_root})
+    if install_codex:
+        if codex_root is None:
+            raise ValueError("Codex skill install root is required")
+        roots["codex root"] = codex_root
+    if install_openclaw:
+        if openclaw_root is None:
+            raise ValueError("OpenClaw skill install root is required")
+        roots["openclaw root"] = openclaw_root
     unsafe = {Path("/"), Path.home().absolute()}
     for label, path in roots.items():
         if path in unsafe or _has_glob(path):
             raise ValueError(f"unsafe {label}")
         _reject_symlink_components(path, label)
     install_roots = [("home", home)]
-    if not runtime_only:
-        assert codex_root is not None and openclaw_root is not None
-        install_roots.extend((("codex root", codex_root), ("openclaw root", openclaw_root)))
+    if install_codex:
+        assert codex_root is not None
+        install_roots.append(("codex root", codex_root))
+    if install_openclaw:
+        assert openclaw_root is not None
+        install_roots.append(("openclaw root", openclaw_root))
     for index, (left_label, left) in enumerate(install_roots):
         if _overlaps(source, left):
             raise ValueError(f"source and {left_label} overlap")
@@ -376,16 +404,32 @@ def install(
     renamer: Renamer = os.replace,
     cleaner: Cleaner = _clean_owned,
     runtime_only: bool = False,
+    codex_only: bool = False,
     python: Path | str | None = None,
 ) -> InstallResult:
+    if runtime_only and codex_only:
+        raise ValueError("runtime-only and codex-only are mutually exclusive")
+    install_codex = not runtime_only
+    install_openclaw = not runtime_only and not codex_only
     source_path = _absolute(source)
     runtime_home = _absolute(home)
-    codex_parent = None if runtime_only or codex_root is None else _absolute(codex_root)
-    openclaw_parent = None if runtime_only or openclaw_root is None else _absolute(openclaw_root)
-    _validate_roots(source_path, runtime_home, codex_parent, openclaw_parent, runtime_only=runtime_only)
+    codex_parent = None if not install_codex or codex_root is None else _absolute(codex_root)
+    openclaw_parent = None if not install_openclaw or openclaw_root is None else _absolute(openclaw_root)
+    _validate_roots(
+        source_path,
+        runtime_home,
+        codex_parent,
+        openclaw_parent,
+        runtime_only=runtime_only,
+        codex_only=codex_only,
+    )
 
     runtime_source = source_path / "runtime"
-    package_sources = [] if runtime_only else [source_path / "media-missher", source_path / "openclaw-media-missher"]
+    package_sources: list[Path] = []
+    if install_codex:
+        package_sources.append(source_path / "media-missher")
+    if install_openclaw:
+        package_sources.append(source_path / "openclaw-media-missher")
     for item in (runtime_source, *package_sources):
         _reject_source_symlinks(item)
     product_version = _read_product_version(source_path)
@@ -393,32 +437,38 @@ def install(
 
     _prepare_owned_runtime_home(runtime_home)
     install_parents: list[Path] = []
-    if not runtime_only:
-        assert codex_parent is not None and openclaw_parent is not None
-        install_parents.extend((codex_parent, openclaw_parent))
+    if install_codex:
+        assert codex_parent is not None
+        install_parents.append(codex_parent)
+    if install_openclaw:
+        assert openclaw_parent is not None
+        install_parents.append(openclaw_parent)
     for directory in install_parents:
         _prepare_directory(directory)
     state = runtime_home / "state"
     _prepare_directory(state)
     state.chmod(0o700)
-    recovery_directories: tuple[Path, ...] = ()
-    if not runtime_only:
+    recovery_directories: dict[str, Path] = {}
+    if install_codex or install_openclaw:
         recovery = runtime_home / "recovery"
-        recovery_directories = (recovery / "codex", recovery / "openclaw")
         _prepare_private_directory(recovery)
-        for directory in recovery_directories:
+        if install_codex:
+            recovery_directories["codex"] = recovery / "codex"
+        if install_openclaw:
+            recovery_directories["openclaw"] = recovery / "openclaw"
+        for directory in recovery_directories.values():
             _prepare_private_directory(directory)
 
     release = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{secrets.token_hex(4)}"
     runtime_stage = runtime_home / f".current.staging-{release}"
     venv_stage = runtime_home / f".venv.staging-{release}"
     package_stages: list[Path] = []
-    if not runtime_only:
-        assert codex_parent is not None and openclaw_parent is not None
-        package_stages = [
-            codex_parent / f".media-missher.staging-{release}",
-            openclaw_parent / f".media-missher.staging-{release}",
-        ]
+    if install_codex:
+        assert codex_parent is not None
+        package_stages.append(codex_parent / f".media-missher.staging-{release}")
+    if install_openclaw:
+        assert openclaw_parent is not None
+        package_stages.append(openclaw_parent / f".media-missher.staging-{release}")
     stages = (runtime_stage, venv_stage, *package_stages)
     lock_descriptor = _acquire_install_lock(runtime_home)
     try:
@@ -474,23 +524,26 @@ def install(
             _Component(runtime_stage, runtime_home / "current", runtime_home / f"previous-{release}"),
             _Component(venv_stage, venv, runtime_home / f"venv.previous-{release}"),
         ]
-        if not runtime_only:
-            assert codex_parent is not None and openclaw_parent is not None
-            codex_recovery, openclaw_recovery = recovery_directories
-            components.extend(
-                (
-                    _Component(
-                        package_stages[0],
-                        codex_parent / "media-missher",
-                        codex_recovery / f"media-missher.previous-{release}",
-                    ),
-                    _Component(
-                        package_stages[1],
-                        openclaw_parent / "media-missher",
-                        openclaw_recovery / f"media-missher.previous-{release}",
-                    ),
-                )
+        codex_component: _Component | None = None
+        openclaw_component: _Component | None = None
+        package_index = 0
+        if install_codex:
+            assert codex_parent is not None
+            codex_component = _Component(
+                package_stages[package_index],
+                codex_parent / "media-missher",
+                recovery_directories["codex"] / f"media-missher.previous-{release}",
             )
+            components.append(codex_component)
+            package_index += 1
+        if install_openclaw:
+            assert openclaw_parent is not None
+            openclaw_component = _Component(
+                package_stages[package_index],
+                openclaw_parent / "media-missher",
+                recovery_directories["openclaw"] / f"media-missher.previous-{release}",
+            )
+            components.append(openclaw_component)
         _rotate(components, renamer, cleaner, release)
         return InstallResult(
             version=product_version,
@@ -500,10 +553,18 @@ def install(
             venv=components[1].current.resolve(),
             venv_previous=components[1].previous.resolve() if components[1].prior_moved else None,
             state=state.resolve(),
-            codex_current=components[2].current.resolve() if not runtime_only else None,
-            codex_previous=components[2].previous.resolve() if not runtime_only and components[2].prior_moved else None,
-            openclaw_current=components[3].current.resolve() if not runtime_only else None,
-            openclaw_previous=components[3].previous.resolve() if not runtime_only and components[3].prior_moved else None,
+            codex_current=codex_component.current.resolve() if codex_component is not None else None,
+            codex_previous=(
+                codex_component.previous.resolve()
+                if codex_component is not None and codex_component.prior_moved
+                else None
+            ),
+            openclaw_current=openclaw_component.current.resolve() if openclaw_component is not None else None,
+            openclaw_previous=(
+                openclaw_component.previous.resolve()
+                if openclaw_component is not None and openclaw_component.prior_moved
+                else None
+            ),
         )
     finally:
         try:
@@ -520,7 +581,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--home", type=Path, default=Path.home() / ".local" / "share" / "media-missher")
     parser.add_argument("--codex-root", type=Path, default=Path.home() / ".codex" / "skills")
     parser.add_argument("--openclaw-root", type=Path, default=Path.home() / ".openclaw" / "workspace" / "skills")
-    parser.add_argument("--runtime-only", action="store_true", help="Install only the shared runtime and dependency environment")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--runtime-only", action="store_true", help="Install only the shared runtime and dependency environment")
+    modes.add_argument("--codex-only", action="store_true", help="Install the shared runtime, dependency environment, and Codex skill only")
     parser.add_argument("--python", type=Path, help="Python 3.11+ interpreter used to create the runtime environment")
     parser.add_argument("--version", action="version", version=f"Media@Missher {_read_product_version(project)}")
     args = parser.parse_args(argv)
@@ -530,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         codex_root=args.codex_root,
         openclaw_root=args.openclaw_root,
         runtime_only=args.runtime_only,
+        codex_only=args.codex_only,
         python=args.python,
     )
     paths = {

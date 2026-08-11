@@ -6,6 +6,8 @@ Historical upstream components remain governed by their own license files and re
 
 No repository-wide license has been selected. Do not add one, publish a combined bundle, or copy historical upstream code until the owner selects a license and a provenance review confirms that every component can be distributed under compatible terms.
 
+The V15 repository and any GitHub destination must remain private. A private GitHub backup or review does not authorize public distribution, release artifacts, screenshots, browser traces, profiles, cookies, runtime state, or collected data. Public GitHub publication remains blocked until the same license and provenance review is complete.
+
 An upgrade keeps private `previous-{release_timestamp}` components for recovery. A destructive cutover can move replaced components to exact Trash destinations recorded in private handoff evidence. Neither recovery path changes ownership or licensing.
 
 Rollback restores matching prior runtime and skill releases. It does not delete current-run evidence, rewrite historical records, or authorize a remote Feishu write.

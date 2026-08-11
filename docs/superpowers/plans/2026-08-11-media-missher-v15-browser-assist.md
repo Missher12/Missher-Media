@@ -60,7 +60,7 @@ Modify:
 - Test: `tests/test_cli.py`
 - Test: `tests/test_runner.py`
 
-- [ ] **Step 1: Write failing request and parser tests**
+- [x] **Step 1: Write failing request and parser tests**
 
 Add explicit cases with these assertions:
 
@@ -89,19 +89,20 @@ def test_collection_request_rejects_unknown_modes(field: str, value: str) -> Non
 
 For runtime and adapter parsers, assert defaults are `off`, the exact flags survive into the captured request/engine argv, `all` without `--allow-navigation` is rejected, `browserskill` without `--allow-navigation` is rejected, and any non-`off` value with Douyin or Weibo is rejected before dispatcher/engine execution.
 
-- [ ] **Step 2: Run the focused tests and verify they fail**
+- [x] **Step 2: Run the focused tests and verify they fail**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_models.py tests/test_runtime_cli.py tests/test_cli.py tests/test_runner.py
 ```
 
 Expected: failures for missing request fields and unrecognized CLI options.
 
-- [ ] **Step 3: Add the minimal request contract**
+- [x] **Step 3: Add the minimal request contract**
 
 Use the same field names in both request dataclasses:
 
@@ -139,7 +140,7 @@ if request.screenshot_mode != "off":
 
 Teach `tests/fake_engine.py` to parse the two options so adapter tests exercise the real argv shape.
 
-- [ ] **Step 4: Run the focused tests and checkpoint**
+- [x] **Step 4: Run the focused tests and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -158,7 +159,7 @@ Expected: no whitespace errors; only V15 files are modified.
 - Create: `runtime/media_missher_runtime/browser_skill.py`
 - Create: `tests/test_runtime_browser_skill.py`
 
-- [ ] **Step 1: Write failing fake-runner lifecycle tests**
+- [x] **Step 1: Write failing fake-runner lifecycle tests**
 
 Define a fake runner that records argument tuples and returns typed results. Cover: exact healthy status, missing executable, daemon failure, multiple browsers, version skew, wrong CLI/extension version, pre-existing session (`bsk-busy`), four-letter session ID parsing, exact title match, zero/multiple title matches, snapshot-before-click, one stale snapshot retry, return in `finally`, stop in `close`, timeout, malformed/oversized JSON, and redacted exceptions.
 
@@ -178,18 +179,20 @@ assert fake.commands == [
 ]
 ```
 
-- [ ] **Step 2: Run the bridge tests and verify they fail**
+- [x] **Step 2: Run the bridge tests and verify they fail**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio \
-  python -m pytest -q -p no:cacheprovider tests/test_runtime_browser_skill.py
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
+  tests/test_runtime_browser_skill.py
 ```
 
 Expected: import failure for `runtime.media_missher_runtime.browser_skill`.
 
-- [ ] **Step 3: Implement the bridge's public interface**
+- [x] **Step 3: Implement the bridge's public interface**
 
 Use these stable types and constants:
 
@@ -221,7 +224,7 @@ The production runner must use `asyncio.create_subprocess_exec` with `shell=Fals
 
 `click_marked_tab()` obtains the marker from the caller-provided page title, starts one session lazily, lists only `--scope user`, matches exactly one tab whose title equals the marker, borrows it, snapshots before clicking, clicks only the passed unique selector, returns it in `finally`, and leaves session shutdown to `close()`. On exit code `1` from snapshot/click, allow exactly one new snapshot and one repeat click; codes `2-5` fail without a click loop.
 
-- [ ] **Step 4: Run tests and perform a read-only live schema check**
+- [x] **Step 4: Run tests and perform a read-only live schema check**
 
 Run the Step 2 command. Expected: all bridge tests pass.
 
@@ -243,7 +246,7 @@ Expected: one compatible connected browser and an empty session list. Do not run
 - Modify: `runtime/media_missher_runtime/cli.py:114-160,286-455`
 - Test: `tests/test_runtime_browser.py`
 
-- [ ] **Step 1: Write failing coordinator and cleanup tests**
+- [x] **Step 1: Write failing coordinator and cleanup tests**
 
 Cover known-zero versus unknown metrics, unique element marking, marker removal, Playwright default click, BrowserSkill-assisted click, new popup registration, exact allowlisted detail URL, primary-error preservation during cleanup, and bridge shutdown before Playwright disconnect.
 
@@ -258,19 +261,20 @@ assert missing_engagement_fields({
 }) == ("collected", "shares")
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_detail_open.py tests/test_runtime_browser.py
 ```
 
 Expected: missing coordinator imports and BrowserSession configuration.
 
-- [ ] **Step 3: Implement the coordinator boundary**
+- [x] **Step 3: Implement the coordinator boundary**
 
 Expose only this policy and operation:
 
@@ -309,7 +313,7 @@ Before bridge tab discovery, set a unique `media-missher-<token>` document title
 
 Extend `BrowserSession.connect`/`RuntimeDispatcher` with `browser_assist` and create `BrowserSkillBridge` only for `browserskill`. Run bridge preflight before `_create_store`; call bridge `close()` from the dispatcher/browser `finally` path even after cancellation.
 
-- [ ] **Step 4: Run tests and checkpoint**
+- [x] **Step 4: Run tests and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass and existing default-click assertions remain unchanged.
 
@@ -324,7 +328,7 @@ Run `git diff --check`. Expected: no errors.
 - Modify: `runtime/media_missher_runtime/browser.py`
 - Test: `tests/test_runtime_storage.py`
 
-- [ ] **Step 1: Write failing storage and capture tests**
+- [x] **Step 1: Write failing storage and capture tests**
 
 Cover PNG signature, atomic replacement, mode `0600`, `screenshots/` mode `0700`, safe native-ID filename, symlink/traversal rejection, one visible sane article container, ambiguous/invisible/zero-size container fallback, full-page failure, challenge/login/risk page rejection, SHA-256, and UTC timestamp.
 
@@ -341,19 +345,20 @@ assert artifact.as_record_fields() == {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_storage.py tests/test_runtime_screenshots.py
 ```
 
 Expected: missing private-byte writer and screenshot module.
 
-- [ ] **Step 3: Add private binary storage and capture**
+- [x] **Step 3: Add private binary storage and capture**
 
 Add a `RunStore.write_private_bytes(relative_name: str, payload: bytes) -> Path` method. Accept only `screenshots/<safe-basename>.png`, reject absolute paths, `..`, symlink directories/files, existing targets, non-PNG payloads, and payloads over a documented 50 MiB cap. Use `tempfile.mkstemp`, `os.fchmod(0o600)`, `fsync`, `os.replace`, directory `fsync`, and cleanup in `finally`.
 
@@ -376,7 +381,7 @@ class ScreenshotError(RuntimeError):
 
 Bind `RunStore` to the browser after `_create_store` through an explicit `RuntimeDispatcher.bind_store(store)` method. Do not use module globals.
 
-- [ ] **Step 4: Run tests and checkpoint**
+- [x] **Step 4: Run tests and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -388,7 +393,7 @@ Run `git diff --check`. Expected: no errors.
 - Modify: `runtime/media_missher_runtime/platforms/xhs.py:53,94-310,680-790,880-1020,1280-1385`
 - Modify: `tests/test_runtime_xhs.py`
 
-- [ ] **Step 1: Write failing Xiaohongshu behavior tests**
+- [x] **Step 1: Write failing Xiaohongshu behavior tests**
 
 Add cases proving:
 
@@ -404,18 +409,20 @@ Add cases proving:
 - risk response/challenge creates no screenshot and raises `CollectionStopped` immediately;
 - screenshot failure preserves structured fields and records `screenshot_status="failed"` with safe `screenshot_error_code="capture-failed"`.
 
-- [ ] **Step 2: Run the Xiaohongshu suite and verify failures**
+- [x] **Step 2: Run the Xiaohongshu suite and verify failures**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider tests/test_runtime_xhs.py
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
+  tests/test_runtime_xhs.py
 ```
 
 Expected: new fallback/screenshot cases fail; existing tests still pass.
 
-- [ ] **Step 3: Route exact clicks through the coordinator**
+- [x] **Step 3: Route exact clicks through the coordinator**
 
 Keep `_capture_while(page, predicate, action)` unchanged so it installs `expect_response` before invoking `action`. Change `_click_note_and_check` to accept the browser/coordinator and pass the already exact matched card/click target into `DetailOpenCoordinator.click_exact` when assistance is enabled; use its existing Playwright action when assistance is off.
 
@@ -433,15 +440,16 @@ def _should_open_detail(request: CollectionRequest, record: Mapping[str, Any]) -
 
 For ordinary fallback, merge only an exact `note_id` detail response and preserve `complete=False`; this is enrichment, not complete-mode proof. For complete mode, retain all current completeness fields, freshness checks, DOM fallbacks, comment handling, and randomized settle. After the post-open challenge check, call the bound screenshot service only when mode is `all` or when mode is `opened` and this record was opened.
 
-- [ ] **Step 4: Run Xiaohongshu regressions and checkpoint**
+- [x] **Step 4: Run Xiaohongshu regressions and checkpoint**
 
 Run the Step 2 command. Expected: all Xiaohongshu tests pass.
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_xhs.py tests/test_runtime_safety.py tests/test_runtime_browser.py
 ```
 
@@ -454,7 +462,7 @@ Expected: all pass; no timing or risk-stop regression.
 - Modify: `tests/test_runtime_bilibili.py`
 - Modify: `tests/test_runtime_bilibili_production.py`
 
-- [ ] **Step 1: Write failing dynamic-detail tests**
+- [x] **Step 1: Write failing dynamic-detail tests**
 
 Add synthetic text-only and image-only records with a `dynamic_id` and no `bvid`. Cover unknown-field fallback, known-zero no-open, exact ID card selection, ambiguous card failure, exact detail URL validation, new popup registration, same-ID DOM merge, cross-ID rejection, incomplete result when metrics remain unknown, existing video complete path unchanged, `opened`/`all` screenshots, and risk pages with no screenshot.
 
@@ -467,19 +475,20 @@ assert record["bvid"] is None
 assert record["native_id"] == "123456"
 ```
 
-- [ ] **Step 2: Run Bilibili tests and verify failures**
+- [x] **Step 2: Run Bilibili tests and verify failures**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_bilibili.py tests/test_runtime_bilibili_production.py
 ```
 
 Expected: new dynamic fallback tests fail; current video/list tests pass.
 
-- [ ] **Step 3: Implement exact dynamic opening and ID-bound merge**
+- [x] **Step 3: Implement exact dynamic opening and ID-bound merge**
 
 Add `_dynamic_page_url(dynamic_id)` and `_find_exact_dynamic_target(page, dynamic_id)`. The finder must inspect only known Bilibili dynamic card/link selectors, compare exact `data-did`/`dyn-id`/`data-dynamic-id` values or parse the final URL path segment, and return exactly one clickable element. Zero/multiple results raise `PreconditionError`.
 
@@ -503,15 +512,16 @@ needs_dynamic_open = (
 
 Route the exact element through `DetailOpenCoordinator`; then perform risk/ID validation, merge detail DOM values, and capture when requested. A click sets `detail_attempted=True`, but `detail_completed` and `complete` remain derived from `_missing_completion_fields`. Do not mark a record complete merely because the click succeeded. Leave the current `bvid` direct-navigation detail path intact.
 
-- [ ] **Step 4: Run Bilibili regressions and checkpoint**
+- [x] **Step 4: Run Bilibili regressions and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with playwright \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_bilibili.py tests/test_runtime_bilibili_production.py \
   tests/test_runtime_safety.py tests/test_runtime_compatibility.py
 ```
@@ -528,25 +538,26 @@ Expected: all pass and existing video behavior is unchanged.
 - Modify: `tests/test_validation.py`
 - Modify: `tests/test_security.py`
 
-- [ ] **Step 1: Write failing result and validator tests**
+- [x] **Step 1: Write failing result and validator tests**
 
 Cover: requested screenshot success, opened mode with no detail open and therefore no screenshot obligation, capture failure causing runtime `incomplete`/adapter `partial`, safe relative path, absolute/traversal/symlink/foreign-run/stale/wrong-mode/wrong-hash/non-PNG rejection, and output conversion path rewriting.
 
 The validator must accept raw engine records with `screenshots/name.png` relative to the engine JSON directory, then rewrite accepted records for adapter outputs to `<engine-run-name>/screenshots/name.png` relative to the outer adapter run.
 
-- [ ] **Step 2: Run validation tests and verify failures**
+- [x] **Step 2: Run validation tests and verify failures**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_cli.py tests/test_validation.py tests/test_security.py
 ```
 
 Expected: screenshot metadata is not yet enforced and shortfalls are not reflected.
 
-- [ ] **Step 3: Implement strict screenshot validation**
+- [x] **Step 3: Implement strict screenshot validation**
 
 Add `screenshot-shortfall` to result diagnostics. `_result_status` returns `incomplete` when any record has `screenshot_status == "failed"`; it does not change the record's platform data completeness fields.
 
@@ -564,7 +575,7 @@ assert hashlib.sha256(candidate.read_bytes()).hexdigest() == record["screenshot_
 
 Read the file once with a 50 MiB size cap rather than twice in production. Validate ISO UTC observation time, request mode `opened|all`, capture kind `article|full_page_fallback`, and exact safe filename. For converted adapter outputs, rewrite only the already validated path to include the engine run directory name; do not emit a user-home absolute path.
 
-- [ ] **Step 4: Run validation tests and checkpoint**
+- [x] **Step 4: Run validation tests and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -579,22 +590,24 @@ Run `git diff --check`. Expected: no errors.
 - Test: `tests/test_runtime_cli.py`
 - Test: `tests/test_runner.py`
 
-- [ ] **Step 1: Write failing preflight/risk diagnostic tests**
+- [x] **Step 1: Write failing preflight/risk diagnostic tests**
 
 Test every safe BrowserSkill code, ensure no store is created on preflight failure, ensure raw subprocess output is absent, ensure risk codes still win over assist and screenshot errors, and ensure later platforms remain `not-run` after a risk stop.
 
-- [ ] **Step 2: Run tests and verify failures**
+- [x] **Step 2: Run tests and verify failures**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio \
-  python -m pytest -q -p no:cacheprovider tests/test_runtime_cli.py tests/test_runner.py
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
+  tests/test_runtime_cli.py tests/test_runner.py
 ```
 
 Expected: new BrowserSkill diagnostic codes are rejected by strict schemas.
 
-- [ ] **Step 3: Add only enumerated diagnostics**
+- [x] **Step 3: Add only enumerated diagnostics**
 
 Extend precondition codes with:
 
@@ -612,7 +625,7 @@ Extend precondition codes with:
 
 Map bridge preflight failures to runtime exit `78` and the existing structured `media-missher-diagnostic` line. Keep `403`, `429`, `461`, `471`, `999`, challenge, locked, blocked, risk, and cooldown on the existing non-retryable exit `75` path. Do not invoke `bsk doctor` automatically in collection; troubleshooting may instruct one read-only diagnostic after a corrected non-risk failure.
 
-- [ ] **Step 4: Run diagnostic regressions and checkpoint**
+- [x] **Step 4: Run diagnostic regressions and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -637,25 +650,26 @@ Run `git diff --check`. Expected: no errors.
 - Modify: `tests/test_installer.py`
 - Modify: `tests/test_active_residuals.py`
 
-- [ ] **Step 1: Write failing V15/privacy documentation tests**
+- [x] **Step 1: Write failing V15/privacy documentation tests**
 
 Require exact `15.0.0`, both skill display names `Media@Missher V15`, documented flags/defaults/authorization/compatibility baseline, article/full-page fallback, screenshot metadata, safe diagnostics, private GitHub boundary, and no claim of completed live V15 collection.
 
 Packaging tests must fail if a source/package contains `.superpowers`, `.env`, browser profiles, cookies, runtime `state`, recovery data, `screenshots`, PNG evidence, or BrowserSkill trace files.
 
-- [ ] **Step 2: Run packaging tests and verify failures**
+- [x] **Step 2: Run packaging tests and verify failures**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest \
-  python -m pytest -q -p no:cacheprovider \
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_packaging.py tests/test_installer.py tests/test_active_residuals.py
 ```
 
 Expected: V12 markers and missing V15 documentation/ignore rules fail.
 
-- [ ] **Step 3: Apply the V15 release metadata and docs**
+- [x] **Step 3: Apply the V15 release metadata and docs**
 
 Set `VERSION` to exactly:
 
@@ -680,7 +694,7 @@ Create GitHub Actions CI that checks out source and runs the complete offline py
 
 Update `PROJECT_CONTEXT.md` with the V15 architecture and mark live V15 acceptance as not yet performed. Preserve dated V12 evidence as historical evidence rather than rewriting it as V15 proof.
 
-- [ ] **Step 4: Run documentation/package tests and checkpoint**
+- [x] **Step 4: Run documentation/package tests and checkpoint**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -699,14 +713,15 @@ Expected: residual scan reports zero active findings and diff check passes.
 - Verify all modified files
 - Do not install, tag, push, publish, or perform live collection
 
-- [ ] **Step 1: Run all focused V15 tests with sockets disabled**
+- [x] **Step 1: Run all focused V15 tests with sockets disabled**
 
 Run:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
-  --with pytest --with pytest-asyncio --with pytest-socket --with playwright \
-  python -m pytest -q -p no:cacheprovider --disable-socket \
+  --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket \
   tests/test_runtime_browser_skill.py tests/test_runtime_detail_open.py \
   tests/test_runtime_screenshots.py tests/test_runtime_browser.py \
   tests/test_runtime_xhs.py tests/test_runtime_bilibili.py \
@@ -718,36 +733,41 @@ PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
 
 Expected: all pass, zero failures and zero skips.
 
-- [ ] **Step 2: Run the complete offline suite**
+- [x] **Step 2: Run the complete offline suite**
 
 Run:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 uv run --no-project \
-  --with pytest --with pytest-asyncio --with pytest-socket --with playwright \
-  python -m pytest -q -p no:cacheprovider --disable-socket
+  --with pytest --with pytest-asyncio --with pytest-socket \
+  --with-requirements runtime/requirements.lock \
+  python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket
 ```
 
 Expected: all tests pass with sockets disabled. Record the exact total.
 
-- [ ] **Step 3: Run compile, entrypoint, residual, and skill gates**
+- [x] **Step 3: Run compile, entrypoint, residual, and skill gates**
 
 Run:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q runtime media-missher openclaw-media-missher tools tests
-python3 runtime/scripts/scrape_all.py --help >/dev/null
-python3 runtime/scripts/scrape_bilibili.py --help >/dev/null
-python3 runtime/scripts/scrape_xhs.py --help >/dev/null
-python3 runtime/scripts/scrape_douyin.py --help >/dev/null
-python3 runtime/scripts/scrape_weibo.py --help >/dev/null
-python3 tools/scan_active_residuals.py --root .
-python3 tools/install_media_missher.py --version
+# Use an existing Python 3.11+ interpreter for runtime source and entrypoints.
+task_pycache="$(mktemp -d)"
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 -m compileall -q runtime media-missher openclaw-media-missher tools tests
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 runtime/scripts/scrape_all.py --help >/dev/null
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 runtime/scripts/scrape_bilibili.py --help >/dev/null
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 runtime/scripts/scrape_xhs.py --help >/dev/null
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 runtime/scripts/scrape_douyin.py --help >/dev/null
+PYTHONPYCACHEPREFIX="$task_pycache" python3.11 runtime/scripts/scrape_weibo.py --help >/dev/null
+PYTHONPYCACHEPREFIX="$task_pycache" python3 tools/scan_active_residuals.py --root .
+PYTHONPYCACHEPREFIX="$task_pycache" python3 tools/install_media_missher.py --version
+find "$task_pycache" -type f -delete
+find "$task_pycache" -depth -type d -exec rmdir {} \;
 ```
 
 Expected: compile exit `0`; five help commands exit `0`; residual scan returns zero; version output is `Media@Missher 15.0.0`.
 
-- [ ] **Step 4: Review scope and leave the worktree for supervision**
+- [x] **Step 4: Review scope and leave the worktree for supervision**
 
 Run:
 
@@ -759,3 +779,25 @@ git diff -- . ':(exclude).superpowers/**'
 ```
 
 Expected: only the planned V15 files are modified; no credentials, profile data, runtime state, screenshots, PNGs, traces, or generated releases appear. Do not stage or commit. Report exact test totals, changed files, assumptions, and any remaining limitation to task `019fef73-9c82-7023-b42f-e7ac52e41efa` for final supervision.
+
+### Release-review remediation checklist
+
+- [x] Align BrowserSkill lifecycle, numeric tab IDs, malformed-start recovery, and retryable stop behavior with CLI 0.1.10.
+- [x] Poll and platform-bind exact detail pages; clean only newly owned pages and release popups per record.
+- [x] Bind Xiaohongshu popup responses to the verified page, preserve ordinary timeout fallback, and limit randomized settle to complete mode.
+- [x] Restore Bilibili creator feed state between records, dispose every ElementHandle, validate video screenshots, and reject search advanced modes.
+- [x] Detect screenshot risk both before and after capture, and reject oversized full-page documents before PNG generation.
+- [x] Enforce per-request screenshot obligations and reject `screenshot-mode=all` with count `0`.
+- [x] Add atomic `--codex-only` installation without creating or requiring an OpenClaw root.
+- [x] Pin CI and plan test environments through `runtime/requirements.lock` and document BrowserSkill upstream bundled skill sync.
+- [x] Re-run focused and complete sockets-disabled suites plus compile, help, residual, and diff gates after remediation.
+
+### Final-review remediation checklist
+
+- [x] Accept and release only click-derived popups whose asynchronous opener is the source page; ignore unrelated context pages.
+- [x] Fail closed on malformed BrowserSkill start output without guessing or stopping an unproven session.
+- [x] Retry BrowserSkill stop at most once during `BrowserSession.close`, then propagate a bounded failure.
+- [x] Wait for the next exact Bilibili dynamic target after restoring the creator feed and recheck risk before lookup.
+- [x] Reject article and full-page screenshots above 16,777,216 pixels before Playwright generates PNG data.
+- [x] Validate creator `screenshot-mode=all` against each selected platform's effective override-or-global count.
+- [x] Re-run focused and complete sockets-disabled suites plus compile, help, residual, and diff gates after final review remediation.

@@ -2,7 +2,7 @@
 
 Use these commands for installation, preflight, creator collection, search, validation, conversion, and recovery. Resolve the directory containing `SKILL.md` as `SKILL_DIR`.
 
-## Install in two stages
+## Install atomically for the current Codex-only environment
 
 Confirm the source product version before installation:
 
@@ -10,19 +10,20 @@ Confirm the source product version before installation:
 python3 tools/install_media_missher.py --version
 ```
 
-Run installation commands from the source repository. The first command installs only `current/`, `venv/`, and private `state/` under `MEDIA_MISSHER_HOME` or `~/.local/share/media-missher`:
+Run installation commands from the source repository. The current machine has retired OpenClaw, so the recommended authorized cutover installs `current/`, `venv/`, private `state/`, and the Codex skill under one release without creating or requiring an OpenClaw root:
+
+```bash
+python3 tools/install_media_missher.py --codex-only
+```
+
+`--runtime-only` remains available for adapter-only staging. The no-mode default still installs both compact skills for backward compatibility with historical OpenClaw environments:
 
 ```bash
 python3 tools/install_media_missher.py --runtime-only
-```
-
-Run offline tests, residual scans, staged skill preflight, and authorized live acceptance before full cutover. The second command atomically installs the runtime and both compact skills:
-
-```bash
 python3 tools/install_media_missher.py
 ```
 
-Do not run either command during a read-only review. Do not perform full cutover until every gate passes.
+`--codex-only` and `--runtime-only` are mutually exclusive. Do not run any installation command during a read-only review or before every release gate passes.
 
 ## Run read-only preflight
 
@@ -74,6 +75,16 @@ Xiaohongshu complete mode keeps each successfully opened note visible for one ra
 
 Pass `--allow-navigation` only after explicit authorization to navigate exact allowlisted hosts during this run. The controller opens one temporary page per selected platform in the existing browser context, keeps existing pages unchanged, and closes only its temporary pages after the run. Omit it for read-only work and passive collection from already open matching pages.
 
+## Add optional detail assistance and screenshots
+
+Both options default to `off` and support only Bilibili and Xiaohongshu. They require explicit navigation authorization:
+
+```bash
+--browser-assist browserskill --screenshot-mode opened --allow-navigation
+```
+
+Use `--screenshot-mode all` only when every selected record needs private screenshot evidence and every effective count is positive. `opened` never creates an extra open solely for a screenshot and may retain count `0`. BrowserSkill 0.1.10 with extension 0.1.6 is the tested external compatibility baseline. It is not installed by Media@Missher. Playwright/CDP still registers responses before the exact click, binds the native ID, checks risks before and after capture, bounds full-page dimensions, and captures the PNG.
+
 ## Search one platform
 
 Search accepts one platform and cannot use complete mode:
@@ -88,6 +99,8 @@ python3 "$SKILL_DIR/scripts/run_collection.py" \
 
 Search does not require `platform_uids`. Use `--allow-navigation` only with the same explicit navigation authorization required for creator mode.
 
+Bilibili search does not implement advanced browser assistance or screenshots. Requests combining Bilibili search with non-`off` `--browser-assist` or `--screenshot-mode` are rejected instead of silently succeeding.
+
 ## Bound count zero
 
 Count `0` means collect as much as the safety page cap permits. It requires an explicit flag:
@@ -95,6 +108,8 @@ Count `0` means collect as much as the safety page cap permits. It requires an e
 ```bash
 --count 0 --collect-as-much-as-safe
 ```
+
+Count `0` cannot be combined with `--screenshot-mode all`, because that would create an unbounded screenshot obligation. `--screenshot-mode opened` remains permitted because it does not open additional records.
 
 ## Convert validated output
 

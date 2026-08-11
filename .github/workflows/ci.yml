@@ -1,0 +1,44 @@
+name: offline-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Complete sockets-disabled test suite
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 uv run --no-project
+          --with pytest --with pytest-asyncio --with pytest-socket
+          --with-requirements runtime/requirements.lock
+          python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket
+      - name: Packaging gates
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 uv run --no-project
+          --with pytest --with pytest-asyncio --with pytest-socket
+          --with-requirements runtime/requirements.lock
+          python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket
+          tests/test_packaging.py tests/test_installer.py tests/test_active_residuals.py
+      - name: Compile source
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q
+          runtime media-missher openclaw-media-missher tools tests
+      - name: Check offline entrypoints
+        run: |
+          python3 runtime/scripts/scrape_all.py --help >/dev/null
+          python3 runtime/scripts/scrape_bilibili.py --help >/dev/null
+          python3 runtime/scripts/scrape_xhs.py --help >/dev/null
+          python3 runtime/scripts/scrape_douyin.py --help >/dev/null
+          python3 runtime/scripts/scrape_weibo.py --help >/dev/null
+      - name: Scan active residuals
+        run: python3 tools/scan_active_residuals.py --root .

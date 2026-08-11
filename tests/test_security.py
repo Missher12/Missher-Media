@@ -1,5 +1,8 @@
 import re
+import socket
 from pathlib import Path
+
+import pytest
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -139,3 +142,21 @@ def test_allowlist_rejects_representative_artifacts(tmp_path):
 def test_sensitive_scan_rejects_representative_credential_value():
     with __import__("pytest").raises(AssertionError):
         assert_no_sensitive_values('api_key = "CANARY-REAL-VALUE"')
+
+
+def test_adapter_screenshot_validation_has_bounded_single_read_contract():
+    text = (SKILL / "scripts" / "media_missher_adapter.py").read_text(
+        encoding="utf-8"
+    )
+    assert "MAX_SCREENSHOT_BYTES = 50 * 1024 * 1024" in text
+    assert "screenshot.read_bytes()" not in text
+    assert "hashlib.sha256(payload).hexdigest()" in text
+
+
+def test_sockets_disabled_gate_still_blocks_inet_and_inet6() -> None:
+    pytest_socket = pytest.importorskip("pytest_socket")
+    pytest_socket.disable_socket(allow_unix_socket=True)
+
+    for family in (socket.AF_INET, socket.AF_INET6):
+        with pytest.raises(pytest_socket.SocketBlockedError):
+            socket.socket(family, socket.SOCK_STREAM)

@@ -15,6 +15,63 @@ def test_collection_request_accepts_a_creator_request() -> None:
     assert request.target_count == 2
 
 
+def test_collection_request_accepts_safe_assist_and_screenshot_modes() -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    request = CollectionRequest(
+        platform="xhs",
+        count=1,
+        uid="creator",
+        browser_assist="browserskill",
+        screenshot_mode="opened",
+    )
+
+    assert request.browser_assist == "browserskill"
+    assert request.screenshot_mode == "opened"
+
+
+def test_opened_screenshot_mode_keeps_unbounded_count_available() -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    request = CollectionRequest(
+        platform="xhs",
+        count=0,
+        uid="creator",
+        screenshot_mode="opened",
+    )
+
+    assert request.target_count is None
+
+
+@pytest.mark.parametrize(
+    "values",
+    (
+        {"platform": "xhs", "count": 0, "uid": "creator", "screenshot_mode": "all"},
+        {"platform": "bilibili", "count": 1, "keyword": "topic", "browser_assist": "browserskill"},
+        {"platform": "bilibili", "count": 1, "keyword": "topic", "screenshot_mode": "all"},
+    ),
+)
+def test_collection_request_rejects_unbounded_or_unsupported_advanced_modes(
+    values: dict[str, object],
+) -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    with pytest.raises(ValueError, match="not supported|positive"):
+        CollectionRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("browser_assist", "stealth"), ("screenshot_mode", "background")),
+)
+def test_collection_request_rejects_unknown_modes(field: str, value: str) -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    values = {"platform": "xhs", "count": 1, "uid": "creator", field: value}
+    with pytest.raises(ValueError, match="unsupported"):
+        CollectionRequest(**values)
+
+
 @pytest.mark.parametrize("platform", ("bilibili", "xhs", "douyin", "weibo"))
 def test_collection_request_accepts_only_supported_platforms(platform: str) -> None:
     from runtime.media_missher_runtime.models import CollectionRequest

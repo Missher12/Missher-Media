@@ -152,6 +152,124 @@ def test_close_disconnects_without_closing_any_page_or_context() -> None:
     assert page.url == "https://weibo.com/"
 
 
+def test_close_stops_bridge_before_temporary_pages_and_playwright() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    events: list[str] = []
+
+    class Bridge:
+        async def close(self) -> None:
+            events.append("bridge")
+
+    class TemporaryPage:
+        def is_closed(self) -> bool:
+            return False
+
+        async def close(self) -> None:
+            events.append("page")
+
+    class Playwright(FakePlaywright):
+        async def stop(self) -> None:
+            events.append("playwright")
+
+    remote = FakeBrowser([])
+    session = BrowserSession(Playwright(remote), remote, bridge=Bridge())
+    session._temporary_pages.append(TemporaryPage())
+
+    _run(session.close())
+
+    assert events == ["bridge", "page", "playwright"]
+
+
+def test_close_retries_bridge_stop_once_before_continuing_cleanup() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    events: list[str] = []
+
+    class Bridge:
+        attempts = 0
+
+        async def close(self) -> None:
+            self.attempts += 1
+            events.append(f"bridge-{self.attempts}")
+            if self.attempts == 1:
+                raise RuntimeError("first stop failed")
+
+    class TemporaryPage:
+        def is_closed(self) -> bool:
+            return False
+
+        async def close(self) -> None:
+            events.append("page")
+
+    class Playwright(FakePlaywright):
+        async def stop(self) -> None:
+            events.append("playwright")
+
+    bridge = Bridge()
+    remote = FakeBrowser([])
+    session = BrowserSession(Playwright(remote), remote, bridge=bridge)
+    session._temporary_pages.append(TemporaryPage())
+
+    _run(session.close())
+
+    assert bridge.attempts == 2
+    assert events == ["bridge-1", "bridge-2", "page", "playwright"]
+
+
+def test_close_stops_retrying_bridge_after_two_failures_and_propagates_last() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    first = RuntimeError("first stop failed")
+    second = RuntimeError("second stop failed")
+
+    class Bridge:
+        attempts = 0
+
+        async def close(self) -> None:
+            self.attempts += 1
+            raise first if self.attempts == 1 else second
+
+    bridge = Bridge()
+    remote = FakeBrowser([])
+    playwright = FakePlaywright(remote)
+    session = BrowserSession(playwright, remote, bridge=bridge)
+
+    with pytest.raises(RuntimeError) as captured:
+        _run(session.close())
+
+    assert captured.value is second
+    assert bridge.attempts == 2
+    assert playwright.stopped is True
+
+
+def test_release_temporary_page_immediately_closes_and_untracks_only_owned_page() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession
+
+    class Page:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+        async def close(self) -> None:
+            self.closed = True
+
+    remote = FakeBrowser([])
+    session = BrowserSession(FakePlaywright(remote), remote)
+    owned = Page()
+    existing = Page()
+    session._register_temporary_page(owned)
+
+    _run(session._release_temporary_page(existing))
+    assert existing.closed is False
+    _run(session._release_temporary_page(owned))
+
+    assert owned.closed is True
+    assert session._temporary_pages == []
+
+
 def test_authorized_authentication_uses_and_closes_only_a_temporary_platform_page() -> None:
     from runtime.media_missher_runtime.browser import BrowserSession
 

@@ -19,6 +19,11 @@ DOCUMENTATION = (
     SKILL / "references" / "licensing.md",
     REPO / "PROJECT_CONTEXT.md",
 )
+PACKAGE_ROOTS = (
+    REPO / "runtime",
+    REPO / "media-missher",
+    REPO / "openclaw-media-missher",
+)
 
 
 def parse_skill_frontmatter(text):
@@ -88,7 +93,7 @@ def test_openai_metadata_has_required_interface():
         "default_prompt",
     }
     assert all(interface.values())
-    assert interface["display_name"] == "Media@Missher V12"
+    assert interface["display_name"] == "Media@Missher V15"
     assert 25 <= len(interface["short_description"]) <= 64
     assert "$media-missher" in interface["default_prompt"]
 
@@ -104,6 +109,33 @@ def test_skill_contains_no_bundled_engine_or_generated_artifacts():
     }
     assert not forbidden.intersection(path.name for path in SKILL.rglob("*"))
     assert all(path.is_file() for path in (SKILL / "scripts").iterdir())
+
+
+def test_source_packages_contain_no_private_browser_or_runtime_artifacts():
+    forbidden_directory_names = {
+        ".superpowers",
+        "browser-profile",
+        "browser_profiles",
+        "cookies",
+        "recovery",
+        "screenshots",
+        "state",
+    }
+    failures = []
+    for root in PACKAGE_ROOTS:
+        for path in root.rglob("*"):
+            relative = path.relative_to(root)
+            lowered_parts = {part.casefold() for part in relative.parts}
+            if forbidden_directory_names.intersection(lowered_parts):
+                failures.append(relative.as_posix())
+            if path.is_file() and (
+                path.name == ".env"
+                or path.name.startswith(".env.")
+                or path.name.endswith(".trace.json")
+                or path.suffix.casefold() == ".png"
+            ):
+                failures.append(relative.as_posix())
+    assert failures == []
 
 
 @pytest.mark.parametrize(
@@ -165,6 +197,7 @@ def test_documentation_covers_shared_runtime_operations_and_recovery():
         "scripts/validate_run.py",
         "tools/install_media_missher.py",
         "--runtime-only",
+        "--codex-only",
         ".media-missher-owner.json",
         ".media-missher-install.lock",
         ".media-missher-release",
@@ -201,10 +234,18 @@ def test_validation_documentation_defines_the_strict_five_key_diagnostic_contrac
     for code in (
         "count-shortfall",
         "incomplete-record",
+        "screenshot-shortfall",
         "preflight-aborted",
         "prior-risk-stop",
         "module-not-found",
         "precondition-failed",
+        "bsk-missing",
+        "bsk-unhealthy",
+        "bsk-incompatible",
+        "bsk-busy",
+        "bsk-transport",
+        "bsk-timeout",
+        "bsk-target-ambiguous",
         "source-response-failed",
         "http-403",
         "http-429",
@@ -244,7 +285,7 @@ def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflig
 def test_project_context_records_clean_boundaries_and_release_state():
     text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
 
-    assert (REPO / "VERSION").read_text(encoding="ascii") == "12.0.0\n"
+    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.0.0\n"
 
     for phrase in (
         "Source boundary",
@@ -257,3 +298,74 @@ def test_project_context_records_clean_boundaries_and_release_state():
         "~/.openclaw/workspace/skills/media-missher",
     ):
         assert phrase in text
+
+
+def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
+    corpus = "\n".join(path.read_text(encoding="utf-8") for path in DOCUMENTATION)
+    codex_skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    openclaw_skill = (REPO / "openclaw-media-missher" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "# Media@Missher V15" in codex_skill
+    assert "# Media@Missher V15" in openclaw_skill
+    for phrase in (
+        "--browser-assist",
+        "--screenshot-mode",
+        "BrowserSkill 0.1.10",
+        "extension 0.1.6",
+        "Playwright/CDP",
+        "article",
+        "full_page_fallback",
+        "screenshot_path",
+        "screenshot_sha256",
+        "screenshot_observed_at",
+        "private GitHub",
+        "V15 live acceptance has not been performed",
+    ):
+        assert phrase in corpus, f"V15 documentation is missing {phrase!r}"
+    assert "defaults to `off`" in corpus
+    assert "bundled skill sync" in corpus
+    assert "positive count" in corpus
+
+
+def test_gitignore_keeps_private_v15_artifacts_out_of_source_control():
+    lines = set((REPO / ".gitignore").read_text(encoding="utf-8").splitlines())
+    assert {
+        ".superpowers/",
+        ".env",
+        ".env.*",
+        "*.trace.json",
+        "screenshots/",
+        "run-*/screenshots/",
+    }.issubset(lines)
+
+
+def test_offline_ci_has_no_live_browser_or_artifact_upload_configuration():
+    workflow = REPO / ".github" / "workflows" / "ci.yml"
+    text = workflow.read_text(encoding="utf-8")
+
+    assert "--disable-socket" in text
+    assert "--allow-unix-socket" in text
+    assert "--with-requirements runtime/requirements.lock" in text
+    assert "--with playwright" not in text
+    assert "compileall" in text
+    assert "scan_active_residuals.py" in text
+    for entrypoint in (
+        "scrape_all.py",
+        "scrape_bilibili.py",
+        "scrape_xhs.py",
+        "scrape_douyin.py",
+        "scrape_weibo.py",
+    ):
+        assert f"{entrypoint} --help" in text
+    lowered = text.casefold()
+    for forbidden in (
+        "secrets.",
+        "services:",
+        "upload-artifact",
+        "screenshot upload",
+        "cdp_url",
+        "bsk session start",
+    ):
+        assert forbidden not in lowered
