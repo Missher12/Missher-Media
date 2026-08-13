@@ -838,8 +838,7 @@ async def _wait_for_exact_dynamic_target(page: Any, dynamic_id: str) -> None:
     await page.wait_for_function(
         """/* MEDIA_MISSHER_WAIT_EXACT_DYNAMIC_TARGET */ (expectedId) => {
             const candidates = document.querySelectorAll(
-                'a[href*="t.bilibili.com/"], a[href*="/opus/"], '
-                '[data-did], [dyn-id], [data-dynamic-id]'
+                'a[href*="t.bilibili.com/"], a[href*="/opus/"], [data-did], [dyn-id], [data-dynamic-id]'
             );
             return Array.from(candidates).some((node) => {
                 if (!node.isConnected) return false;
@@ -879,8 +878,7 @@ async def _read_dynamic_feed_risk(page: Any) -> Mapping[str, Any]:
         """/* MEDIA_MISSHER_DYNAMIC_FEED_RISK */ () => {
             const bodyText = document.body?.innerText || '';
             const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, '
-                'iframe[src*="geetest"], [class*="captcha"]'
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
             );
             const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
             const phrase = phrases.find((value) => bodyText.includes(value)) || '';

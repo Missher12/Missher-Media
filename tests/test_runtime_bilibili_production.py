@@ -767,6 +767,51 @@ async def test_dynamic_target_finder_requires_one_exact_id_match() -> None:
     assert all(element.disposed for element in page.dynamic_elements)
 
 
+def test_exact_dynamic_target_wait_uses_one_css_selector_literal() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        _wait_for_exact_dynamic_target,
+    )
+
+    class ScriptPage:
+        script = ""
+
+        async def wait_for_function(
+            self, script: str, *, arg: Any, timeout: int
+        ) -> None:
+            assert arg == "synthetic"
+            assert timeout == 5_000
+            self.script = script
+
+    page = ScriptPage()
+    _run(_wait_for_exact_dynamic_target(page, "synthetic"))
+
+    assert (
+        "'a[href*=\"t.bilibili.com/\"], a[href*=\"/opus/\"], "
+        "[data-did], [dyn-id], [data-dynamic-id]'"
+    ) in page.script
+
+
+def test_dynamic_feed_risk_uses_one_css_selector_literal() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        _read_dynamic_feed_risk,
+    )
+
+    class ScriptPage:
+        script = ""
+
+        async def evaluate(self, script: str) -> dict[str, str]:
+            self.script = script
+            return {"risk_text": ""}
+
+    page = ScriptPage()
+    _run(_read_dynamic_feed_risk(page))
+
+    assert (
+        "'.geetest_panel, .geetest_holder, #geetest-wrap, "
+        "iframe[src*=\"geetest\"], [class*=\"captcha\"]'"
+    ) in page.script
+
+
 def test_creator_restores_feed_between_video_and_dynamic_records() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import collect_creator
 
