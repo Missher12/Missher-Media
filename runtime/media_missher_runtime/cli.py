@@ -29,6 +29,14 @@ _SAFE_BROWSER_SKILL_CODES = frozenset(
         "bsk-transport",
         "bsk-timeout",
         "bsk-target-ambiguous",
+        "bsk-session-start",
+        "bsk-tab-list",
+        "bsk-tab-borrow",
+        "bsk-snapshot",
+        "bsk-click",
+        "bsk-tab-return",
+        "bsk-session-stop",
+        "xhs-browser-assist-unsupported",
     }
 )
 
@@ -143,6 +151,7 @@ class RuntimeDispatcher:
         self.allow_navigation = allow_navigation
         self.browser_assist = browser_assist
         self.browser: BrowserSession | None = None
+        self._partial_records: dict[str, list[dict[str, Any]]] = {}
 
     async def __aenter__(self) -> "RuntimeDispatcher":
         self.browser = await BrowserSession.connect(
@@ -195,6 +204,23 @@ class RuntimeDispatcher:
         bind_store = getattr(self.browser, "bind_store", None)
         if bind_store is not None:
             bind_store(store)
+        bind_progress = getattr(self.browser, "bind_progress", None)
+        if bind_progress is not None:
+            bind_progress(self._capture_progress)
+
+    def _capture_progress(
+        self, platform: str, records: Sequence[dict[str, Any]]
+    ) -> None:
+        if platform not in PLATFORMS:
+            return
+        if not isinstance(records, (list, tuple)) or not all(
+            isinstance(record, dict) for record in records
+        ):
+            return
+        self._partial_records[platform] = [dict(record) for record in records]
+
+    def partial_records(self, platform: str) -> list[dict[str, Any]]:
+        return [dict(record) for record in self._partial_records.get(platform, ())]
 
 
 def _non_negative_int(value: str) -> int:
@@ -354,7 +380,10 @@ def _requests_from_args(parser: argparse.ArgumentParser, args: argparse.Namespac
         complete = bool(
             (args.complete and platform in {"bilibili", "xhs"})
             or (platform == "bilibili" and args.bilibili_complete)
-            or (platform == "xhs" and args.xhs_complete)
+            # Creator collection on Xiaohongshu is intentionally detail-first:
+            # preview cards are not authoritative for the complete article or
+            # engagement values.
+            or platform == "xhs"
         )
         requests.append(
             CollectionRequest(
@@ -533,11 +562,26 @@ async def _run_requests(
                 diagnostic = _failure_diagnostic(error)
                 diagnostics[platform] = diagnostic
                 if platform == "xhs":
+                    partial: list[dict[str, Any]] = []
+                    partial_reader = getattr(dispatcher, "partial_records", None)
+                    if partial_reader is not None:
+                        try:
+                            candidate = partial_reader(platform)
+                            if isinstance(candidate, list) and all(
+                                isinstance(record, dict) for record in candidate
+                            ):
+                                partial = [dict(record) for record in candidate]
+                        except Exception:
+                            partial = []
                     try:
+                        if partial:
+                            path = store.write_json("xhs.json", partial)
+                            counts[platform] = len(partial)
+                            paths[platform] = path.name
                         paths.update(
                             _write_xhs_artifacts(
                                 store,
-                                [],
+                                partial,
                                 status="failed",
                                 started_at=started_at,
                                 reason=diagnostic["code"],
@@ -579,6 +623,18 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
     values = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser(fixed_platform=fixed_platform)
     args = parser.parse_args(_normalize_legacy_argv(values))
+    requested_platforms = (
+        (args.platform,)
+        if args.mode == "search"
+        else _selected_platforms(parser, args.platforms)
+    )
+    if args.browser_assist == "browserskill" and "xhs" in requested_platforms:
+        print(
+            "media-missher-diagnostic platform=xhs "
+            "kind=precondition code=xhs-browser-assist-unsupported",
+            file=sys.stderr,
+        )
+        return 78
     requests = _requests_from_args(parser, args)
     injected = dispatcher is not None
     active_dispatcher = (

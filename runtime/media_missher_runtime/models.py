@@ -46,6 +46,8 @@ class CollectionRequest:
             raise ValueError("page_cap must be at least 1")
         if self.browser_assist not in _BROWSER_ASSIST_MODES:
             raise ValueError("unsupported browser assist mode")
+        if self.platform == "xhs" and self.browser_assist == "browserskill":
+            raise ValueError("xhs-browser-assist-unsupported")
         if self.screenshot_mode not in _SCREENSHOT_MODES:
             raise ValueError("unsupported screenshot mode")
         if (self.uid is None) == (self.keyword is None):

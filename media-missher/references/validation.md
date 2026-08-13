@@ -12,7 +12,7 @@ Each diagnostic object contains exactly `kind` and `code`. Accept only these kin
 - `result`: `count-shortfall`, `incomplete-record`, `screenshot-shortfall`
 - `not-run`: `preflight-aborted`, `prior-risk-stop`
 - `dependency`: `module-not-found`
-- `precondition`: `precondition-failed`, `bsk-missing`, `bsk-unhealthy`, `bsk-incompatible`, `bsk-busy`, `bsk-transport`, `bsk-timeout`, `bsk-target-ambiguous`
+- `precondition`: `precondition-failed`, `xhs-browser-assist-unsupported`, `bsk-missing`, `bsk-unhealthy`, `bsk-incompatible`, `bsk-busy`, `bsk-transport`, `bsk-timeout`, `bsk-target-ambiguous`, `bsk-session-start`, `bsk-tab-list`, `bsk-tab-borrow`, `bsk-snapshot`, `bsk-click`, `bsk-tab-return`, `bsk-session-stop`
 - `source-response`: `source-response-failed`
 - `risk-stop`: `http-403`, `http-429`, `payload-461`, `payload-471`, `payload-999`, `challenge`, `risk-signal`
 - `timeout`: `platform-timeout`, `creator-capture-timeout`, `detail-capture-timeout`
@@ -54,14 +54,22 @@ Describe engagement as the current API snapshot. Do not claim a field freshness 
 
 Every requested Xiaohongshu record must contain:
 
-- `complete: true` and `detail_attempted: true`
-- A non-estimated date
-- Non-null liked, comments, and collected values
+- `complete: true`, `detail_attempted: true`, and `detail_completed: true`
+- An empty `missing_fields` list
+- An exact `https://www.xiaohongshu.com/explore/<note_id>` link whose path ID matches the record
+- A non-estimated date with `date_source: detail_api`
+- Non-negative integer liked, comments, collected, and shares values
+- Non-empty body and author values proven to come from the current detail payload
+- At least one safe image, video, or cover value proven to come from the current detail payload
 - `engagement_fresh: true`
-- A detail, HTML, or CDP source from this run
-- An engagement observation time at or after the run start
+- A detail API, detail HTML, or detail CDP source for every engagement metric
+- A global engagement observation time and a per-metric observation time at or after the run start
+- When comments were requested, `comments_requested` must equal this run's request; `comments_fetched` and the `comments_data` list length must equal the smaller of the request limit and the current detail comment count
+- Every comment object must contain only `author`, `text`, `date`, and `liked`, with at least a non-empty author or body
 
-A cache-only value, stale field, estimated day, failed detail attempt, lock, cooldown, or risk report is not complete.
+Xiaohongshu detail opening and screenshot evidence must come from the existing Playwright/CDP session with `--browser-assist off`. BrowserSkill session output is not Xiaohongshu evidence.
+
+A cache-only value, stale preview body/media, estimated day, incomplete comment request, failed detail attempt, contradictory proof, lock, cooldown, or risk report is not complete. If bounded comment loading stops because the container is unavailable or ambiguous, is not scrollable, stops growing, or reaches its three-scroll budget, preserve the verified record as partial evidence with `comments_data` in `missing_fields`.
 
 ## Validate Douyin and Weibo
 

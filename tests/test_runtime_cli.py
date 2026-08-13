@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import stat
 from pathlib import Path
@@ -138,7 +139,7 @@ def test_creator_dispatches_sequentially_and_preserves_platform_options(tmp_path
     assert "unknown" not in report_text
 
 
-def test_runtime_cli_carries_assist_modes_into_request(tmp_path: Path) -> None:
+def test_runtime_cli_carries_bilibili_assist_modes_into_request(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.cli import main
 
     dispatcher = FakeDispatcher()
@@ -146,8 +147,8 @@ def test_runtime_cli_carries_assist_modes_into_request(tmp_path: Path) -> None:
         [
             "creator",
             "--platforms",
-            "xhs",
-            "--xhs-uid",
+            "bilibili",
+            "--bilibili-uid",
             "creator",
             "--count",
             "1",
@@ -166,6 +167,75 @@ def test_runtime_cli_carries_assist_modes_into_request(tmp_path: Path) -> None:
     assert len(dispatcher.requests) == 1
     assert dispatcher.requests[0].browser_assist == "browserskill"
     assert dispatcher.requests[0].screenshot_mode == "opened"
+
+
+def test_runtime_model_rejects_xhs_browser_assist() -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    with pytest.raises(ValueError, match="xhs-browser-assist-unsupported"):
+        CollectionRequest(
+            platform="xhs",
+            count=1,
+            uid="creator",
+            browser_assist="browserskill",
+        )
+
+
+def test_runtime_cli_rejects_xhs_browser_assist_before_dispatcher(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "creator",
+            "--count",
+            "1",
+            "--allow-navigation",
+            "--browser-assist",
+            "browserskill",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 78
+    assert dispatcher.entered is False
+    assert not list(tmp_path.iterdir())
+    assert capsys.readouterr().err == (
+        "media-missher-diagnostic platform=xhs "
+        "kind=precondition code=xhs-browser-assist-unsupported\n"
+    )
+
+
+def test_xhs_creator_defaults_to_complete_detail_collection(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    dispatcher = FakeDispatcher()
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "xhs",
+            "--xhs-uid",
+            "creator",
+            "--count",
+            "1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 0
+    assert dispatcher.requests[0].complete is True
 
 
 def test_requested_screenshot_failure_marks_runtime_result_incomplete(
@@ -411,7 +481,6 @@ def test_runtime_creator_screenshot_all_rejects_any_zero_effective_count(
 @pytest.mark.parametrize(
     "arguments",
     (
-        ("--platforms", "xhs", "--xhs-uid", "creator", "--browser-assist", "browserskill"),
         ("--platforms", "xhs", "--xhs-uid", "creator", "--screenshot-mode", "all"),
         ("--platforms", "douyin", "--douyin-uid", "creator", "--screenshot-mode", "opened", "--allow-navigation"),
         ("--platforms", "weibo", "--weibo-uid", "creator", "--browser-assist", "browserskill", "--allow-navigation"),
@@ -771,6 +840,13 @@ def test_platform_preflight_failure_emits_only_a_safe_line_before_inner_output(
         "bsk-transport",
         "bsk-timeout",
         "bsk-target-ambiguous",
+        "bsk-session-start",
+        "bsk-tab-list",
+        "bsk-tab-borrow",
+        "bsk-snapshot",
+        "bsk-click",
+        "bsk-tab-return",
+        "bsk-session-stop",
     ),
 )
 def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
@@ -789,7 +865,7 @@ def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
                 )
             except RuntimeError as raw_error:
                 raise PlatformPreflightError(
-                    "xhs", BrowserSkillError(safe_code)
+                    "bilibili", BrowserSkillError(safe_code)
                 ) from raw_error
 
     output = tmp_path / "runs"
@@ -798,8 +874,8 @@ def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
         [
             "creator",
             "--platforms",
-            "xhs",
-            "--xhs-uid",
+            "bilibili",
+            "--bilibili-uid",
             "private-xhs",
             "--browser-assist",
             "browserskill",
@@ -814,7 +890,7 @@ def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
     assert code == 78
     assert captured.out == ""
     assert captured.err == (
-        "media-missher-diagnostic platform=xhs "
+        "media-missher-diagnostic platform=bilibili "
         f"kind=precondition code={safe_code}\n"
     )
     assert not list(output.glob("run-*"))
@@ -1163,6 +1239,54 @@ def test_run_store_is_bound_before_collection(
 
     assert code == 0
     assert events == ["bind"]
+
+
+def test_platform_timeout_preserves_completed_xhs_records(tmp_path: Path) -> None:
+    from runtime.media_missher_runtime.cli import _run_requests
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    partial = [
+        {
+            "platform": "xhs",
+            "note_id": "completed-note",
+            "title": "Completed before timeout",
+            "complete": True,
+        }
+    ]
+
+    class TimeoutDispatcher:
+        async def __aenter__(self) -> "TimeoutDispatcher":
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        async def collect(self, _request: object) -> list[dict[str, object]]:
+            await asyncio.sleep(1)
+            return []
+
+        def partial_records(self, platform: str) -> list[dict[str, object]]:
+            assert platform == "xhs"
+            return partial
+
+    code = asyncio.run(
+        _run_requests(
+            [CollectionRequest(platform="xhs", count=2, uid="creator", complete=True)],
+            output_dir=tmp_path,
+            dispatcher=TimeoutDispatcher(),
+            platform_timeout=0.01,
+        )
+    )
+
+    assert code == 1
+    run_dir, manifest = _manifest(tmp_path)
+    assert json.loads((run_dir / "xhs.json").read_text(encoding="utf-8")) == partial
+    assert manifest["counts"] == {"xhs": 1}
+    assert manifest["paths"]["xhs"] == "xhs.json"
+    assert manifest["platforms"] == {"xhs": "failed"}
+    assert manifest["diagnostics"] == {
+        "xhs": {"kind": "timeout", "code": "platform-timeout"}
+    }
 
 
 def test_runtime_dispatcher_preflight_requires_authenticated_pages_once_per_platform() -> None:

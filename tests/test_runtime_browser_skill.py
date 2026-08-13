@@ -257,7 +257,7 @@ async def test_malformed_session_start_never_claims_or_stops_a_unique_external_s
     with pytest.raises(BrowserSkillError) as captured:
         await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
 
-    assert captured.value.code == "bsk-transport"
+    assert captured.value.code == "bsk-session-start"
     assert fake.commands.count(("session", "list", "--json", "--quiet")) == 1
     assert not any(command[:2] == ("session", "stop") for command in fake.commands)
 
@@ -299,7 +299,7 @@ async def test_malformed_session_start_never_stops_ambiguous_sessions() -> None:
     with pytest.raises(BrowserSkillError) as captured:
         await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
 
-    assert captured.value.code == "bsk-transport"
+    assert captured.value.code == "bsk-session-start"
     assert fake.commands.count(("session", "list", "--json", "--quiet")) == 1
     assert not any(command[:2] == ("session", "stop") for command in fake.commands)
 
@@ -375,6 +375,55 @@ async def test_exit_one_refreshes_snapshot_and_retries_click_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_click_is_not_replayed_when_policy_disables_retry() -> None:
+    fake = FakeRunner(
+        _happy_responses(
+            click_results=[
+                _json_result(
+                    {"error": {"code": "stale-selector"}},
+                    returncode=1,
+                )
+            ]
+        )
+    )
+    bridge = BrowserSkillBridge(runner=fake)
+    await bridge.preflight()
+
+    with pytest.raises(BrowserSkillError) as captured:
+        await bridge.click_marked_tab(
+            Page(),
+            selector=TARGET_SELECTOR,
+            retry_stale_selector=False,
+        )
+
+    assert captured.value.code == "bsk-click"
+    assert sum(command[0] == "snapshot" for command in fake.commands) == 1
+    assert sum(command[0] == "click" for command in fake.commands) == 1
+    assert any(command[:2] == ("tab", "return") for command in fake.commands)
+
+
+@pytest.mark.asyncio
+async def test_generic_exit_one_click_failure_is_not_retried() -> None:
+    fake = FakeRunner(
+        _happy_responses(
+            click_results=[
+                _json_result({"error": {"code": "click-failed"}}, returncode=1)
+            ]
+        )
+    )
+    bridge = BrowserSkillBridge(runner=fake)
+    await bridge.preflight()
+
+    with pytest.raises(BrowserSkillError) as captured:
+        await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
+
+    assert captured.value.code == "bsk-click"
+    assert sum(command[0] == "click" for command in fake.commands) == 1
+    assert sum(command[0] == "snapshot" for command in fake.commands) == 1
+    await bridge.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("returncode", (2, 3, 4, 5))
 async def test_non_stale_click_failure_returns_tab_without_retry(returncode: int) -> None:
     fake = FakeRunner(
@@ -390,14 +439,14 @@ async def test_non_stale_click_failure_returns_tab_without_retry(returncode: int
             Page(), selector=TARGET_SELECTOR
         )
 
-    assert captured.value.code == "bsk-transport"
+    assert captured.value.code == "bsk-click"
     assert sum(command[0] == "click" for command in fake.commands) == 1
     assert any(command[:2] == ("tab", "return") for command in fake.commands)
     assert "private" not in str(captured.value)
 
 
 @pytest.mark.asyncio
-async def test_stale_snapshot_is_refreshed_once_before_click() -> None:
+async def test_failed_snapshot_is_not_retried_or_followed_by_click() -> None:
     fake = FakeRunner(
         _happy_responses(
             snapshot_results=[
@@ -409,10 +458,13 @@ async def test_stale_snapshot_is_refreshed_once_before_click() -> None:
     bridge = BrowserSkillBridge(runner=fake)
     await bridge.preflight()
 
-    await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
+    with pytest.raises(BrowserSkillError) as captured:
+        await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
 
-    assert sum(command[0] == "snapshot" for command in fake.commands) == 2
-    assert sum(command[0] == "click" for command in fake.commands) == 1
+    assert captured.value.code == "bsk-snapshot"
+    assert sum(command[0] == "snapshot" for command in fake.commands) == 1
+    assert not any(command[0] == "click" for command in fake.commands)
+    assert any(command[:2] == ("tab", "return") for command in fake.commands)
 
 
 @pytest.mark.asyncio
@@ -441,7 +493,7 @@ async def test_borrow_rejects_malformed_json_response() -> None:
     with pytest.raises(BrowserSkillError) as captured:
         await bridge.click_marked_tab(Page(), selector=TARGET_SELECTOR)
 
-    assert captured.value.code == "bsk-transport"
+    assert captured.value.code == "bsk-tab-borrow"
     assert "private" not in str(captured.value)
     assert not any(command[0] == "snapshot" for command in fake.commands)
     assert any(command[:2] == ("tab", "return") for command in fake.commands)
@@ -504,7 +556,7 @@ async def test_close_retries_a_failed_session_stop() -> None:
         await bridge.close()
     await bridge.close()
 
-    assert captured.value.code == "bsk-transport"
+    assert captured.value.code == "bsk-session-stop"
     assert fake.commands.count(("session", "stop", "abcd", "--quiet")) == 2
 
 

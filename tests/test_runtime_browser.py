@@ -122,6 +122,21 @@ def test_require_page_demands_an_open_authenticated_platform_page() -> None:
         session.require_page("weibo")
 
 
+def test_require_page_fails_closed_when_platform_tabs_are_ambiguous() -> None:
+    from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
+
+    remote = FakeBrowser(
+        [
+            FakePage("https://www.xiaohongshu.com/explore/one"),
+            FakePage("https://www.xiaohongshu.com/explore/two"),
+        ]
+    )
+    session = BrowserSession(FakePlaywright(remote), remote)
+
+    with pytest.raises(PreconditionError, match="ambiguous"):
+        session.require_page("xhs")
+
+
 def test_page_json_stays_on_the_selected_origin_and_returns_only_json() -> None:
     from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
 

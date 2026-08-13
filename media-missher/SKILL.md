@@ -3,7 +3,7 @@ name: media-missher
 description: Operate and validate the shared Media@Missher runtime for Bilibili, Xiaohongshu, Douyin, and Weibo. Use for authorized creator collection, single-platform keyword search, complete Bilibili or Xiaohongshu evidence, fresh-run validation, and diagnosis of CDP, login, timeout, lock, cooldown, or risk failures. Keep review and planning read-only, and never perform a remote Feishu write.
 ---
 
-# Media@Missher V15
+# Media@Missher V15.2
 
 Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 
@@ -15,7 +15,7 @@ Operate the installed shared runtime through this skill's standard-library adapt
 - Treat count `0` as valid only with an explicit collect-as-much-as-safe request. The runtime page cap still applies.
 - Limit keyword search to one platform. Reject search combined with complete mode.
 - Run selected platforms sequentially in one controller process. Never overlap Xiaohongshu with another collection.
-- Run complete mode once when requested. Do not collect an ordinary pass first.
+- Xiaohongshu creator collection is detail-first and complete by default. For Bilibili, run complete mode once when requested. Do not collect an ordinary pass first.
 - Pass `--allow-navigation` only after explicit authorization for browser navigation during that collection or live acceptance run. It uses temporary pages in the existing browser context and closes only those temporary pages after the run. Never use it for a read-only request.
 
 Read [commands](references/commands.md) before collection or installation. Read [configuration](references/configuration.md) when resolving the shared home, output root, Chrome DevTools Protocol (CDP) endpoint, private profile, or creator UID. Read [validation](references/validation.md) before accepting evidence. Read [troubleshooting](references/troubleshooting.md) after a preflight, login, timeout, lock, cooldown, or risk failure. Read [licensing](references/licensing.md) before copying, distributing, or licensing a component.
@@ -29,13 +29,15 @@ Read [commands](references/commands.md) before collection or installation. Read 
 5. Validate only artifacts from the current run and its recorded start time. Reject `latest`, reused directories, old artifacts, symlinks, exit codes, and console checkmarks as proof.
 6. Report counts, statuses, and absolute evidence paths. Limit samples to three metadata-only objects with platform and field count.
 
-## Use optional browser assistance
+## Use optional browser modes
 
-Browser assistance and screenshots both default to `off`. Enable BrowserSkill only with `--browser-assist browserskill --allow-navigation`; request evidence with `--screenshot-mode opened|all --allow-navigation`. These modes support only Bilibili and Xiaohongshu. `opened` captures a detail page only when the collection already had to open it; `all` opens and captures every selected record.
+Browser assistance and screenshots both default to `off`. BrowserSkill assistance is Bilibili creator-only and requires `--browser-assist browserskill --allow-navigation`. Xiaohongshu uses Playwright/CDP only; an explicit Xiaohongshu BrowserSkill request fails before navigation with `xhs-browser-assist-unsupported`. Private screenshots remain available on Bilibili and Xiaohongshu through `--screenshot-mode opened|all --allow-navigation` while `--browser-assist off`. `opened` captures a detail page only when collection already opens it; `all` opens and captures every selected record.
 
 BrowserSkill 0.1.10 with extension 0.1.6 is an optional external compatibility baseline, not a bundled runtime dependency. BrowserSkill may health-check, start one bounded session, borrow Media@Missher's one marked temporary tab, snapshot, click one exact target, return the tab, and stop. Playwright/CDP remains responsible for response listeners, identifier binding, risk checks, field parsing, and screenshots. Do not use BrowserSkill to read cookies or storage, bypass verification, rotate proxies, or implement anti-detection behavior.
 
-Screenshots are private PNG evidence. The runtime prefers one visible article container and falls back once to `full_page_fallback`. Each successful record carries `screenshot_path`, `screenshot_mode`, `screenshot_capture_kind`, `screenshot_observed_at`, and `screenshot_sha256`; a failed requested capture yields `screenshot-shortfall` without discarding verified structured fields.
+Each record permits at most one Xiaohongshu detail open and one CDP click. The current CDP session registers the exact response listener before that click and resolves either the same-page detail or its exact popup without opening a second browser. When a requested comment slice is short, Playwright may scroll only the unique visible comment container at most three times, with one fixed 1,500 ms wait after each scroll. It stops on enough comments, missing or ambiguous containers, non-scrollability, no growth, exhausted budget, or any risk signal. It never refreshes or reopens the detail; a non-risk shortfall remains partial evidence, while a risk signal stops the run before screenshot or retry.
+
+Screenshots are private PNG evidence. The runtime prefers one visible article container and falls back once to `full_page_fallback`, with a fresh risk check immediately before that fallback. Each successful record carries `screenshot_path`, `screenshot_mode`, `screenshot_capture_kind`, `screenshot_observed_at`, and `screenshot_sha256`; a failed requested capture yields `screenshot-shortfall` without discarding verified structured fields.
 
 ## Preserve safety controls
 
@@ -43,6 +45,7 @@ Screenshots are private PNG evidence. The runtime prefers one visible article co
 - Do not replace cookies, clear locks, clear state, rotate accounts, rotate network exits, or increase concurrency.
 - Do not bypass a captcha, inject stealth behavior, use proxy rotation, defeat fingerprinting controls, or evade platform restrictions.
 - Preserve rate limits, jitter, page caps, timeouts, cooldowns, sequential execution, and the Xiaohongshu complete-mode 5–15 second randomized open-note settle.
+- Preserve the exclusive adapter collection lease. Never overlap two Media@Missher runs against the dedicated browser profile.
 - Retry one non-risk failure only after correcting its concrete cause and passing preflight again.
 
 ## Keep Feishu separate

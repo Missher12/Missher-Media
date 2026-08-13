@@ -65,10 +65,13 @@ class DouyinCollector:
         if not getattr(self.browser, "allow_navigation", False):
             _require_open_target(page, target, "matching Douyin creator page")
         await _raise_for_page_challenge(page)
+        creator_predicate = lambda response: _is_creator_response(
+            response, self.request.uid
+        )
         if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, _is_creator_response, lambda: self._navigate_and_check(page, target))
+            response = await _capture_response_while(page, creator_predicate, lambda: self._navigate_and_check(page, target))
         else:
-            response = await _capture_response_while(page, _is_creator_response, _noop)
+            response = await _capture_response_while(page, creator_predicate, _noop)
         return await self._collect_pages(page, response, source="creator")
 
     async def search(self) -> list[dict[str, Any]]:
@@ -91,7 +94,11 @@ class DouyinCollector:
         records: list[dict[str, Any]] = []
         native_ids: set[str] = set()
         prior_cursor: object = _MISSING
-        predicate = _is_creator_response if source == "creator" else _is_search_response
+        predicate = (
+            (lambda candidate: _is_creator_response(candidate, self.request.uid))
+            if source == "creator"
+            else _is_search_response
+        )
         for page_number in range(self.request.page_cap):
             await _raise_for_page_challenge(page)
             payload = await _response_payload(response)
@@ -144,9 +151,15 @@ async def _capture_response_while(page: Any, predicate: Callable[[Any], bool], a
     return await response_info.value
 
 
-def _is_creator_response(response: Any) -> bool:
+def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return parsed.hostname == _DOUYIN_HOST and parsed.path == _CREATOR_PATH
+    if parsed.hostname != _DOUYIN_HOST or parsed.path != _CREATOR_PATH:
+        return False
+    if expected_uid is None:
+        return True
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    values = query.get("sec_user_id", []) or query.get("uid", [])
+    return values == [expected_uid]
 
 
 def _is_search_response(response: Any) -> bool:

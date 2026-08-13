@@ -93,7 +93,7 @@ def test_openai_metadata_has_required_interface():
         "default_prompt",
     }
     assert all(interface.values())
-    assert interface["display_name"] == "Media@Missher V15"
+    assert interface["display_name"] == "Media@Missher V15.2"
     assert 25 <= len(interface["short_description"]) <= 64
     assert "$media-missher" in interface["default_prompt"]
 
@@ -239,6 +239,7 @@ def test_validation_documentation_defines_the_strict_five_key_diagnostic_contrac
         "prior-risk-stop",
         "module-not-found",
         "precondition-failed",
+        "xhs-browser-assist-unsupported",
         "bsk-missing",
         "bsk-unhealthy",
         "bsk-incompatible",
@@ -246,6 +247,13 @@ def test_validation_documentation_defines_the_strict_five_key_diagnostic_contrac
         "bsk-transport",
         "bsk-timeout",
         "bsk-target-ambiguous",
+        "bsk-session-start",
+        "bsk-tab-list",
+        "bsk-tab-borrow",
+        "bsk-snapshot",
+        "bsk-click",
+        "bsk-tab-return",
+        "bsk-session-stop",
         "source-response-failed",
         "http-403",
         "http-429",
@@ -272,6 +280,42 @@ def test_skill_preserves_read_only_requests_and_requires_collection_authorizatio
     assert "separate explicit authorization" in text
 
 
+def test_documentation_carries_the_bounded_xhs_detail_action_contract():
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    commands = (SKILL / "references" / "commands.md").read_text(encoding="utf-8")
+    validation = (SKILL / "references" / "validation.md").read_text(
+        encoding="utf-8"
+    )
+    troubleshooting = (SKILL / "references" / "troubleshooting.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "at most one Xiaohongshu detail open" in skill
+    assert "at most three" in commands
+    assert "comment container" in commands
+    assert "does not refresh or reopen" in commands
+    assert "1,500" in commands
+    assert "partial" in validation
+    assert "Do not refresh or reopen" in troubleshooting
+
+
+def test_documentation_records_xhs_cdp_only_browser_ownership():
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    commands = (SKILL / "references" / "commands.md").read_text(encoding="utf-8")
+    configuration = (SKILL / "references" / "configuration.md").read_text(
+        encoding="utf-8"
+    )
+    openclaw = (REPO / "openclaw-media-missher" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    for text in (skill, commands, configuration, openclaw):
+        assert "xhs-browser-assist-unsupported" in text
+    assert "Xiaohongshu uses Playwright/CDP only" in skill
+    assert "BrowserSkill assistance is limited to Bilibili" in commands
+    assert "--browser-assist off" in commands
+
+
 def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflight():
     corpus = "\n".join(path.read_text(encoding="utf-8") for path in DOCUMENTATION)
 
@@ -285,7 +329,7 @@ def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflig
 def test_project_context_records_clean_boundaries_and_release_state():
     text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
 
-    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.0.0\n"
+    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.2.0\n"
 
     for phrase in (
         "Source boundary",
@@ -307,8 +351,8 @@ def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
         encoding="utf-8"
     )
 
-    assert "# Media@Missher V15" in codex_skill
-    assert "# Media@Missher V15" in openclaw_skill
+    assert "# Media@Missher V15.2" in codex_skill
+    assert "# Media@Missher V15.2" in openclaw_skill
     for phrase in (
         "--browser-assist",
         "--screenshot-mode",
@@ -321,7 +365,7 @@ def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
         "screenshot_sha256",
         "screenshot_observed_at",
         "private GitHub",
-        "V15 live acceptance has not been performed",
+        "V15 Xiaohongshu live acceptance passed",
     ):
         assert phrase in corpus, f"V15 documentation is missing {phrase!r}"
     assert "defaults to `off`" in corpus

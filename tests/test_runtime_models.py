@@ -19,7 +19,7 @@ def test_collection_request_accepts_safe_assist_and_screenshot_modes() -> None:
     from runtime.media_missher_runtime.models import CollectionRequest
 
     request = CollectionRequest(
-        platform="xhs",
+        platform="bilibili",
         count=1,
         uid="creator",
         browser_assist="browserskill",
@@ -27,6 +27,20 @@ def test_collection_request_accepts_safe_assist_and_screenshot_modes() -> None:
     )
 
     assert request.browser_assist == "browserskill"
+    assert request.screenshot_mode == "opened"
+
+
+def test_collection_request_accepts_xhs_screenshot_with_assist_off() -> None:
+    from runtime.media_missher_runtime.models import CollectionRequest
+
+    request = CollectionRequest(
+        platform="xhs",
+        count=1,
+        uid="creator",
+        screenshot_mode="opened",
+    )
+
+    assert request.browser_assist == "off"
     assert request.screenshot_mode == "opened"
 
 

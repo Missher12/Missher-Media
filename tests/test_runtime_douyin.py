@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Coroutine
+from urllib.parse import urlencode
 
 import pytest
 
@@ -23,7 +24,7 @@ def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
 class Response:
     payload: object
     status: int = 200
-    url: str = "https://www.douyin.com/aweme/v1/web/aweme/post/"
+    url: str = "https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=creator"
     json_error: Exception | None = None
     json_calls: int = 0
 
@@ -32,6 +33,16 @@ class Response:
         if self.json_error:
             raise self.json_error
         return self.payload
+
+
+def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import _is_creator_response
+
+    wrong = Response({}, url="https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=other")
+    right = Response({}, url="https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=target")
+
+    assert _is_creator_response(wrong, "target") is False
+    assert _is_creator_response(right, "target") is True
 
 
 @dataclass
@@ -170,8 +181,16 @@ def _aweme(identifier: str, *, title: object = "Synthetic title", images: object
     return result
 
 
-def _creator(*items: dict[str, Any], has_more: bool = False, cursor: int = 0) -> Response:
-    return Response({"status_code": 0, "aweme_list": list(items), "has_more": has_more, "max_cursor": cursor})
+def _creator(
+    *items: dict[str, Any],
+    has_more: bool = False,
+    cursor: int = 0,
+    uid: str = "creator",
+) -> Response:
+    return Response(
+        {"status_code": 0, "aweme_list": list(items), "has_more": has_more, "max_cursor": cursor},
+        url=f"https://www.douyin.com/aweme/v1/web/aweme/post/?{urlencode({'sec_user_id': uid})}",
+    )
 
 
 def _search(*items: dict[str, Any], has_more: bool = False, cursor: int = 0) -> Response:
@@ -181,7 +200,7 @@ def _search(*items: dict[str, Any], has_more: bool = False, cursor: int = 0) -> 
 def test_creator_captures_browser_generated_responses_and_emits_safe_compatibility_schema() -> None:
     from runtime.media_missher_runtime.platforms.douyin import collect_creator
 
-    page = CapturePage(responses=[_creator(_aweme("one"), _aweme("two", images=[{}]), has_more=False)])
+    page = CapturePage(responses=[_creator(_aweme("one"), _aweme("two", images=[{}]), has_more=False, uid="creator id")])
     browser = ProductionBrowser(page)
     records = _run(collect_creator(CollectionRequest(platform="douyin", count=2, uid="creator id"), browser))
 
@@ -637,7 +656,7 @@ def test_navigation_disabled_normalizes_encoded_target_and_allows_matching_conte
     from runtime.media_missher_runtime.platforms.douyin import collect_creator, search
 
     if uid is not None:
-        page = CapturePage(url=page_url, responses=[_creator(_aweme("open"))])
+        page = CapturePage(url=page_url, responses=[_creator(_aweme("open"), uid=uid)])
         records = _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid=uid), ProductionBrowser(page, allow_navigation=False)))
     else:
         page = CapturePage(url=page_url, responses=[_search(_aweme("open"))])

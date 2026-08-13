@@ -95,7 +95,7 @@ if mode == "runtime_precondition":
     raise SystemExit(78)
 if mode.startswith("runtime_bsk_"):
     code = "bsk-" + mode.removeprefix("runtime_bsk_").replace("_", "-")
-    print(f"media-missher-diagnostic platform=xhs kind=precondition code={code}", file=sys.stderr, flush=True)
+    print(f"media-missher-diagnostic platform=bilibili kind=precondition code={code}", file=sys.stderr, flush=True)
     raise SystemExit(78)
 if mode == "forged_runtime_precondition":
     print("media-missher-diagnostic platform=xhs kind=precondition code=precondition-failed message=forged", file=sys.stderr, flush=True)
@@ -159,6 +159,8 @@ manifest = inner / "manifest.json"
 manifest.write_text(json.dumps({"counts": counts, "paths": paths, "platforms": statuses, "status": manifest_status, "diagnostics": diagnostics}), encoding="utf-8")
 manifest.chmod(0o600)
 print("synthetic collection complete")
+if mode == "fail_after_empty_evidence":
+    raise SystemExit(3)
 raise SystemExit(75 if mode == "manifest_risk" else 0)
 '''
 
@@ -222,9 +224,9 @@ def test_execute_engine_accepts_forwarded_assist_modes(fake_engine_root, tmp_pat
     layout = make_runtime_layout(fake_engine_root)
     run_dir = create_run_directory(tmp_path)
     request = CollectionRequest(
-        platforms=("xhs",),
+        platforms=("bilibili",),
         count=1,
-        platform_uids={"xhs": "creator"},
+        platform_uids={"bilibili": "creator"},
         browser_assist="browserskill",
         screenshot_mode="opened",
         allow_navigation=True,
@@ -614,6 +616,13 @@ def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
         "bsk-transport",
         "bsk-timeout",
         "bsk-target-ambiguous",
+        "bsk-session-start",
+        "bsk-tab-list",
+        "bsk-tab-borrow",
+        "bsk-snapshot",
+        "bsk-click",
+        "bsk-tab-return",
+        "bsk-session-stop",
     ),
 )
 def test_runtime_browserskill_precondition_maps_to_safe_preflight_summary(
@@ -623,9 +632,9 @@ def test_runtime_browserskill_precondition_maps_to_safe_preflight_summary(
 
     summary = run_collection_request(
         CollectionRequest(
-            platforms=("xhs",),
+            platforms=("bilibili",),
             count=1,
-            platform_uids={"xhs": "private-xhs"},
+            platform_uids={"bilibili": "private-bilibili"},
         ),
         layout=layout,
         data_root=tmp_path,
@@ -639,7 +648,7 @@ def test_runtime_browserskill_precondition_maps_to_safe_preflight_summary(
     assert summary["status"] == "preflight-failed"
     assert summary["returncode"] == 78
     assert summary["diagnostics"] == {
-        "xhs": {"kind": "precondition", "code": safe_code}
+        "bilibili": {"kind": "precondition", "code": safe_code}
     }
     assert not list(Path(summary["run_dir"]).glob("run-*"))
 
@@ -743,6 +752,49 @@ def test_run_collection_holds_lease_through_child_and_validation(
     assert validation_saw_lease is True
 
 
+def test_run_collection_rejects_a_concurrent_collection_before_preflight_or_output(
+    fake_engine_root, tmp_path
+):
+    layout = make_runtime_layout(fake_engine_root)
+    lock = layout.home / ".media-missher-collection.lock"
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    descriptor = os.open(lock, os.O_RDWR)
+    preflight_called = False
+
+    def preflight(*_args, **_kwargs):
+        nonlocal preflight_called
+        preflight_called = True
+        return ok_preflight()
+
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        summary = run_collection_request(
+            CollectionRequest(
+                platforms=("xhs",),
+                count=1,
+                platform_uids={"xhs": "private-xhs"},
+            ),
+            layout=layout,
+            data_root=tmp_path,
+            preflight_runner=preflight,
+            execution_timeout=5,
+        )
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    assert summary["status"] == "preflight-failed"
+    assert summary["run_dir"] is None
+    assert summary["preflight"]["checks"] == {
+        "runtime_lease": True,
+        "release": True,
+        "collection_lease": False,
+    }
+    assert preflight_called is False
+    assert not list(tmp_path.glob("run-*"))
+
+
 def test_collection_business_oserror_is_not_reclassified_as_lease_failure(
     fake_engine_root, tmp_path, monkeypatch
 ):
@@ -815,6 +867,29 @@ def test_run_collection_uses_validated_count_for_partial_status(fake_engine_root
     )
     assert summary["status"] == "partial"
     assert summary["validation"]["counts"] == {"bilibili": 1}
+
+
+def test_failed_engine_with_only_empty_evidence_is_failed(fake_engine_root, tmp_path):
+    layout = make_runtime_layout(fake_engine_root)
+    summary = run_collection_request(
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            platform_uids={"bilibili": "bilibili-user"},
+        ),
+        layout=layout,
+        data_root=tmp_path,
+        preflight_runner=ok_preflight,
+        execution_timeout=5,
+        command_environment={
+            "MEDIA_MISSHER_FAKE_COUNT_CAP": "0",
+            "MEDIA_MISSHER_FAKE_MODE": "fail_after_empty_evidence",
+        },
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["returncode"] == 3
+    assert summary["validation"]["counts"] == {"bilibili": 0}
 
 
 def test_run_collection_classifies_risk_and_stops(fake_engine_root, tmp_path):

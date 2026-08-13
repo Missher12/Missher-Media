@@ -31,7 +31,13 @@ class CompatibilityCase:
 
     @property
     def fixture_mode(self) -> str:
-        return "complete" if self.mode == "complete" else self.mode
+        return "complete" if self.expects_complete else self.mode
+
+    @property
+    def expects_complete(self) -> bool:
+        return self.mode == "complete" or (
+            self.platform == "xhs" and self.mode == "creator"
+        )
 
 
 CASES = tuple(
@@ -318,7 +324,7 @@ def test_runtime_cli_matches_committed_synthetic_contract(
         else {case.platform}
     )
     assert manifest["counts"] == {case.platform: 2}
-    if case.mode == "complete":
+    if case.expects_complete:
         assert completed.returncode == 1
         assert [record["complete"] for record in normalized] == [True, False]
         assert manifest["platforms"] == {case.platform: "incomplete"}

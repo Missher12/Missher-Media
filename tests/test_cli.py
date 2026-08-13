@@ -157,18 +157,41 @@ def test_adapter_screenshot_all_rejects_any_zero_effective_count(platform_counts
         )
 
 
-def test_adapter_request_accepts_safe_assist_and_screenshot_modes():
+def test_adapter_request_accepts_xhs_screenshot_without_browser_assist():
     request = CollectionRequest(
         platforms=("xhs",),
         count=1,
         platform_uids={"xhs": "creator"},
-        browser_assist="browserskill",
         screenshot_mode="opened",
         allow_navigation=True,
     )
 
-    assert request.browser_assist == "browserskill"
+    assert request.browser_assist == "off"
     assert request.screenshot_mode == "opened"
+
+
+def test_adapter_request_retains_bilibili_browser_assist():
+    request = CollectionRequest(
+        platforms=("bilibili",),
+        count=1,
+        platform_uids={"bilibili": "creator"},
+        browser_assist="browserskill",
+        allow_navigation=True,
+    )
+
+    assert request.browser_assist == "browserskill"
+
+
+@pytest.mark.parametrize("platforms", (("xhs",), ("bilibili", "xhs")))
+def test_adapter_request_rejects_xhs_browser_assist(platforms):
+    with pytest.raises(ConfigurationError, match="xhs-browser-assist-unsupported"):
+        CollectionRequest(
+            platforms=platforms,
+            count=1,
+            platform_uids={platform: "creator" for platform in platforms},
+            browser_assist="browserskill",
+            allow_navigation=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -176,7 +199,14 @@ def test_adapter_request_accepts_safe_assist_and_screenshot_modes():
     (
         ({"browser_assist": "stealth"}, "unsupported"),
         ({"screenshot_mode": "background"}, "unsupported"),
-        ({"browser_assist": "browserskill"}, "navigation"),
+        (
+            {
+                "platforms": ("bilibili",),
+                "platform_uids": {"bilibili": "creator"},
+                "browser_assist": "browserskill",
+            },
+            "navigation",
+        ),
         ({"screenshot_mode": "all"}, "navigation"),
         (
             {
@@ -246,8 +276,8 @@ def test_engine_command_forwards_only_non_default_assist_modes(fake_engine_root,
     )
     assisted = build_engine_command(
         creator_request(
-            platforms=("xhs",),
-            platform_uids={"xhs": "x"},
+            platforms=("bilibili",),
+            platform_uids={"bilibili": "b"},
             browser_assist="browserskill",
             screenshot_mode="all",
             allow_navigation=True,
@@ -438,8 +468,8 @@ def test_collection_cli_carries_assist_modes(monkeypatch):
     assert run_collection.main(
         [
             "--platform",
-            "xhs",
-            "--xhs-uid",
+            "bilibili",
+            "--bilibili-uid",
             "creator",
             "--browser-assist",
             "browserskill",

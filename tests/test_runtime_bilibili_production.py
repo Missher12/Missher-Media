@@ -22,7 +22,7 @@ def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
 class Response:
     payload: object
     status: int = 200
-    url: str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+    url: str = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=synthetic-user"
     json_error: Exception | None = None
     json_calls: int = 0
 
@@ -31,6 +31,16 @@ class Response:
         if self.json_error is not None:
             raise self.json_error
         return self.payload
+
+
+def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import _is_feed_response
+
+    wrong = Response({}, url="https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=other")
+    right = Response({}, url="https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=target")
+
+    assert _is_feed_response(wrong, "target") is False
+    assert _is_feed_response(right, "target") is True
 
 
 @dataclass

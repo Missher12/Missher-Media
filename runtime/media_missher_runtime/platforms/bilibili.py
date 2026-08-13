@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from numbers import Real
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PageJson, PreconditionError
@@ -88,6 +88,7 @@ class BilibiliCollector:
         page = self.browser.require_page("bilibili")
         response = await _capture_feed_while(
             page,
+            self.request.uid,
             lambda: self._navigate(page, _creator_page_url(self.request.uid)),
         )
         records = await self._collect_feed_pages(page, response)
@@ -144,7 +145,9 @@ class BilibiliCollector:
             if added == 0 or not data.get("has_more") or page_number + 1 >= self.request.page_cap:
                 break
             try:
-                response = await _capture_feed_while(page, lambda: _scroll(page))
+                response = await _capture_feed_while(
+                    page, self.request.uid, lambda: _scroll(page)
+                )
             except PlaywrightTimeoutError:
                 break
         return records
@@ -651,15 +654,21 @@ def _safe_content_url(value: object) -> str | None:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
 
 
-async def _capture_feed_while(page: Any, action: Any) -> Any:
-    async with page.expect_response(_is_feed_response, timeout=10_000) as response_info:
+async def _capture_feed_while(page: Any, expected_uid: str, action: Any) -> Any:
+    predicate = lambda response: _is_feed_response(response, expected_uid)
+    async with page.expect_response(predicate, timeout=10_000) as response_info:
         await action()
     return await response_info.value
 
 
-def _is_feed_response(response: Any) -> bool:
-    parsed = urlparse(response.url)
-    return parsed.hostname == _API_HOST and parsed.path == _FEED_PATH
+def _is_feed_response(response: Any, expected_uid: str | None = None) -> bool:
+    parsed = urlparse(getattr(response, "url", ""))
+    if parsed.hostname != _API_HOST or parsed.path != _FEED_PATH:
+        return False
+    if expected_uid is None:
+        return True
+    values = parse_qs(parsed.query, keep_blank_values=True).get("host_mid", [])
+    return values == [expected_uid]
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:

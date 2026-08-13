@@ -97,9 +97,9 @@ def test_install_records_v15_product_version_and_one_unique_release(tmp_path: Pa
     assert len(release_ids) == 1
     release = next(iter(release_ids))
     assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", release)
-    assert result.version == "15.0.0"
+    assert result.version == "15.2.0"
     assert result.release == release
-    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "15.0.0\n"
+    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "15.2.0\n"
     assert all(stat.S_IMODE(component.joinpath(marker_name).stat().st_mode) == 0o600 for component in components)
 
 
@@ -623,7 +623,7 @@ def test_installer_cli_reports_media_missher_v15_product_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "Media@Missher 15.0.0"
+    assert completed.stdout.strip() == "Media@Missher 15.2.0"
 
 
 def test_installer_excludes_private_browser_runtime_and_screenshot_artifacts(

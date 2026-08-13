@@ -28,7 +28,9 @@ Never add `--allow-navigation` to a read-only review. Retry one non-risk page fa
 
 ## BrowserSkill assistance fails closed
 
-BrowserSkill is optional and is used only when `--browser-assist browserskill` is explicitly requested. The safe preflight codes are `bsk-missing`, `bsk-unhealthy`, `bsk-incompatible`, `bsk-busy`, `bsk-transport`, `bsk-timeout`, and `bsk-target-ambiguous`. They return `preflight-failed` before a runtime run directory is created; raw BrowserSkill stdout and stderr are never copied into the manifest or adapter summary.
+BrowserSkill is optional and is used only for explicitly assisted Bilibili creator collection. Xiaohongshu uses Playwright/CDP only; `xhs-browser-assist-unsupported` means an invalid Xiaohongshu or mixed-platform BrowserSkill request was rejected before navigation. Remove that BrowserSkill option and keep `--browser-assist off`; screenshots may still use `--screenshot-mode opened|all --allow-navigation`.
+
+For Bilibili, preflight uses the safe codes `bsk-missing`, `bsk-unhealthy`, `bsk-incompatible`, `bsk-busy`, `bsk-transport`, `bsk-timeout`, and `bsk-target-ambiguous`. Once an assisted detail open begins, the safe codes `bsk-session-start`, `bsk-tab-list`, `bsk-tab-borrow`, `bsk-snapshot`, `bsk-click`, `bsk-tab-return`, and `bsk-session-stop` identify the failed bounded stage without preserving raw command output. Preflight failures return before a runtime run directory is created; assisted-stage failures retain only their enumerated code. Raw BrowserSkill stdout and stderr are never copied into the manifest or adapter summary.
 
 Use only read-only diagnosis first: `bsk status --json` and `bsk session list --json`. After correcting one concrete non-risk cause, `bsk doctor` may be run once as a read-only diagnostic before one retry. Do not start a BrowserSkill session manually, inspect cookies or browser storage, or retry any risk/challenge/cooldown result.
 
@@ -42,6 +44,10 @@ Keep the unique private run directory and mode-`0600` logs. Inspect redacted std
 
 Another installer may be rotating the shared release. Wait for that bounded operation to finish, then rerun preflight. Do not delete or replace `.media-missher-install.lock`.
 
+## Collection lock is busy
+
+Another Media@Missher adapter collection owns the dedicated browser profile. Let that run finish and validate before starting another. Do not delete, replace, or unlock `.media-missher-collection.lock`, and do not bypass the adapter with a direct runtime entrypoint.
+
 ## Runtime reports a lock or cooldown
 
 Return `risk-stopped`. Do not delete locks, checkpoints, cache, reports, or risk state. Wait for the platform cooldown or ask for a later decision.
@@ -53,6 +59,8 @@ Treat `403`, `429`, `461`, `471`, `999`, `risk`, `locked`, and `blocked` as stop
 ## Validation reports partial output
 
 Report the exact validated count and failed completeness checks. Keep unknown dates and engagement values as `null`; never fill them with zero.
+
+For a short Xiaohongshu comment slice, inspect the recorded completeness failure rather than adding browser actions. Do not refresh or reopen the detail, click a “more” control, scroll the whole page, or repeat the exact target click. The runtime has already stopped at its comment-container action budget; retain the partial record unless a future separately authorized run is appropriate.
 
 ## A release upgrade fails
 

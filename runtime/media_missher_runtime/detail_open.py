@@ -167,7 +167,10 @@ class DetailOpenCoordinator:
         *,
         platform: str,
         native_id: str,
+        retry_stale_selector: bool = True,
     ) -> Any:
+        if not isinstance(retry_stale_selector, bool):
+            raise PreconditionError("invalid detail click policy")
         token = secrets.token_hex(16)
         selector = f'[data-media-missher-target="{token}"]'
         locator = page.locator(selector)
@@ -197,7 +200,11 @@ class DetailOpenCoordinator:
                     "value => { document.title = value; }",
                     f"media-missher-{secrets.token_hex(16)}",
                 )
-                await self.bridge.click_marked_tab(page, selector=selector)
+                await self.bridge.click_marked_tab(
+                    page,
+                    selector=selector,
+                    retry_stale_selector=retry_stale_selector,
+                )
             detail_page = await resolve_exact_detail_page(
                 page,
                 platform=platform,

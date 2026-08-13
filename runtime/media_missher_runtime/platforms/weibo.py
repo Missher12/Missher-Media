@@ -94,7 +94,11 @@ class WeiboCollector:
         await _raise_for_page_challenge(page)
         if not getattr(self.browser, "allow_navigation", False):
             raise PreconditionError("Weibo creator collection requires authorized navigation/reload")
-        response = await _capture_creator_while(page, lambda: self._navigate_and_check(page, target, _WEIBO_HOSTS))
+        response = await _capture_creator_while(
+            page,
+            self.request.uid,
+            lambda: self._navigate_and_check(page, target, _WEIBO_HOSTS),
+        )
         return await self._collect_creator_pages(page, response)
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
@@ -121,7 +125,9 @@ class WeiboCollector:
                 break
             prior_since = since_id
             try:
-                response = await _capture_creator_while(page, lambda: _scroll_and_check(page))
+                response = await _capture_creator_while(
+                    page, self.request.uid, lambda: _scroll_and_check(page)
+                )
             except PlaywrightTimeoutError:
                 break
         return records
@@ -184,15 +190,23 @@ async def search(request: CollectionRequest, browser: BrowserSession | Any) -> l
     return await WeiboCollector(request, browser).search()
 
 
-async def _capture_creator_while(page: Any, action: Callable[[], Any]) -> Any:
-    async with page.expect_response(_is_creator_response, timeout=10_000) as response_info:
+async def _capture_creator_while(
+    page: Any, expected_uid: str, action: Callable[[], Any]
+) -> Any:
+    predicate = lambda response: _is_creator_response(response, expected_uid)
+    async with page.expect_response(predicate, timeout=10_000) as response_info:
         await action()
     return await response_info.value
 
 
-def _is_creator_response(response: Any) -> bool:
+def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return parsed.hostname in _WEIBO_HOSTS and parsed.path == _CREATOR_PATH
+    if parsed.hostname not in _WEIBO_HOSTS or parsed.path != _CREATOR_PATH:
+        return False
+    if expected_uid is None:
+        return True
+    values = parse_qs(parsed.query, keep_blank_values=True).get("uid", [])
+    return values == [expected_uid]
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:

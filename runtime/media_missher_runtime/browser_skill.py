@@ -52,14 +52,31 @@ def _positive_i64(value: object) -> bool:
     )
 
 
-def _json_object(result: CommandResult) -> dict[str, Any]:
+def _json_object(
+    result: CommandResult, *, failure_code: str = "bsk-transport"
+) -> dict[str, Any]:
     try:
         value = json.loads(result.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise BrowserSkillError("bsk-transport") from error
+        raise BrowserSkillError(failure_code) from error
     if not isinstance(value, dict):
-        raise BrowserSkillError("bsk-transport")
+        raise BrowserSkillError(failure_code)
     return value
+
+
+def _is_stale_selector_result(result: CommandResult) -> bool:
+    """Retry only the documented stale-selector response, never generic failures."""
+    try:
+        value = json.loads(result.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(value, dict):
+        return False
+    error = value.get("error")
+    if error == "stale private selector":
+        return True
+    code = error.get("code") if isinstance(error, dict) else value.get("code")
+    return code == "stale-selector"
 
 
 async def _read_limited(stream: Any) -> bytes:
@@ -160,14 +177,19 @@ class BrowserSkillBridge:
             raise BrowserSkillError("bsk-transport")
         return result
 
-    async def _json(self, *arguments: str, failure_code: str = "bsk-transport") -> Any:
+    async def _json(
+        self,
+        *arguments: str,
+        failure_code: str = "bsk-transport",
+        malformed_code: str = "bsk-transport",
+    ) -> Any:
         result = await self._run(*arguments)
         if result.returncode != 0:
             raise BrowserSkillError(failure_code)
         try:
             return json.loads(result.stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise BrowserSkillError("bsk-transport") from error
+            raise BrowserSkillError(malformed_code) from error
 
     async def preflight(self) -> None:
         status = await self._json(
@@ -230,8 +252,8 @@ class BrowserSkillBridge:
             "--quiet",
         )
         if result.returncode != 0:
-            raise BrowserSkillError("bsk-transport")
-        payload = _json_object(result)
+            raise BrowserSkillError("bsk-session-start")
+        payload = _json_object(result, failure_code="bsk-session-start")
         session_id = payload.get("session_id")
         agent_window_id = payload.get("agent_window_id")
         if (
@@ -243,7 +265,7 @@ class BrowserSkillBridge:
                 and not _positive_i64(agent_window_id)
             )
         ):
-            raise BrowserSkillError("bsk-transport")
+            raise BrowserSkillError("bsk-session-start")
         self._session_id = session_id
         return self._session_id
 
@@ -260,14 +282,20 @@ class BrowserSkillBridge:
             "--quiet",
         )
         result = await self._run(*command)
-        if result.returncode == 1:
-            result = await self._run(*command)
         if result.returncode != 0:
-            raise BrowserSkillError("bsk-transport")
-        _json_object(result)
+            raise BrowserSkillError("bsk-snapshot")
+        _json_object(result, failure_code="bsk-snapshot")
         return result
 
-    async def click_marked_tab(self, page: Any, *, selector: str) -> None:
+    async def click_marked_tab(
+        self,
+        page: Any,
+        *,
+        selector: str,
+        retry_stale_selector: bool = True,
+    ) -> None:
+        if not isinstance(retry_stale_selector, bool):
+            raise BrowserSkillError("bsk-transport")
         if not isinstance(selector, str) or _TARGET_SELECTOR.fullmatch(selector) is None:
             raise BrowserSkillError("bsk-target-ambiguous")
         marker = await page.title()
@@ -283,10 +311,12 @@ class BrowserSkillBridge:
             "user",
             "--json",
             "--quiet",
+            failure_code="bsk-tab-list",
+            malformed_code="bsk-tab-list",
         )
         tabs = tab_payload.get("tabs") if isinstance(tab_payload, dict) else None
         if not isinstance(tabs, list):
-            raise BrowserSkillError("bsk-transport")
+            raise BrowserSkillError("bsk-tab-list")
         matches = [
             tab
             for tab in tabs
@@ -309,10 +339,10 @@ class BrowserSkillBridge:
             "--quiet",
         )
         if borrow.returncode != 0:
-            raise BrowserSkillError("bsk-transport")
+            raise BrowserSkillError("bsk-tab-borrow")
         primary_error: BaseException | None = None
         try:
-            _json_object(borrow)
+            _json_object(borrow, failure_code="bsk-tab-borrow")
             await self._snapshot(session_id, tab_id)
             click_command = (
                 "click",
@@ -328,12 +358,16 @@ class BrowserSkillBridge:
                 "--quiet",
             )
             click = await self._run(*click_command)
-            if click.returncode == 1:
+            if (
+                retry_stale_selector
+                and click.returncode == 1
+                and _is_stale_selector_result(click)
+            ):
                 await self._snapshot(session_id, tab_id)
                 click = await self._run(*click_command)
             if click.returncode != 0:
-                raise BrowserSkillError("bsk-transport")
-            _json_object(click)
+                raise BrowserSkillError("bsk-click")
+            _json_object(click, failure_code="bsk-click")
         except BaseException as error:
             primary_error = error
             raise
@@ -349,8 +383,8 @@ class BrowserSkillBridge:
                     "--quiet",
                 )
                 if returned.returncode != 0:
-                    raise BrowserSkillError("bsk-transport")
-                _json_object(returned)
+                    raise BrowserSkillError("bsk-tab-return")
+                _json_object(returned, failure_code="bsk-tab-return")
             except BaseException:
                 if primary_error is None:
                     raise
@@ -361,7 +395,7 @@ class BrowserSkillBridge:
             return
         result = await self._run("session", "stop", session_id, "--quiet")
         if result.returncode != 0:
-            raise BrowserSkillError("bsk-transport")
+            raise BrowserSkillError("bsk-session-stop")
         self._session_id = None
 
 

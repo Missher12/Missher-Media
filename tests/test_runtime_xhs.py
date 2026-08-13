@@ -388,12 +388,19 @@ class Browser:
     navigations: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
     navigation_status: int | None = None
     navigation_url_override: str | None = None
-    detail_open: Any = None
+    detail_open: Any = field(default_factory=lambda: DetailCoordinator())
     screenshots: Any = None
+    progress: list[list[dict[str, Any]]] = field(default_factory=list)
 
     def require_page(self, platform: str) -> Page:
         assert platform == "xhs"
         return self.page
+
+    def publish_progress(
+        self, platform: str, records: list[dict[str, Any]]
+    ) -> None:
+        assert platform == "xhs"
+        self.progress.append(records)
 
     async def navigate(self, page: Page, url: str, *, allowed_hosts: tuple[str, ...]) -> object:
         self.navigations.append((url, allowed_hosts))
@@ -408,9 +415,10 @@ class Browser:
 
 
 @dataclass
-class AssistedCoordinator:
+class DetailCoordinator:
     clicks: list[str] = field(default_factory=list)
     released: list[Page] = field(default_factory=list)
+    retry_policies: list[bool] = field(default_factory=list)
 
     async def click_exact(
         self,
@@ -419,11 +427,13 @@ class AssistedCoordinator:
         *,
         platform: str,
         native_id: str,
+        retry_stale_selector: bool = True,
     ) -> Page:
         assert platform == "xhs"
         assert page.listeners == 1
-        page.events.append("assist-click")
+        page.events.append("coordinator-click")
         self.clicks.append(native_id)
+        self.retry_policies.append(retry_stale_selector)
         await element.click(timeout=5_000)
         return page
 
@@ -502,6 +512,7 @@ def detail_response(note_id: str, **overrides: Any) -> Response:
         "note_id": note_id, "title": "Detail title", "desc": "Detail desc", "type": "normal",
         "time": current_time - 1_000, "last_update_time": current_time - 1_000,
         "interact_info": {"liked_count": 0, "comment_count": 2, "collected_count": 3, "share_count": 4},
+        "image_list": [{"url_default": "https://cdn.example.invalid/detail.jpg"}],
         "user": {"nickname": "Creator", "user_id": "must-not-leak"}, "xsec_token": "must-not-leak",
     }
     card.update(overrides)
@@ -527,6 +538,62 @@ def test_creator_parses_safe_schema_dedupes_and_paginates() -> None:
     assert "must-not-leak" not in serialized and "xsec_token" not in serialized and "user_id" not in serialized
 
 
+def test_creator_pagination_crosses_duplicate_page_when_cursor_progresses() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        responses=[
+            creator_response(note("one"), has_more=True, cursor="cursor-1"),
+            creator_response(note("one"), has_more=True, cursor="cursor-2"),
+            creator_response(note("two"), has_more=False, cursor="cursor-3"),
+        ]
+    )
+
+    records = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=2,
+                page_cap=3,
+                uid="u",
+            ),
+            Browser(page),
+        )
+    )
+
+    assert [record["note_id"] for record in records] == ["one", "two"]
+    assert sum("window.scrollTo" in script for script in page.evaluations) == 2
+
+
+def test_creator_publishes_only_completed_prefixes_for_timeout_recovery() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import collect_creator
+
+    page = Page(
+        responses=[
+            creator_response(note("one"), note("two")),
+            detail_response("one"),
+            detail_response("two"),
+        ],
+        cards=[{"note_id": "one"}, {"note_id": "two"}],
+    )
+    browser = Browser(page)
+
+    records = run(
+        collect_creator(
+            CollectionRequest(
+                platform="xhs", count=2, uid="u", complete=True
+            ),
+            browser,
+        )
+    )
+
+    assert [record["note_id"] for record in records] == ["one", "two"]
+    assert [
+        [record["note_id"] for record in snapshot]
+        for snapshot in browser.progress
+    ] == [["one"], ["one", "two"]]
+
+
 def test_creator_count_stops_without_extra_scroll_and_disabled_navigation_requires_matching_page() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
     page = Page(responses=[creator_response(note("one"), has_more=True, cursor="next"), creator_response(note("never"))])
@@ -536,12 +603,12 @@ def test_creator_count_stops_without_extra_scroll_and_disabled_navigation_requir
         run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u"), Browser(Page(url="https://www.xiaohongshu.com/search_result?keyword=x"), allow_navigation=False)))
 
 
-def test_ordinary_browser_assist_opens_only_missing_engagement_and_stays_incomplete() -> None:
+def test_noncomplete_collection_does_not_open_missing_engagement() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
 
-    coordinator = AssistedCoordinator()
+    coordinator = DetailCoordinator()
     page = Page(
-        responses=[creator_response(note("one")), detail_response("one")],
+        responses=[creator_response(note("one"))],
         cards=[{"note_id": "one"}],
     )
     record = run(
@@ -550,18 +617,13 @@ def test_ordinary_browser_assist_opens_only_missing_engagement_and_stays_incompl
                 platform="xhs",
                 count=1,
                 uid="u",
-                browser_assist="browserskill",
             ),
             Browser(page, detail_open=coordinator),
         )
     )[0]
 
-    assert coordinator.clicks == ["one"]
-    assert page.events[-2:] == ["listener", "assist-click"]
-    assert record["comments"] == 2
-    assert record["collected"] == 3
-    assert record["shares"] == 4
-    assert record["detail_completed"] is True
+    assert coordinator.clicks == []
+    assert page.clicked == []
     assert record["complete"] is False
     assert page.detail_open_waits == []
 
@@ -569,7 +631,7 @@ def test_ordinary_browser_assist_opens_only_missing_engagement_and_stays_incompl
 def test_known_zero_engagement_never_triggers_ordinary_assist() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
 
-    coordinator = AssistedCoordinator()
+    coordinator = DetailCoordinator()
     page = Page(
         responses=[
             creator_response(
@@ -584,7 +646,6 @@ def test_known_zero_engagement_never_triggers_ordinary_assist() -> None:
                 platform="xhs",
                 count=1,
                 uid="u",
-                browser_assist="browserskill",
             ),
             Browser(page, detail_open=coordinator),
         )
@@ -597,10 +658,10 @@ def test_known_zero_engagement_never_triggers_ordinary_assist() -> None:
     assert record["collected"] == record["shares"] == 0
 
 
-def test_complete_browser_assist_registers_listener_before_exact_click() -> None:
+def test_complete_cdp_registers_listener_before_exact_click() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
 
-    coordinator = AssistedCoordinator()
+    coordinator = DetailCoordinator()
     page = Page(
         responses=[creator_response(note("one")), detail_response("one")],
         cards=[{"note_id": "one"}],
@@ -613,14 +674,13 @@ def test_complete_browser_assist_registers_listener_before_exact_click() -> None
                 count=1,
                 uid="u",
                 complete=True,
-                browser_assist="browserskill",
             ),
             Browser(page, detail_open=coordinator),
         )
     )[0]
 
     assert coordinator.clicks == ["one"]
-    assert page.events[-2:] == ["listener", "assist-click"]
+    assert page.events[-2:] == ["listener", "coordinator-click"]
     assert record["complete"] is True
 
 
@@ -628,7 +688,7 @@ def test_screenshot_all_opens_and_captures_each_record() -> None:
     from runtime.media_missher_runtime.platforms.xhs import collect_creator
 
     screenshots = Screenshots()
-    coordinator = AssistedCoordinator()
+    coordinator = DetailCoordinator()
     page = Page(
         responses=[creator_response(note("one")), detail_response("one")],
         cards=[{"note_id": "one"}],
@@ -710,37 +770,6 @@ def test_screenshot_failure_preserves_verified_structured_fields() -> None:
     assert record["screenshot_error_code"] == "capture-failed"
 
 
-def test_noncomplete_browser_assist_timeout_keeps_partial_record_and_screenshot() -> None:
-    from runtime.media_missher_runtime.platforms.xhs import collect_creator
-
-    screenshots = Screenshots()
-    coordinator = AssistedCoordinator()
-    page = Page(
-        responses=[creator_response(note("one"))],
-        cards=[{"note_id": "one"}],
-        detail_metrics={"liked": "3", "comments": "4"},
-    )
-
-    record = run(
-        collect_creator(
-            CollectionRequest(
-                platform="xhs",
-                count=1,
-                uid="u",
-                browser_assist="browserskill",
-                screenshot_mode="opened",
-            ),
-            Browser(page, detail_open=coordinator, screenshots=screenshots),
-        )
-    )[0]
-
-    assert record["complete"] is False
-    assert record["detail_attempted"] is True
-    assert record["screenshot_status"] == "complete"
-    assert screenshots.captures == [("xhs", "one", "opened")]
-    assert page.detail_open_waits == []
-
-
 def test_screenshot_all_marks_missing_card_and_invalid_id_as_failed() -> None:
     from runtime.media_missher_runtime.platforms.xhs import XhsCollector, collect_creator
 
@@ -815,8 +844,10 @@ async def test_popup_detail_listener_ignores_same_id_response_from_wrong_page_an
             *,
             platform: str,
             native_id: str,
+            retry_stale_selector: bool = True,
         ) -> Page:
             assert platform == "xhs" and native_id == "one"
+            assert retry_stale_selector is False
             assert context.listeners
             wrong = detail_response("one")
             wrong.page = original
@@ -836,7 +867,6 @@ async def test_popup_detail_listener_ignores_same_id_response_from_wrong_page_an
             count=1,
             uid="u",
             complete=True,
-            browser_assist="browserskill",
         ),
         Browser(original, detail_open=coordinator),
     )
@@ -899,7 +929,7 @@ def test_search_screenshot_all_opens_and_captures_exact_note() -> None:
     from runtime.media_missher_runtime.platforms.xhs import search
 
     screenshots = Screenshots()
-    coordinator = AssistedCoordinator()
+    coordinator = DetailCoordinator()
     page = Page(
         responses=[detail_response("search-one")],
         cards=[
@@ -1078,6 +1108,139 @@ def test_complete_uses_current_detail_response_and_modal_comments() -> None:
         "shares": "detail_api",
         "raw_share_count": "detail_api",
     }
+
+
+def test_bounded_comment_shortfall_maps_existing_fields_and_stays_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime.platforms import xhs
+    from runtime.media_missher_runtime.platforms._xhs_detail_enrichment import (
+        XhsCommentLoadResult,
+    )
+
+    calls: list[tuple[str, int, int | None]] = []
+
+    async def fake_loader(
+        _page: Page,
+        *,
+        note_id: str,
+        requested: int,
+        total: int | None,
+        normalize_comments: Any,
+    ) -> XhsCommentLoadResult:
+        assert callable(normalize_comments)
+        calls.append((note_id, requested, total))
+        return XhsCommentLoadResult(
+            ({"author": "A", "text": "one", "date": "today", "liked": 1},),
+            1,
+            "no-growth",
+        )
+
+    monkeypatch.setattr(xhs, "load_bounded_comments", fake_loader)
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    record = run(
+        xhs.collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                complete=True,
+                comment_limit=2,
+            ),
+            Browser(page),
+        )
+    )[0]
+
+    assert calls == [("one", 2, 2)]
+    assert record["comments_requested"] == 2
+    assert record["comments_fetched"] == 1
+    assert record["comments_detail"] == record["comments_data"]
+    assert "comments_data" in record["missing_fields"]
+    assert record["complete"] is False
+
+
+def test_comment_risk_stops_before_screenshot_and_cleanup_still_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime.platforms import xhs
+    from runtime.media_missher_runtime.platforms._xhs_detail_enrichment import (
+        XhsCommentRisk,
+    )
+
+    async def risky_loader(*_args: Any, **_kwargs: Any) -> Any:
+        raise XhsCommentRisk("challenge-selector")
+
+    monkeypatch.setattr(xhs, "load_bounded_comments", risky_loader)
+    screenshots = Screenshots()
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    request = CollectionRequest(
+        platform="xhs",
+        count=1,
+        uid="u",
+        complete=True,
+        comment_limit=1,
+        screenshot_mode="opened",
+    )
+
+    with pytest.raises(xhs.CollectionStopped, match="challenge-selector"):
+        run(xhs.collect_creator(request, Browser(page, screenshots=screenshots)))
+
+    assert screenshots.captures == []
+    assert page.modal_visible is False
+
+
+def test_comments_finish_before_one_screenshot_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime.media_missher_runtime.platforms import xhs
+    from runtime.media_missher_runtime.platforms._xhs_detail_enrichment import (
+        XhsCommentLoadResult,
+    )
+
+    events: list[str] = []
+
+    async def ordered_loader(*_args: Any, **_kwargs: Any) -> XhsCommentLoadResult:
+        events.append("comments")
+        return XhsCommentLoadResult(
+            ({"author": "A", "text": "one", "date": "today", "liked": 1},),
+            0,
+            "complete",
+        )
+
+    class OrderedScreenshots(Screenshots):
+        async def capture(self, *args: Any, **kwargs: Any) -> ScreenshotArtifact:
+            events.append("screenshot")
+            return await super().capture(*args, **kwargs)
+
+    monkeypatch.setattr(xhs, "load_bounded_comments", ordered_loader)
+    screenshots = OrderedScreenshots()
+    page = Page(
+        responses=[creator_response(note("one")), detail_response("one")],
+        cards=[{"note_id": "one"}],
+    )
+    record = run(
+        xhs.collect_creator(
+            CollectionRequest(
+                platform="xhs",
+                count=1,
+                uid="u",
+                complete=True,
+                comment_limit=1,
+                screenshot_mode="opened",
+            ),
+            Browser(page, screenshots=screenshots),
+        )
+    )[0]
+
+    assert events == ["comments", "screenshot"]
+    assert screenshots.captures == [("xhs", "one", "opened")]
+    assert record["screenshot_status"] == "complete"
 
 
 def test_complete_preserves_safe_legacy_detail_business_fields() -> None:
@@ -1694,7 +1857,7 @@ def test_complete_rejects_stale_creator_metric_when_api_and_modal_omit_it() -> N
     assert record["engagement_source"] == "detail_api"
 
 
-@pytest.mark.parametrize("field", ("liked", "comments", "collected"))
+@pytest.mark.parametrize("field", ("liked", "comments", "collected", "shares"))
 def test_completion_requires_fresh_source_for_each_required_metric(field: str) -> None:
     from runtime.media_missher_runtime.platforms.xhs import _missing_completion
 
@@ -1710,15 +1873,90 @@ def test_completion_requires_fresh_source_for_each_required_metric(field: str) -
         "liked": 1,
         "comments": 2,
         "collected": 3,
+        "shares": 4,
+        "desc": "Detail body",
+        "author": "Creator",
+        "cover": "https://cdn.example.invalid/detail.jpg",
+        "detail_business_fields": ["desc", "author", "media"],
         "metric_sources": {
             "liked": "detail_api",
             "comments": "detail_api",
             "collected": "detail_api",
+            "shares": "detail_api",
         },
     }
     del record["metric_sources"][field]
 
     assert _missing_completion(record) == [field]
+
+
+@pytest.mark.parametrize(
+    ("missing_business_field", "expected"),
+    (("desc", "desc"), ("author", "author"), ("media", "media")),
+)
+def test_completion_requires_current_detail_article_fields(
+    missing_business_field: str, expected: str
+) -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _missing_completion
+
+    record = {
+        "note_id": "one",
+        "title": "Detail title",
+        "desc": "Detail body",
+        "author": "Creator",
+        "date": "2026-08-04T00:00:00+00:00",
+        "date_precision": "second",
+        "detail_attempted": True,
+        "detail_completed": True,
+        "detail_business_fields": ["desc", "author", "media"],
+        "engagement_fresh": True,
+        "engagement_source": "detail_api",
+        "liked": 1,
+        "comments": 2,
+        "collected": 3,
+        "shares": 4,
+        "metric_sources": {
+            "liked": "detail_api",
+            "comments": "detail_api",
+            "collected": "detail_api",
+            "shares": "detail_api",
+        },
+    }
+    record["detail_business_fields"].remove(missing_business_field)
+
+    assert expected in _missing_completion(record)
+
+
+def test_completion_rejects_requested_comment_detail_shortfall() -> None:
+    from runtime.media_missher_runtime.platforms.xhs import _missing_completion
+
+    record = {
+        "note_id": "one",
+        "title": "Detail title",
+        "desc": "Detail body",
+        "author": "Creator",
+        "date": "2026-08-04T00:00:00+00:00",
+        "date_precision": "second",
+        "detail_attempted": True,
+        "detail_completed": True,
+        "detail_business_fields": ["desc", "author", "media"],
+        "engagement_fresh": True,
+        "engagement_source": "detail_api",
+        "liked": 1,
+        "comments": 20,
+        "collected": 3,
+        "shares": 4,
+        "metric_sources": {
+            "liked": "detail_api",
+            "comments": "detail_api",
+            "collected": "detail_api",
+            "shares": "detail_api",
+        },
+        "comments_requested": 10,
+        "comments_fetched": 3,
+    }
+
+    assert "comments_data" in _missing_completion(record)
 
 
 def test_completion_requires_a_valid_detail_payload_not_only_modal_metrics() -> None:
@@ -1743,7 +1981,13 @@ def test_completion_requires_a_valid_detail_payload_not_only_modal_metrics() -> 
         "engagement_source": "detail_html",
     }
 
-    assert _missing_completion(record) == ["detail"]
+    assert set(_missing_completion(record)) == {
+        "detail",
+        "desc",
+        "author",
+        "media",
+        "shares",
+    }
 
 
 def test_complete_stays_incomplete_when_api_and_modal_both_lack_required_metric() -> None:
@@ -2519,7 +2763,13 @@ def test_complete_waits_for_exact_note_render_before_detail_listener() -> None:
 
     run(collect_creator(CollectionRequest(platform="xhs", count=1, uid="u", complete=True), Browser(page)))
 
-    assert page.events == ["listener", "navigate", "note-render", "listener"]
+    assert page.events == [
+        "listener",
+        "navigate",
+        "note-render",
+        "listener",
+        "coordinator-click",
+    ]
     render_script, arg, timeout = next(item for item in page.wait_scripts if "exact note card rendered" in item[0])
     assert arg == "one" and "challenge-selector" in render_script and timeout == 10_000
 
@@ -2637,6 +2887,9 @@ def test_risk_success_false_challenge_and_reports_cannot_leak_content_or_secrets
         ("http-403", "http-403"),
         ("payload-471", "payload-471"),
         ("challenge", "challenge"),
+        ("bsk-session-start", "risk-signal"),
+        ("bsk-snapshot", "risk-signal"),
+        ("bsk-click", "risk-signal"),
         ("privateuid12345", "risk-signal"),
         ("https://example.invalid/?uid=private", "risk-signal"),
         ("account server message", "risk-signal"),

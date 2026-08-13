@@ -69,21 +69,31 @@ python3 "$SKILL_DIR/scripts/run_collection.py" \
 
 Use `--bilibili-count`, `--xhs-count`, `--douyin-count`, or `--weibo-count` for selected-platform overrides. A matching `--<platform>-uid` overrides the private profile.
 
-Add `--complete` for Bilibili and Xiaohongshu complete collection. You can instead select one with `--bilibili-complete` or `--xhs-complete`. Add `--xhs-comments 10` only when Xiaohongshu is selected.
+Xiaohongshu creator collection is detail-first by default and always applies its complete-record contract; `--xhs-complete` remains accepted for compatibility. Use `--complete` or `--bilibili-complete` when Bilibili also needs complete evidence. Add `--xhs-comments 10` only when Xiaohongshu is selected; the result is incomplete if fewer than the requested comments are available for a note that reports enough comments.
 
 Xiaohongshu complete mode keeps each successfully opened note visible for one randomized 5–15 second settle after the detail response passes its immediate risk check and before collection values, DOM fallbacks, or comments are read. Keep a sufficient `--platform-timeout` for the requested count; the 600-second example above safely accommodates ordinary bounded batches without reducing this dwell.
 
+For each selected record, the runtime performs at most one Xiaohongshu detail open and one click command. If the requested comment slice is still short after the initial visible read, it scrolls only the unique visible comment container at most three times and waits 1,500 ms after each successful scroll. It stops on enough comments, a missing or ambiguous container, non-scrollability, no growth, the exhausted budget, or any risk signal. It does not refresh or reopen the detail. A non-risk comment shortfall remains partial evidence; a risk signal stops the run before screenshot or retry.
+
+Only one adapter collection may own the dedicated browser profile at a time. A second run fails before preflight or output creation. If a Xiaohongshu platform timeout occurs after one or more detail records finished, those completed records remain in the failed run's JSON, report, checkpoint, and manifest count; they are partial evidence, not a successful run.
+
 Pass `--allow-navigation` only after explicit authorization to navigate exact allowlisted hosts during this run. The controller opens one temporary page per selected platform in the existing browser context, keeps existing pages unchanged, and closes only its temporary pages after the run. Omit it for read-only work and passive collection from already open matching pages.
 
-## Add optional detail assistance and screenshots
+## Add optional Bilibili assistance and private screenshots
 
-Both options default to `off` and support only Bilibili and Xiaohongshu. They require explicit navigation authorization:
+Both options default to `off`. BrowserSkill assistance is limited to Bilibili creator collection and requires explicit navigation authorization:
 
 ```bash
 --browser-assist browserskill --screenshot-mode opened --allow-navigation
 ```
 
-Use `--screenshot-mode all` only when every selected record needs private screenshot evidence and every effective count is positive. `opened` never creates an extra open solely for a screenshot and may retain count `0`. BrowserSkill 0.1.10 with extension 0.1.6 is the tested external compatibility baseline. It is not installed by Media@Missher. Playwright/CDP still registers responses before the exact click, binds the native ID, checks risks before and after capture, bounds full-page dimensions, and captures the PNG.
+For Xiaohongshu, keep `--browser-assist off`. Its detailed article page, bounded comments, and screenshots use only the existing Playwright/CDP browser session:
+
+```bash
+--browser-assist off --screenshot-mode opened --allow-navigation
+```
+
+An explicit Xiaohongshu BrowserSkill request is rejected before navigation with `xhs-browser-assist-unsupported`. Use `--screenshot-mode all` only when every selected record needs private screenshot evidence and every effective count is positive. `opened` never creates an extra open solely for a screenshot and may retain count `0`. BrowserSkill 0.1.10 with extension 0.1.6 is the tested external Bilibili compatibility baseline. It is not installed by Media@Missher. Playwright/CDP registers Xiaohongshu responses before the exact click, binds the native ID, checks risks before and after capture, bounds full-page dimensions, and captures the PNG without creating a BrowserSkill session.
 
 ## Search one platform
 
@@ -130,7 +140,8 @@ python3 "$SKILL_DIR/scripts/validate_run.py" \
   --json-summary
 ```
 
-Add the same complete flags used for collection. Add `--format` and `--output` only when converting accepted records.
+Add the same complete flags used for collection. If the source Xiaohongshu run requested comments, pass the same `--xhs-comments N` value so standalone validation rechecks the request-bound comment contract. Add `--format` and `--output` only when converting accepted records.
+When the source run requested screenshots, also pass its exact `--screenshot-mode opened|all`; validation remains offline and this flag does not navigate.
 
 ## Recover a previous release
 

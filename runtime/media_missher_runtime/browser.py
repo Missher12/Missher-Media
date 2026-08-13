@@ -99,6 +99,7 @@ class BrowserSession:
     _temporary_pages: list[Any] = field(default_factory=list, init=False, repr=False)
     detail_open: Any = field(init=False, repr=False)
     screenshots: Any = field(default=None, init=False, repr=False)
+    progress_callback: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         from .detail_open import DetailOpenCoordinator
@@ -170,6 +171,15 @@ class BrowserSession:
 
         self.screenshots = EvidenceScreenshot(store)
 
+    def bind_progress(self, callback: Any) -> None:
+        self.progress_callback = callback
+
+    def publish_progress(
+        self, platform: str, records: list[dict[str, Any]]
+    ) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(platform, records)
+
     def require_page(self, platform: str) -> Any:
         hosts = _HOSTS.get(platform)
         if hosts is None:
@@ -179,10 +189,15 @@ class BrowserSession:
             _validate_platform_location(platform, prepared)
             return prepared
         self._prepared_pages.pop(platform, None)
+        matches: list[Any] = []
         for context in self._browser.contexts:
             for page in context.pages:
                 if urlparse(page.url).hostname in hosts:
-                    return page
+                    matches.append(page)
+        if len(matches) > 1:
+            raise PreconditionError(f"open/authenticated {platform} page is ambiguous")
+        if matches:
+            return matches[0]
         raise PreconditionError(f"Open/authenticated {platform} page is required".lower())
 
     async def require_authenticated_page(self, platform: str) -> Any:

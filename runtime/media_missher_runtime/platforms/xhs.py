@@ -25,6 +25,7 @@ from ..detail_open import matches_exact_detail_page, missing_engagement_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
 from ..screenshots import ScreenshotError
+from ._xhs_detail_enrichment import XhsCommentRisk, load_bounded_comments
 
 try:
     from playwright.async_api import Error as PlaywrightError
@@ -53,7 +54,7 @@ _DETAIL_METRIC_POLL_INTERVAL_MS = 250
 _DETAIL_METRIC_POLL_ATTEMPTS = 12
 _SEARCH_SETTLE_ATTEMPTS = 40
 _SEARCH_SETTLE_INTERVAL_MS = 250
-_REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected")
+_REQUIRED_DETAIL_METRICS = ("liked", "comments", "collected", "shares")
 _FRESH_DETAIL_METRIC_SOURCES = frozenset({"detail_api", "detail_html"})
 _CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _SENSITIVE_URL_PART = re.compile(
@@ -95,12 +96,7 @@ class CaptureTimeout(TimeoutError):
 def _should_open_detail(
     request: CollectionRequest, record: Mapping[str, Any]
 ) -> bool:
-    if request.complete or request.screenshot_mode == "all":
-        return True
-    return (
-        request.browser_assist == "browserskill"
-        and bool(missing_engagement_fields(record))
-    )
+    return request.complete or request.screenshot_mode == "all"
 
 
 @dataclass(slots=True)
@@ -150,7 +146,7 @@ class XhsCollector:
                 raise CaptureTimeout("creator-capture-timeout") from error
         else:
             records = await self._collect_creator_pages(page, response)
-        for record in records:
+        for index, record in enumerate(records):
             if _should_open_detail(self.request, record):
                 await self._open_record(
                     page,
@@ -159,6 +155,7 @@ class XhsCollector:
                 )
             else:
                 record.update({"complete": False, "detail_completed": False, "detail_attempted": False, "missing_fields": []})
+            self._publish_progress(records[: index + 1])
         return records
 
     async def search(self) -> list[dict[str, Any]]:
@@ -190,10 +187,16 @@ class XhsCollector:
             except PlaywrightTimeoutError as error:
                 await _raise_for_challenge(page)
                 raise CaptureTimeout("creator-capture-timeout") from error
-        for record in records:
+        for index, record in enumerate(records):
             if _should_open_detail(self.request, record):
                 await self._open_record(page, record, completion_required=False)
+            self._publish_progress(records[: index + 1])
         return records
+
+    def _publish_progress(self, records: Sequence[dict[str, Any]]) -> None:
+        publisher = getattr(self.browser, "publish_progress", None)
+        if publisher is not None:
+            publisher("xhs", [dict(record) for record in records])
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -203,10 +206,10 @@ class XhsCollector:
             await _raise_for_challenge(page)
             payload = await _response_payload(response)
             notes, has_more, cursor = _creator_page(payload)
-            added = _append_creator(records, seen, notes, self.request.target_count)
+            _append_creator(records, seen, notes, self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or not has_more or page_number + 1 >= self.request.page_cap:
+            if not has_more or page_number + 1 >= self.request.page_cap:
                 break
             if _empty_cursor(cursor) or (prior_cursor is not _MISSING and cursor == prior_cursor):
                 break
@@ -258,16 +261,10 @@ class XhsCollector:
 
             async def click_exact_note() -> Any:
                 nonlocal detail_page
-                assisted_browser = (
-                    self.browser
-                    if self.request.browser_assist == "browserskill"
-                    or self.request.screenshot_mode == "all"
-                    else None
-                )
                 detail_page = await _click_note_and_check(
                     page,
                     note_id,
-                    browser=assisted_browser,
+                    browser=self.browser,
                 )
                 return detail_page
 
@@ -324,19 +321,30 @@ class XhsCollector:
                 and self.request.comment_limit > 0
                 and record["detail_completed"]
             ):
-                comments = await _read_comments(
-                    detail_page, self.request.comment_limit
-                )
-                _raise_for_observation(comments)
-                comments_data = _safe_comments(
-                    _as_sequence(comments.get("comments")),
-                    self.request.comment_limit,
-                )
+                record["comments_requested"] = self.request.comment_limit
+                total_comments = record.get("comments")
+                if not (
+                    isinstance(total_comments, int)
+                    and not isinstance(total_comments, bool)
+                    and total_comments >= 0
+                ):
+                    total_comments = None
+                try:
+                    comment_result = await load_bounded_comments(
+                        detail_page,
+                        note_id=note_id,
+                        requested=self.request.comment_limit,
+                        total=total_comments,
+                        normalize_comments=_safe_comments,
+                    )
+                except XhsCommentRisk as error:
+                    raise CollectionStopped(error.reason) from error
+                comments_data = list(comment_result.comments)
                 record["comments_data"] = comments_data
                 # Preserve the old public business aliases without restoring
                 # comment IDs, account IDs, request tokens, or raw payloads.
                 record["comments_detail"] = comments_data
-                record["comments_fetched"] = len(comments_data)
+                record["comments_fetched"] = comment_result.comments_fetched
             if self.request.screenshot_mode in {"opened", "all"}:
                 await self._capture_screenshot(detail_page, record, note_id)
         except PlaywrightError as error:
@@ -954,6 +962,7 @@ def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement
                 record["metric_sources"]["raw_share_count"] = "detail_api"
             observed_fields.append("raw_share_count" if field == "shares" else field)
     record["raw_share_count"] = record.get("shares")
+    detail_business_fields: list[str] = []
     for output, input_names in (
         ("title", ("display_title", "title")),
         ("desc", ("desc",)),
@@ -965,10 +974,13 @@ def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement
         )
         if value is not None:
             record[output] = value
+            if output == "desc":
+                detail_business_fields.append("desc")
     user = _mapping(card.get("user"))
     author = _text(user.get("nickname")) or _text(user.get("nick_name"))
     if author is not None:
         record["author"] = author
+        detail_business_fields.append("author")
     avatar = _safe_content_url(user.get("avatar") or user.get("image"))
     if avatar is not None:
         record["author_avatar"] = avatar
@@ -976,7 +988,9 @@ def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement
         record["last_update_time"] = last_update
     if (ip_location := _text(card.get("ip_location"))) is not None:
         record["ip_location"] = ip_location
-    _merge_media_business_fields(record, card)
+    if _merge_media_business_fields(record, card):
+        detail_business_fields.append("media")
+    record["detail_business_fields"] = detail_business_fields
     _merge_tag_business_fields(record, card)
     record["detail_link"] = record.get("link")
     record["detail_source"] = "detail_api"
@@ -990,7 +1004,8 @@ def _merge_detail(record: dict[str, Any], card: Mapping[str, Any], *, engagement
 
 def _merge_media_business_fields(
     record: dict[str, Any], card: Mapping[str, Any]
-) -> None:
+) -> bool:
+    detail_media_observed = False
     image_details: list[dict[str, Any]] = []
     image_urls: list[str] = []
     for candidate in _as_sequence(card.get("image_list"))[:_MAX_MEDIA_ITEMS]:
@@ -1007,6 +1022,7 @@ def _merge_media_business_fields(
             }
         )
     if image_urls:
+        detail_media_observed = True
         record["images"] = image_urls
         record["image_count"] = len(image_urls)
         record["image_details"] = image_details
@@ -1020,14 +1036,17 @@ def _merge_media_business_fields(
     if record.get("cover") is None:
         cover = _mapping(card.get("cover"))
         if (cover_url := _first_image_url(cover)) is not None:
+            detail_media_observed = True
             record["cover"] = cover_url
             record["cover_width"] = _dimension(cover.get("width"))
             record["cover_height"] = _dimension(cover.get("height"))
 
     video_urls = _video_urls(card)
     if video_urls:
+        detail_media_observed = True
         record["video_urls"] = video_urls
         record["video_url"] = ",".join(video_urls)
+    return detail_media_observed
 
 
 def _merge_tag_business_fields(
@@ -1201,6 +1220,35 @@ def _missing_completion(record: Mapping[str, Any]) -> list[str]:
         missing.append("engagement_fresh")
     if record.get("engagement_source") not in {"detail_api", "detail_html", "detail_cdp"}:
         missing.append("engagement_source")
+    detail_business_fields = {
+        field
+        for field in _as_sequence(record.get("detail_business_fields"))
+        if isinstance(field, str)
+    }
+    if not _text(record.get("desc")) or "desc" not in detail_business_fields:
+        missing.append("desc")
+    if not _text(record.get("author")) or "author" not in detail_business_fields:
+        missing.append("author")
+    if (
+        "media" not in detail_business_fields
+        or not (
+            _as_sequence(record.get("images"))
+            or _as_sequence(record.get("video_urls"))
+            or _safe_content_url(record.get("cover"))
+        )
+    ):
+        missing.append("media")
+    requested_comments = record.get("comments_requested")
+    if isinstance(requested_comments, int) and requested_comments > 0:
+        total_comments = record.get("comments")
+        expected_comments = (
+            min(requested_comments, total_comments)
+            if isinstance(total_comments, int) and total_comments >= 0
+            else requested_comments
+        )
+        fetched_comments = record.get("comments_fetched")
+        if not isinstance(fetched_comments, int) or fetched_comments < expected_comments:
+            missing.append("comments_data")
     missing.extend(missing_metrics)
     return missing
 
@@ -1371,18 +1419,6 @@ async def _wait_for_detail_metrics(
         await page.wait_for_timeout(_DETAIL_METRIC_POLL_INTERVAL_MS)
         await _raise_for_challenge(page)
     return observation  # pragma: no cover - the bounded loop always returns
-
-
-async def _read_comments(page: Any, limit: int) -> Mapping[str, Any]:
-    value = await page.evaluate("""(limit) => {
-        const body = document.body?.innerText || ''; const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        const risk_text = phrases.find((word) => body.includes(word)) || '';
-        const comments = Array.from(document.querySelectorAll('.comments-container .comment-item, .comments-el .comment-item')).slice(0, limit).map((item) => ({
-            author: item.querySelector('.author .name')?.textContent || null, text: item.querySelector('.content .note-text')?.textContent || null,
-            date: item.querySelector('.info .date')?.textContent || null, liked: item.querySelector('.interactions .like .count')?.textContent || null,
-        })); return {risk_text, comments};
-    }""", limit)
-    return value if isinstance(value, Mapping) else {"risk_text": "", "comments": []}
 
 
 async def _raise_for_challenge(page: Any) -> None:
@@ -1563,12 +1599,13 @@ async def _click_note_and_check(
         else:
             coordinator = getattr(browser, "detail_open", None)
             if coordinator is None:
-                raise PreconditionError("BrowserSkill detail coordinator is unavailable")
+                raise PreconditionError("detail-open coordinator is unavailable")
             detail_page = await coordinator.click_exact(
                 page,
                 click_target,
                 platform="xhs",
                 native_id=note_id,
+                retry_stale_selector=False,
             )
         await _raise_for_challenge(detail_page)
         return detail_page

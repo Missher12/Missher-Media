@@ -108,11 +108,9 @@ def test_active_documentation_has_no_obsolete_root_api_or_personal_absolute_path
     assert failures == []
 
 
-def test_project_context_does_not_claim_v15_live_acceptance() -> None:
+def test_project_context_scopes_v15_live_acceptance_to_xhs() -> None:
     text = Path("PROJECT_CONTEXT.md").read_text(encoding="utf-8")
 
-    assert "V15 live acceptance has not been performed" in text
-    assert not re.search(
-        r"(?i)V15.{0,80}(?:live acceptance (?:passed|completed)|live[- ]verified)",
-        text,
-    )
+    assert "V15 Xiaohongshu live acceptance passed" in text
+    assert "Bilibili, Douyin, Weibo, and keyword-search DOM paths were not part" in text
+    assert "BrowserSkill remained at zero sessions" in text

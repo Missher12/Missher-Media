@@ -227,7 +227,28 @@ async def test_risk_appearing_after_capture_discards_png(
 
     assert not (store.path / "screenshots").exists()
     assert page.article_locator.captures == article_count
-    assert page.full_captures == (0 if article_count else 1)
+    assert page.full_captures == 0
+
+
+@pytest.mark.asyncio
+async def test_risk_appearing_after_failed_article_capture_prevents_fallback(
+    tmp_path: Path,
+) -> None:
+    store = RunStore.create(tmp_path, "risk-before-fallback")
+    locator = Locator(failure=RuntimeError("article failed"))
+    page = Page(locator, risk_states=[False, True])
+
+    with pytest.raises(ScreenshotError, match="risk-page"):
+        await _capture(store).capture(
+            page,
+            platform="xhs",
+            native_id="note-123",
+            request_mode="all",
+        )
+
+    assert locator.captures == 1
+    assert page.full_captures == 0
+    assert not (store.path / "screenshots").exists()
 
 
 @pytest.mark.asyncio

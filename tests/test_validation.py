@@ -1,5 +1,6 @@
 import json
 import hashlib
+import importlib
 import os
 import subprocess
 import sys
@@ -22,6 +23,85 @@ def copy_fixture(tmp_path, name, *, started_ns=None):
     if started_ns is not None:
         os.utime(destination, ns=(started_ns + 1, started_ns + 1))
     return destination
+
+
+def valid_xhs_complete_record(
+    started_ns: int,
+    *,
+    comments_requested: int = 0,
+    total_comments: int = 2,
+) -> dict:
+    record = json.loads(
+        (FIXTURES / "xhs_creator.json").read_text(encoding="utf-8")
+    )[0]
+    observed_ms = started_ns // 1_000_000 + 1
+    note_id = record["note_id"]
+    detail_link = f"https://www.xiaohongshu.com/explore/{note_id}"
+    record.update(
+        {
+            "id": note_id,
+            "native_id": note_id,
+            "link": detail_link,
+            "url": detail_link,
+            "detail_link": detail_link,
+            "detail_attempted": True,
+            "detail_completed": True,
+            "detail_source": "detail_api",
+            "complete": True,
+            "missing_fields": [],
+            "date_source": "detail_api",
+            "date_estimated": False,
+            "engagement_observed_at": observed_ms,
+            "engagement_source": "detail_api",
+            "engagement_fresh": True,
+            "liked": 1,
+            "comments": total_comments,
+            "collected": 3,
+            "shares": 4,
+            "metric_sources": {
+                "liked": "detail_api",
+                "comments": "detail_api",
+                "collected": "detail_api",
+                "shares": "detail_api",
+                "raw_share_count": "detail_api",
+            },
+            "metric_observed_at": {
+                "liked": observed_ms,
+                "comments": observed_ms,
+                "collected": observed_ms,
+                "raw_share_count": observed_ms,
+            },
+            "author": "Synthetic author",
+            "cover": "https://cdn.example.invalid/detail.jpg",
+            "detail_business_fields": ["desc", "author", "media"],
+        }
+    )
+    if comments_requested > 0:
+        expected = min(comments_requested, total_comments)
+        comments_data = [
+            {
+                "author": f"Author {index}",
+                "text": f"Comment {index}",
+                "date": "today",
+                "liked": index,
+            }
+            for index in range(expected)
+        ]
+        record.update(
+            {
+                "comments_requested": comments_requested,
+                "comments_fetched": expected,
+                "comments_data": comments_data,
+                "comments_detail": comments_data,
+            }
+        )
+    return record
+
+
+def write_xhs_records(tmp_path: Path, records: list[dict]) -> Path:
+    path = tmp_path / "xhs_creator.json"
+    path.write_text(json.dumps(records), encoding="utf-8")
+    return path
 
 
 def screenshot_evidence(tmp_path, *, case="valid", request_mode="all"):
@@ -394,18 +474,168 @@ def test_xhs_complete_requires_fresh_current_observation(tmp_path):
 
 
 def test_xhs_complete_accepts_current_numeric_millisecond_observation(tmp_path):
-    records = json.loads((FIXTURES / "xhs_creator.json").read_text(encoding="utf-8"))
     started_ns = time.time_ns() - 1_000_000_000
-    records[0]["engagement_observed_at"] = started_ns // 1_000_000 + 1
-    records[0]["engagement_source"] = "detail"
-    path = tmp_path / "xhs_creator.json"
-    path.write_text(json.dumps(records), encoding="utf-8")
+    path = write_xhs_records(tmp_path, [valid_xhs_complete_record(started_ns)])
     result = validate_run(
         (path,),
         CollectionRequest(platforms=("xhs",), count=1, xhs_complete=True),
         started_ns,
     )
     assert result["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("detail_completed", False),
+        ("missing_fields", ["detail"]),
+        ("date_estimated", True),
+        ("date_source", "list_api"),
+        ("link", "https://www.xiaohongshu.com/explore/a-different-note"),
+    ),
+)
+def test_xhs_complete_independently_rejects_contradictory_detail_proof(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(started_ns)
+    record[field] = value
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(platforms=("xhs",), count=1, xhs_complete=True),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+    assert any("XHS complete" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize("field", ("liked", "comments", "collected", "shares"))
+def test_xhs_complete_requires_current_detail_provenance_for_every_metric(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(started_ns)
+    record["metric_sources"][field] = "list_api"
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(platforms=("xhs",), count=1, xhs_complete=True),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("liked", True),
+        ("comments", -1),
+        ("collected", "3"),
+        ("shares", 1.5),
+    ),
+)
+def test_xhs_complete_requires_nonnegative_integer_metrics(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(started_ns)
+    record[field] = value
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(platforms=("xhs",), count=1, xhs_complete=True),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+
+
+def test_xhs_complete_binds_comment_validation_to_the_current_request(tmp_path: Path) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(started_ns)
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(
+            platforms=("xhs",), count=1, xhs_complete=True, xhs_comments=2
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-data",
+        "count-mismatch",
+        "unsafe-field",
+        "boolean-count",
+    ),
+)
+def test_xhs_complete_rejects_unproved_or_unsafe_comment_evidence(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(started_ns, comments_requested=2)
+    if mutation == "missing-data":
+        record.pop("comments_data")
+    elif mutation == "count-mismatch":
+        record["comments_fetched"] = 3
+    elif mutation == "unsafe-field":
+        record["comments_data"][0]["user_id"] = "must-not-be-accepted"
+    else:
+        record["comments_fetched"] = True
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(
+            platforms=("xhs",), count=1, xhs_complete=True, xhs_comments=2
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "partial"
+
+
+@pytest.mark.parametrize(("requested", "total"), ((1, 0), (3, 2), (2, 4)))
+def test_xhs_complete_accepts_request_bound_safe_comment_evidence(
+    tmp_path: Path,
+    requested: int,
+    total: int,
+) -> None:
+    started_ns = time.time_ns() - 1_000_000_000
+    record = valid_xhs_complete_record(
+        started_ns,
+        comments_requested=requested,
+        total_comments=total,
+    )
+    path = write_xhs_records(tmp_path, [record])
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(
+            platforms=("xhs",), count=1, xhs_complete=True, xhs_comments=requested
+        ),
+        started_ns,
+    )
+
+    assert result["status"] == "success", result["errors"]
 
 
 def test_validation_rejects_symlinked_evidence(tmp_path):
@@ -488,3 +718,54 @@ def test_validate_run_cli_help_is_offline():
     assert completed.returncode == 0
     assert "--run-dir" in completed.stdout
     assert "--started-epoch" in completed.stdout
+    assert "--screenshot-mode" in completed.stdout
+    assert "--xhs-comments" in completed.stdout
+
+
+def test_validate_run_cli_carries_screenshot_mode_without_navigation(
+    tmp_path, monkeypatch
+):
+    validation_cli = importlib.import_module("validate_run")
+    captured = {}
+
+    monkeypatch.setattr(
+        validation_cli,
+        "discover_current_json",
+        lambda *_args, **_kwargs: (),
+    )
+
+    def capture(_paths, request, _started_ns):
+        captured["request"] = request
+        return {
+            "status": "success",
+            "counts": {"xhs": 1},
+            "records": [],
+            "evidence": [],
+            "diagnostics": [],
+            "samples": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(validation_cli, "validate_run", capture)
+
+    assert validation_cli.main(
+        [
+            "--run-dir",
+            str(tmp_path),
+            "--started-epoch",
+            "1",
+            "--platform",
+            "xhs",
+            "--expected-count",
+            "1",
+            "--xhs-complete",
+            "--xhs-comments",
+            "2",
+            "--screenshot-mode",
+            "opened",
+            "--json-summary",
+        ]
+    ) == 0
+    assert captured["request"].screenshot_mode == "opened"
+    assert captured["request"].xhs_comments == 2
+    assert captured["request"].allow_navigation is True

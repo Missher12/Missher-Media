@@ -133,10 +133,18 @@ class Bridge:
         self.action = action
         self.selectors: list[str] = []
         self.titles: list[str] = []
+        self.retry_policies: list[bool] = []
 
-    async def click_marked_tab(self, page: Page, *, selector: str) -> None:
+    async def click_marked_tab(
+        self,
+        page: Page,
+        *,
+        selector: str,
+        retry_stale_selector: bool = True,
+    ) -> None:
         self.selectors.append(selector)
         self.titles.append(await page.title())
+        self.retry_policies.append(retry_stale_selector)
         self.action()
 
 
@@ -178,8 +186,31 @@ async def test_assisted_coordinator_marks_title_and_uses_only_bridge_click() -> 
         f'[data-media-missher-target="{element.markers[0]}"]'
     ]
     assert len(bridge.titles) == 1 and bridge.titles[0].startswith("media-missher-")
+    assert bridge.retry_policies == [True]
     assert page.current_title == "original title"
     assert page.marker_removed is True
+
+
+@pytest.mark.asyncio
+async def test_coordinator_forwards_disabled_stale_selector_retry() -> None:
+    page = Page(
+        "https://www.xiaohongshu.com/explore",
+        detail_url="https://www.xiaohongshu.com/explore/note-123",
+    )
+    element = Element(page)
+    bridge = Bridge(page.open_detail)
+
+    result = await DetailOpenCoordinator(bridge=bridge).click_exact(
+        page,
+        element,
+        platform="xhs",
+        native_id="note-123",
+        retry_stale_selector=False,
+    )
+
+    assert result is page
+    assert bridge.retry_policies == [False]
+    assert element.clicked == 0
 
 
 @pytest.mark.asyncio

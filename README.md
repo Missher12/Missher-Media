@@ -2,11 +2,12 @@
 
 > Missher 专用私有仓库。
 
-Media@Missher is an independently maintained collection runtime and Codex skill for authorized Bilibili, Xiaohongshu, Douyin, and Weibo workflows. The current release is V15 (`15.0.0`).
+Media@Missher is an independently maintained collection runtime and Codex skill for authorized Bilibili, Xiaohongshu, Douyin, and Weibo workflows. The current release is V15.2 (`15.2.0`).
 
 ## Versions
 
-- `v15.0.0`: current BrowserSkill-assisted detail opening and private screenshot release
+- `v15.2.0`: Xiaohongshu CDP-only ownership, request-bound comments, stricter detail evidence validation, safer screenshot fallback, and duplicate-page pagination hardening
+- `v15.0.0`: CDP detail capture, optional Bilibili BrowserSkill assistance, and private screenshot release
 - `v12.0.0`: first standalone shared-runtime release
 - Git history before `v12.0.0`: independently authored skill and clean-runtime development history
 

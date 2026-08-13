@@ -20,6 +20,7 @@ PACKAGE = PROJECT_ROOT / "openclaw-media-missher"
 RELEASE_MARKER = ".media-missher-release"
 OWNER_MARKER = ".media-missher-owner.json"
 INSTALL_LOCK = ".media-missher-install.lock"
+COLLECTION_LOCK = ".media-missher-collection.lock"
 
 
 def test_openclaw_skill_is_compact_and_has_valid_frontmatter() -> None:
@@ -32,6 +33,16 @@ def test_openclaw_skill_is_compact_and_has_valid_frontmatter() -> None:
     assert fields["name"] == "media-missher"
     assert fields["description"].startswith("Use when ")
     assert "preflight.py" in text and "run_collection.py" in text
+
+
+def test_openclaw_skill_retains_the_bounded_xhs_action_contract() -> None:
+    text = (PACKAGE / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "at most one Xiaohongshu detail open" in text
+    assert "at most three comment-container scrolls" in text
+    assert "Do not retry a `risk-stopped` result" in text
+    assert "Xiaohongshu uses Playwright/CDP only" in text
+    assert "xhs-browser-assist-unsupported" in text
 
 
 def test_openclaw_package_has_no_platform_code_assets_or_personal_paths() -> None:
@@ -300,3 +311,29 @@ def test_collection_wrapper_waits_for_the_installer_exclusive_lock(tmp_path: Pat
     stdout, stderr = process.communicate(timeout=10)
     assert process.returncode == 0, stderr
     assert "immediate-launch" in stdout
+
+
+def test_collection_wrapper_rejects_a_concurrent_collection(tmp_path: Path) -> None:
+    home = _make_runtime_home(tmp_path)
+    portable = _make_installed_package(tmp_path)
+    interpreter = home / "venv" / "bin" / "python"
+    interpreter.write_text("#!/bin/sh\nprintf 'must-not-launch\\n'\n", encoding="utf-8")
+    interpreter.chmod(0o700)
+    lock = home / COLLECTION_LOCK
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    descriptor = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        launched = _run(
+            portable / "scripts" / "run_collection.py",
+            "--help",
+            home=home,
+        )
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    assert launched.returncode == 1
+    assert "already running" in launched.stderr
+    assert "must-not-launch" not in launched.stdout

@@ -193,6 +193,8 @@ class EvidenceScreenshot:
                     except Exception:
                         payload = None
             if payload is None:
+                if await self._risk_visible(page):
+                    raise ScreenshotError("risk-page")
                 if not await self._full_page_dimensions_are_safe(page):
                     raise ScreenshotError("capture-failed")
                 payload = await page.screenshot(full_page=True, type="png")

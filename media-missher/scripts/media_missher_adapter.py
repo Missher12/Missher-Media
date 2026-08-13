@@ -54,6 +54,14 @@ _SAFE_PRECONDITION_CODES = frozenset(
         "bsk-transport",
         "bsk-timeout",
         "bsk-target-ambiguous",
+        "bsk-session-start",
+        "bsk-tab-list",
+        "bsk-tab-borrow",
+        "bsk-snapshot",
+        "bsk-click",
+        "bsk-tab-return",
+        "bsk-session-stop",
+        "xhs-browser-assist-unsupported",
     }
 )
 RUNTIME_ENTRYPOINTS = (
@@ -69,6 +77,7 @@ RUNTIME_OWNER_MARKER = ".media-missher-owner.json"
 RUNTIME_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
 RELEASE_MARKER = ".media-missher-release"
 INSTALL_LOCK = ".media-missher-install.lock"
+COLLECTION_LOCK = ".media-missher-collection.lock"
 SOURCE_TREE_MARKER = ".media-missher-source-tree"
 SOURCE_TREE_IDENTITY = b"media-missher-source-v1\n"
 MAX_RELEASE_ID_BYTES = 128
@@ -131,6 +140,10 @@ class _RuntimeLeaseError(ConfigurationError):
     def __init__(self, message: str, *, lease_acquired: bool = False) -> None:
         super().__init__(message)
         self.lease_acquired = lease_acquired
+
+
+class _CollectionLeaseError(ConfigurationError):
+    """Raised when another collection owns the dedicated browser profile."""
 
 
 def _validated_manifest_diagnostics(manifest: object) -> dict[str, dict[str, str]]:
@@ -296,6 +309,8 @@ class CollectionRequest:
             raise ConfigurationError("navigation authorization must be an explicit boolean")
         if self.browser_assist not in _BROWSER_ASSIST_MODES:
             raise ConfigurationError("unsupported browser assist mode")
+        if self.browser_assist == "browserskill" and "xhs" in requested:
+            raise ConfigurationError("xhs-browser-assist-unsupported")
         if self.screenshot_mode not in _SCREENSHOT_MODES:
             raise ConfigurationError("unsupported screenshot mode")
         if self.screenshot_mode == "all" and zero_effective_count:
@@ -600,6 +615,59 @@ def _runtime_lease(layout: RuntimeLayout, *, timeout: float):
                 f"installation lock is unavailable: {type(exc).__name__}"
             ) from exc
         yield release
+    finally:
+        if descriptor is not None:
+            try:
+                if acquired:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
+@contextmanager
+def _collection_lease(layout: RuntimeLayout):
+    lock = layout.home.expanduser().absolute() / COLLECTION_LOCK
+    descriptor: int | None = None
+    acquired = False
+    try:
+        try:
+            _reject_symlink_components(lock, "collection lock")
+            flags = (
+                os.O_RDWR
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            try:
+                descriptor = os.open(lock, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                os.fchmod(descriptor, 0o600)
+                expected = os.fstat(descriptor)
+            except FileExistsError:
+                expected = _owned_private_stat(lock, "collection lock")
+                descriptor = os.open(lock, flags)
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
+                or not os.path.samestat(expected, opened)
+            ):
+                raise _CollectionLeaseError("collection lock changed while being opened")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise _CollectionLeaseError(
+                    "another Media@Missher collection is already running"
+                ) from exc
+            acquired = True
+        except _CollectionLeaseError:
+            raise
+        except _RuntimeLeaseError as exc:
+            raise _CollectionLeaseError(str(exc)) from exc
+        except OSError as exc:
+            raise _CollectionLeaseError(
+                f"collection lock is unavailable: {type(exc).__name__}"
+            ) from exc
+        yield
     finally:
         if descriptor is not None:
             try:
@@ -1252,22 +1320,144 @@ def _bilibili_complete(record: Mapping) -> bool:
     )
 
 
-def _xhs_complete(record: Mapping, started_ns: int) -> bool:
+_XHS_DETAIL_SOURCES = frozenset({"detail_api", "detail_html", "detail_cdp"})
+_XHS_COMMENT_FIELDS = frozenset({"author", "text", "date", "liked"})
+
+
+def _xhs_exact_detail_link(record: Mapping) -> bool:
+    note_id = record.get("note_id")
+    link = record.get("link")
+    if not isinstance(note_id, str) or not note_id or not isinstance(link, str):
+        return False
+    parsed = urlsplit(link)
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname == "www.xiaohongshu.com"
+        and parsed.path == f"/explore/{note_id}"
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _xhs_metrics_are_current(record: Mapping, started_ns: int) -> bool:
+    sources = record.get("metric_sources")
+    observations = record.get("metric_observed_at")
+    if not isinstance(sources, Mapping) or not isinstance(observations, Mapping):
+        return False
+    for field in ("liked", "comments", "collected", "shares"):
+        value = record.get(field)
+        if not (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+            and sources.get(field) in _XHS_DETAIL_SOURCES
+        ):
+            return False
+        observation_key = "raw_share_count" if field == "shares" else field
+        observed_ns = _parse_observed_ns(
+            observations.get(observation_key)
+            if observation_key in observations
+            else observations.get(field)
+        )
+        if observed_ns is None or observed_ns < started_ns:
+            return False
+    return True
+
+
+def _xhs_comments_complete(record: Mapping, requested_comments: int) -> bool:
+    if requested_comments <= 0:
+        return True
+    reported_requested = record.get("comments_requested")
+    total_comments = record.get("comments")
+    fetched_comments = record.get("comments_fetched")
+    comments_data = record.get("comments_data")
+    if not (
+        isinstance(reported_requested, int)
+        and not isinstance(reported_requested, bool)
+        and reported_requested == requested_comments
+        and isinstance(total_comments, int)
+        and not isinstance(total_comments, bool)
+        and total_comments >= 0
+        and isinstance(fetched_comments, int)
+        and not isinstance(fetched_comments, bool)
+        and isinstance(comments_data, list)
+    ):
+        return False
+    expected = min(requested_comments, total_comments)
+    if fetched_comments != expected or len(comments_data) != expected:
+        return False
+    for comment in comments_data:
+        if not isinstance(comment, Mapping) or set(comment) != _XHS_COMMENT_FIELDS:
+            return False
+        author = comment.get("author")
+        body = comment.get("text")
+        date = comment.get("date")
+        liked = comment.get("liked")
+        if not (
+            (author is None or isinstance(author, str))
+            and (body is None or isinstance(body, str))
+            and (date is None or isinstance(date, str))
+            and (
+                liked is None
+                or (isinstance(liked, int) and not isinstance(liked, bool) and liked >= 0)
+            )
+            and (
+                isinstance(author, str) and bool(author.strip())
+                or isinstance(body, str) and bool(body.strip())
+            )
+        ):
+            return False
+    return True
+
+
+def _xhs_complete(
+    record: Mapping,
+    started_ns: int,
+    requested_comments: int = 0,
+) -> bool:
     observed_ns = _parse_observed_ns(
         record.get("engagement_observed_at") or record.get("metric_observed_at")
     )
     source = str(record.get("engagement_source") or "").lower()
     precision = str(record.get("date_precision") or "").lower()
+    raw_detail_business_fields = record.get("detail_business_fields")
+    detail_business_fields = {
+        str(field)
+        for field in (
+            raw_detail_business_fields
+            if isinstance(raw_detail_business_fields, (list, tuple, set))
+            else ()
+        )
+        if isinstance(field, str)
+    }
+    has_detail_media = bool(
+        record.get("images") or record.get("video_urls") or record.get("cover")
+    )
     return bool(
         record.get("complete") is True
         and record.get("detail_attempted") is True
+        and record.get("detail_completed") is True
+        and isinstance(record.get("missing_fields"), list)
+        and not record["missing_fields"]
+        and _xhs_exact_detail_link(record)
         and record.get("date")
         and precision not in {"", "unknown", "estimated", "estimated_day"}
+        and record.get("date_estimated") is False
+        and record.get("date_source") == "detail_api"
         and record.get("engagement_fresh") is True
-        and source in {"detail", "detail_api", "html", "cdp", "detail_html", "detail_cdp"}
+        and source in _XHS_DETAIL_SOURCES
         and observed_ns is not None
         and observed_ns >= started_ns
-        and all(record.get(key) is not None for key in ("liked", "comments", "collected"))
+        and _xhs_metrics_are_current(record, started_ns)
+        and all(
+            record.get(key) is not None
+            for key in ("liked", "comments", "collected", "shares")
+        )
+        and str(record.get("desc") or "").strip()
+        and str(record.get("author") or "").strip()
+        and {"desc", "author", "media"}.issubset(detail_business_fields)
+        and has_detail_media
+        and _xhs_comments_complete(record, requested_comments)
     )
 
 
@@ -1565,7 +1755,8 @@ def validate_run(paths, request: CollectionRequest, started_ns: int) -> dict:
             errors.append(f"Bilibili complete validation failed for {incomplete} records")
     if "xhs" in request.platforms and (request.complete or request.xhs_complete):
         incomplete = sum(
-            not _xhs_complete(record, started_ns) for record in deduplicated["xhs"]
+            not _xhs_complete(record, started_ns, request.xhs_comments)
+            for record in deduplicated["xhs"]
         )
         if incomplete:
             errors.append(f"XHS complete validation failed for {incomplete} records")
@@ -1717,7 +1908,7 @@ def _run_collection_request_unlocked(
     elif feishu_artifacts:
         status = "failed"
     elif completed.timed_out or completed.returncode != 0:
-        status = "partial" if evidence else "failed"
+        status = "partial" if validation["records"] else "failed"
     else:
         status = validation["status"]
 
@@ -1796,15 +1987,26 @@ def run_collection_request(
             return _preflight_failure(error, checks={"creator_uids": False})
     try:
         with _runtime_lease(layout, timeout=10.0):
-            return _run_collection_request_unlocked(
-                request,
-                layout=layout,
-                data_root=data_root,
-                cdp_url=cdp_url,
-                preflight_runner=preflight_runner,
-                execution_timeout=execution_timeout,
-                command_environment=command_environment,
-            )
+            try:
+                with _collection_lease(layout):
+                    return _run_collection_request_unlocked(
+                        request,
+                        layout=layout,
+                        data_root=data_root,
+                        cdp_url=cdp_url,
+                        preflight_runner=preflight_runner,
+                        execution_timeout=execution_timeout,
+                        command_environment=command_environment,
+                    )
+            except _CollectionLeaseError as exc:
+                return _preflight_failure(
+                    str(exc),
+                    checks={
+                        "runtime_lease": True,
+                        "release": True,
+                        "collection_lease": False,
+                    },
+                )
     except _RuntimeLeaseError as exc:
         return _preflight_failure(
             str(exc),

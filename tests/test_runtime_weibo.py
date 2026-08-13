@@ -7,6 +7,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Coroutine
+from urllib.parse import urlencode
 
 import pytest
 
@@ -26,7 +27,7 @@ def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
 class Response:
     payload: object
     status: int = 200
-    url: str = "https://weibo.com/ajax/statuses/mymblog"
+    url: str = "https://weibo.com/ajax/statuses/mymblog?uid=creator"
     json_error: Exception | None = None
     json_calls: int = 0
 
@@ -35,6 +36,16 @@ class Response:
         if self.json_error:
             raise self.json_error
         return self.payload
+
+
+def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
+    from runtime.media_missher_runtime.platforms.weibo import _is_creator_response
+
+    wrong = Response({}, url="https://weibo.com/ajax/statuses/mymblog?uid=other")
+    right = Response({}, url="https://weibo.com/ajax/statuses/mymblog?uid=target")
+
+    assert _is_creator_response(wrong, "target") is False
+    assert _is_creator_response(right, "target") is True
 
 
 @dataclass
@@ -192,8 +203,17 @@ def _post(identifier: str, *, text: str = "<b>Hello &amp; world</b>", favorited:
     }
 
 
-def _creator(*posts: dict[str, Any], since_id: object = None, total: object = None, ok: object = 1) -> Response:
-    return Response({"ok": ok, "data": {"list": list(posts), "since_id": since_id, "total": total}})
+def _creator(
+    *posts: dict[str, Any],
+    since_id: object = None,
+    total: object = None,
+    ok: object = 1,
+    uid: str = "creator",
+) -> Response:
+    return Response(
+        {"ok": ok, "data": {"list": list(posts), "since_id": since_id, "total": total}},
+        url=f"https://weibo.com/ajax/statuses/mymblog?{urlencode({'uid': uid})}",
+    )
 
 
 def test_browser_weibo_host_allowlist_is_exact_and_includes_search_host() -> None:
@@ -447,7 +467,7 @@ def test_sanitized_raw_markup_drops_secret_markers_from_every_retained_attribute
 def test_creator_capture_navigation_and_count_rules_do_not_construct_api_requests() -> None:
     from runtime.media_missher_runtime.platforms.weibo import collect_creator
 
-    page = Page(responses=[_creator(_post("one"), _post("two"), since_id="next", total=2)])
+    page = Page(responses=[_creator(_post("one"), _post("two"), since_id="next", total=2, uid="a b")])
     records = _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="a b"), Browser(page)))
     assert [record["native_id"] for record in records] == ["MBone"]
     assert page.gotos == ["https://weibo.com/u/a%20b"]
@@ -494,12 +514,24 @@ def test_creator_risk_nonjson_ok_and_no_progress_are_controlled() -> None:
     from runtime.media_missher_runtime.platforms.weibo import CollectionStopped, SourceResponseError, collect_creator
 
     for status in (403, 429):
-        response = Response(None, status=status, json_error=AssertionError("must not parse JSON"))
+        response = Response(
+            None,
+            status=status,
+            url="https://weibo.com/ajax/statuses/mymblog?uid=x",
+            json_error=AssertionError("must not parse JSON"),
+        )
         with pytest.raises(CollectionStopped, match=f"http-{status}"):
             _run(collect_creator(CollectionRequest(platform="weibo", count=1, uid="x"), Browser(Page(responses=[response]))))
         assert response.json_calls == 0
-    for payload in (_creator(_post("one"), ok=0), Response({"code": 461}), Response({"ok": 1, "data": {"list": [_post("one")], "since_id": "same"}})):
-        page = Page(responses=[payload, _creator(_post("two"), since_id="same")])
+    for payload in (
+        _creator(_post("one"), ok=0, uid="x"),
+        Response({"code": 461}, url="https://weibo.com/ajax/statuses/mymblog?uid=x"),
+        Response(
+            {"ok": 1, "data": {"list": [_post("one")], "since_id": "same"}},
+            url="https://weibo.com/ajax/statuses/mymblog?uid=x",
+        ),
+    ):
+        page = Page(responses=[payload, _creator(_post("two"), since_id="same", uid="x")])
         if isinstance(payload, Response) and payload.payload.get("ok") == 1:
             assert len(_run(collect_creator(CollectionRequest(platform="weibo", count=0, page_cap=3, uid="x"), Browser(page)))) == 1
         else:

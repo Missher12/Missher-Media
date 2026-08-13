@@ -133,7 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             search=args.search,
             complete=args.complete,
             bilibili_complete=args.bilibili_complete,
-            xhs_complete=args.xhs_complete,
+            xhs_complete=(
+                args.xhs_complete
+                or ("xhs" in platforms and args.search is None)
+            ),
             xhs_comments=args.xhs_comments,
             platform_timeout=args.platform_timeout,
             output_format=args.format,

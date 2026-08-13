@@ -29,6 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--complete", action="store_true")
     parser.add_argument("--bilibili-complete", action="store_true")
     parser.add_argument("--xhs-complete", action="store_true")
+    parser.add_argument(
+        "--xhs-comments",
+        type=parse_non_negative_int,
+        default=0,
+        help="Require this many bounded Xiaohongshu comments in complete evidence.",
+    )
+    parser.add_argument(
+        "--screenshot-mode",
+        choices=("off", "opened", "all"),
+        default="off",
+    )
     parser.add_argument("--format", choices=("json", "csv", "jsonl", "sqlite"), default="json")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--json-summary", action="store_true")
@@ -50,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
             complete=args.complete,
             bilibili_complete=args.bilibili_complete,
             xhs_complete=args.xhs_complete,
+            xhs_comments=args.xhs_comments,
             collect_as_much_as_safe=args.expected_count == 0,
+            screenshot_mode=args.screenshot_mode,
+            allow_navigation=args.screenshot_mode != "off",
         )
         paths = discover_current_json(args.run_dir, started_ns=started_ns)
         result = validate_run(paths, request, started_ns)
