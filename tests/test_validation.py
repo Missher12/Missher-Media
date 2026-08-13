@@ -461,6 +461,41 @@ def test_bilibili_complete_requires_real_title_date_and_metrics(tmp_path):
     assert any("Bilibili complete" in error for error in result["errors"])
 
 
+def test_bilibili_complete_keeps_still_unknown_detail_as_partial_evidence(tmp_path):
+    records = json.loads(
+        (FIXTURES / "bilibili_creator.json").read_text(encoding="utf-8")
+    )
+    records[0].update(
+        {
+            "complete": False,
+            "detail_attempted": True,
+            "detail_completed": False,
+            "collected": None,
+            "missing_fields": ["collected"],
+        }
+    )
+    path = tmp_path / "bilibili_creator.json"
+    path.write_text(json.dumps(records), encoding="utf-8")
+
+    result = validate_run(
+        (path,),
+        CollectionRequest(
+            platforms=("bilibili",),
+            count=1,
+            bilibili_complete=True,
+        ),
+        path.stat().st_mtime_ns - 1,
+    )
+
+    assert result["counts"] == {"bilibili": 1}
+    assert result["evidence"] == [str(path.resolve())]
+    assert result["records"][0]["collected"] is None
+    assert result["status"] == "partial"
+    assert result["errors"] == [
+        "Bilibili complete validation failed for 1 records"
+    ]
+
+
 def test_xhs_complete_requires_fresh_current_observation(tmp_path):
     path = copy_fixture(tmp_path, "xhs_creator.json")
     started = datetime(2026, 8, 3, 1, tzinfo=timezone.utc)

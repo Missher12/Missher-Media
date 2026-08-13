@@ -771,6 +771,58 @@ def test_complete_mode_rejects_full_count_with_incomplete_record(tmp_path: Path)
     assert manifest["platforms"] == {"xhs": "incomplete"}
 
 
+def test_bilibili_complete_reports_still_unknown_detail_as_incomplete_record(
+    tmp_path: Path,
+) -> None:
+    from runtime.media_missher_runtime.cli import main
+
+    record = {
+        "platform": "bilibili",
+        "id": "synthetic-dynamic",
+        "native_id": "synthetic-dynamic",
+        "dynamic_id": "synthetic-dynamic",
+        "link": "https://t.bilibili.com/synthetic-dynamic",
+        "url": "https://t.bilibili.com/synthetic-dynamic",
+        "date": "2026-08-13T00:00:00+08:00",
+        "title": "Synthetic dynamic",
+        "liked": 3,
+        "comments": 4,
+        "shares": 5,
+        "collected": None,
+        "detail_attempted": True,
+        "detail_completed": False,
+        "detail_source": "list_api",
+        "complete": False,
+        "missing_fields": ["collected"],
+    }
+
+    code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "synthetic-creator",
+            "--count",
+            "1",
+            "--bilibili-complete",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=FakeDispatcher({"bilibili": [record]}),
+    )
+
+    assert code == 1
+    run_dir, manifest = _manifest(tmp_path)
+    assert manifest["platforms"] == {"bilibili": "incomplete"}
+    assert manifest["diagnostics"] == {
+        "bilibili": {"kind": "result", "code": "incomplete-record"}
+    }
+    persisted = json.loads((run_dir / "bilibili.json").read_text(encoding="utf-8"))
+    assert persisted[0]["collected"] is None
+    assert persisted[0]["missing_fields"] == ["collected"]
+
+
 def test_search_dispatches_one_keyword_request(tmp_path: Path) -> None:
     from runtime.media_missher_runtime.cli import main
 
