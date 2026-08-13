@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-13
 
-**Status:** Approved in conversation; pending written-spec review
+**Status:** Approved for implementation
 
 **Supersedes:** `2026-08-13-bilibili-cdp-dynamic-completion-design.md` for the V15.2.1 release candidate
 
