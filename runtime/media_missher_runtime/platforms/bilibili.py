@@ -60,6 +60,7 @@ def _needs_dynamic_open(
     request: CollectionRequest, record: Mapping[str, Any]
 ) -> bool:
     dynamic_id = record.get("dynamic_id")
+    missing = bool(missing_engagement_fields(record))
     return (
         record.get("bvid") is None
         and isinstance(dynamic_id, str)
@@ -67,8 +68,11 @@ def _needs_dynamic_open(
         and (
             request.screenshot_mode == "all"
             or (
-                request.browser_assist == "browserskill"
-                and bool(missing_engagement_fields(record))
+                missing
+                and (
+                    request.complete
+                    or request.browser_assist == "browserskill"
+                )
             )
         )
     )
@@ -228,6 +232,9 @@ class BilibiliCollector:
                 target,
                 platform="bilibili",
                 native_id=dynamic_id,
+                retry_stale_selector=(
+                    self.request.browser_assist == "browserskill"
+                ),
             )
             observation = await _read_dynamic_detail(detail_page, dynamic_id)
             _raise_for_risk_observation(observation)
@@ -1030,6 +1037,8 @@ def _merge_dynamic_detail(
 ) -> bool:
     merged = False
     for field in ("liked", "comments", "shares", "collected"):
+        if record.get(field) is not None:
+            continue
         value = detail.get(field)
         if isinstance(value, Real) and not isinstance(value, bool):
             try:

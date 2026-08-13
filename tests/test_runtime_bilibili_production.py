@@ -220,6 +220,7 @@ class DynamicLocator:
 class AssistedCoordinator:
     result_page: CapturePage | None = None
     clicks: list[str] = field(default_factory=list)
+    retry_policies: list[bool] = field(default_factory=list)
     released: list[CapturePage] = field(default_factory=list)
 
     async def click_exact(
@@ -229,10 +230,12 @@ class AssistedCoordinator:
         *,
         platform: str,
         native_id: str,
+        retry_stale_selector: bool = True,
     ) -> CapturePage:
         assert platform == "bilibili"
         assert element.dynamic_id == native_id or element.href is not None
         self.clicks.append(native_id)
+        self.retry_policies.append(retry_stale_selector)
         target = self.result_page or page
         target.url = f"https://t.bilibili.com/{native_id}"
         return target
@@ -604,6 +607,84 @@ def test_complete_accepts_authoritative_list_payload_for_nonvideo_dynamic() -> N
     assert page.gotos == ["https://space.bilibili.com/synthetic-user/dynamic"]
 
 
+def test_complete_opens_unknown_dynamic_without_browserskill_and_only_fills_missing_metrics() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    item = _item("123456", comment={"count": 4})
+    item["modules"]["module_stat"]["forward"] = {"count": 5}
+    page = CapturePage(
+        responses=[_feed(item, has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": 30_000,
+            "comments": 40_000,
+            "shares": 50_000,
+            "collected": 6,
+        }],
+    )
+    coordinator = AssistedCoordinator()
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            complete=True,
+            browser_assist="off",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))[0]
+
+    assert coordinator.clicks == ["123456"]
+    assert coordinator.retry_policies == [False]
+    assert (record["liked"], record["comments"], record["shares"]) == (3, 4, 5)
+    assert record["collected"] == 6
+    assert record["detail_attempted"] is True
+    assert record["detail_completed"] is True
+    assert record["complete"] is True
+    assert record["missing_fields"] == []
+
+
+def test_complete_unknown_dynamic_remains_incomplete_after_one_bridge_free_click() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": None,
+            "comments": None,
+            "shares": None,
+            "collected": None,
+        }],
+    )
+    coordinator = AssistedCoordinator()
+    screenshots = Screenshots()
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            complete=True,
+            browser_assist="off",
+        ),
+        ProductionBrowser(page, detail_open=coordinator, screenshots=screenshots),
+    ))[0]
+
+    assert coordinator.clicks == ["123456"]
+    assert coordinator.retry_policies == [False]
+    assert record["detail_attempted"] is True
+    assert record["collected"] is None
+    assert record["complete"] is False
+    assert record["missing_fields"] == ["collected"]
+    assert screenshots.captures == []
+
+
 def test_complete_keeps_a_placeholder_detail_title_incomplete() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import collect_creator
 
@@ -889,10 +970,11 @@ def test_assist_opens_unknown_dynamic_and_merges_only_same_id_numeric_metrics() 
     ))[0]
 
     assert coordinator.clicks == ["123456"]
+    assert coordinator.retry_policies == [True]
     assert record["detail_attempted"] is True
     assert record["detail_completed"] is True
     assert record["liked"] == 3
-    assert (record["comments"], record["shares"], record["collected"]) == (7, 8, 9)
+    assert (record["comments"], record["shares"], record["collected"]) == (0, 2, 9)
     assert record["complete"] is True
     assert record["missing_fields"] == []
 
