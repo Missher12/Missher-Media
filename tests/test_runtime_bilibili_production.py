@@ -33,6 +33,44 @@ class Response:
         return self.payload
 
 
+@dataclass(frozen=True)
+class ObservedRequest:
+    resource_type: str = "document"
+
+
+@dataclass(frozen=True)
+class ObservedResponse:
+    url: str
+    status: int
+    request: ObservedRequest = field(default_factory=ObservedRequest)
+
+
+@dataclass
+class ResponseEventContext:
+    listeners: list[Any] = field(default_factory=list)
+
+    def on(self, event: str, listener: Any) -> None:
+        assert event == "response"
+        self.listeners.append(listener)
+
+    def remove_listener(self, event: str, listener: Any) -> None:
+        assert event == "response"
+        self.listeners.remove(listener)
+
+    def emit_response(self, response: ObservedResponse) -> None:
+        for listener in tuple(self.listeners):
+            listener(response)
+
+
+@dataclass
+class UnremovableResponseEventContext:
+    listeners: list[Any] = field(default_factory=list)
+
+    def on(self, event: str, listener: Any) -> None:
+        assert event == "response"
+        self.listeners.append(listener)
+
+
 def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import _is_feed_response
 
@@ -222,6 +260,8 @@ class AssistedCoordinator:
     clicks: list[str] = field(default_factory=list)
     retry_policies: list[bool] = field(default_factory=list)
     released: list[CapturePage] = field(default_factory=list)
+    responses_to_emit: list[ObservedResponse] = field(default_factory=list)
+    click_error: BaseException | None = None
 
     async def click_exact(
         self,
@@ -236,6 +276,11 @@ class AssistedCoordinator:
         assert element.dynamic_id == native_id or element.href is not None
         self.clicks.append(native_id)
         self.retry_policies.append(retry_stale_selector)
+        context = getattr(page, "context", None)
+        for response in self.responses_to_emit:
+            context.emit_response(response)
+        if self.click_error is not None:
+            raise self.click_error
         target = self.result_page or page
         target.url = f"https://t.bilibili.com/{native_id}"
         return target
@@ -908,6 +953,181 @@ def test_popup_dynamic_is_released_immediately_after_record() -> None:
     assert page.url == "https://space.bilibili.com/synthetic-user/dynamic"
 
 
+@pytest.mark.parametrize(("status", "use_popup"), ((403, False), (429, True)))
+def test_dynamic_detail_exact_document_http_risk_stops_before_dom_or_screenshot(
+    status: int, use_popup: bool
+) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        CollectionStopped,
+        collect_creator,
+    )
+
+    detail_page = CapturePage(dynamic_details=[{
+        "dynamic_id": "123456",
+        "risk_text": "",
+        "liked": 30,
+        "comments": 40,
+        "shares": 50,
+        "collected": 60,
+    }])
+    target = DynamicElement(dynamic_id="123456")
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[target],
+        dynamic_details=[] if use_popup else list(detail_page.dynamic_details),
+    )
+    context = ResponseEventContext()
+    page.context = context
+    popup = detail_page if use_popup else None
+    coordinator = AssistedCoordinator(
+        result_page=popup,
+        responses_to_emit=[ObservedResponse(
+            url="https://t.bilibili.com/123456",
+            status=status,
+        )],
+    )
+    screenshots = Screenshots()
+
+    with pytest.raises(CollectionStopped, match=f"http-{status}"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                complete=True,
+                browser_assist="off",
+            ),
+            ProductionBrowser(
+                page,
+                detail_open=coordinator,
+                screenshots=screenshots,
+            ),
+        ))
+
+    active_detail_page = popup or page
+    assert coordinator.clicks == ["123456"]
+    assert coordinator.retry_policies == [False]
+    assert not any(
+        "MEDIA_MISSHER_DYNAMIC_DETAIL" in script
+        for script in active_detail_page.evaluations
+    )
+    assert screenshots.captures == []
+    assert context.listeners == []
+    assert target.disposed is True
+    assert coordinator.released == ([popup] if popup is not None else [])
+
+
+def test_dynamic_detail_response_observer_rejects_unrelated_traffic_and_cleans_up() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    target = DynamicElement(dynamic_id="123456")
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[target],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": 30,
+            "comments": 40,
+            "shares": 50,
+            "collected": 6,
+        }],
+    )
+    context = ResponseEventContext()
+    page.context = context
+    coordinator = AssistedCoordinator(responses_to_emit=[
+        ObservedResponse(url="https://t.bilibili.com/other", status=403),
+        ObservedResponse(
+            url="https://t.bilibili.com/123456",
+            status=429,
+            request=ObservedRequest(resource_type="xhr"),
+        ),
+        ObservedResponse(url="https://t.bilibili.com/123456", status=200),
+    ])
+
+    record = _run(collect_creator(
+        CollectionRequest(
+            platform="bilibili",
+            count=1,
+            uid="synthetic-user",
+            complete=True,
+            browser_assist="off",
+        ),
+        ProductionBrowser(page, detail_open=coordinator),
+    ))[0]
+
+    assert record["collected"] == 6
+    assert record["complete"] is True
+    assert context.listeners == []
+    assert target.disposed is True
+
+
+def test_dynamic_detail_response_observer_cleans_up_when_click_fails() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    target = DynamicElement(dynamic_id="123456")
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[target],
+    )
+    context = ResponseEventContext()
+    page.context = context
+    coordinator = AssistedCoordinator(
+        click_error=PreconditionError("synthetic click failure")
+    )
+
+    with pytest.raises(PreconditionError, match="synthetic click failure"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                complete=True,
+                browser_assist="off",
+            ),
+            ProductionBrowser(page, detail_open=coordinator),
+        ))
+
+    assert coordinator.clicks == ["123456"]
+    assert context.listeners == []
+    assert target.disposed is True
+
+
+def test_dynamic_detail_response_observer_fails_closed_without_listener_removal() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    page = CapturePage(
+        responses=[_feed(_item("123456"), has_more=False)],
+        dynamic_elements=[DynamicElement(dynamic_id="123456")],
+        dynamic_details=[{
+            "dynamic_id": "123456",
+            "risk_text": "",
+            "liked": 3,
+            "comments": 0,
+            "shares": 2,
+            "collected": 1,
+        }],
+    )
+    context = UnremovableResponseEventContext()
+    page.context = context
+    coordinator = AssistedCoordinator()
+
+    with pytest.raises(PreconditionError, match="response observer"):
+        _run(collect_creator(
+            CollectionRequest(
+                platform="bilibili",
+                count=1,
+                uid="synthetic-user",
+                complete=True,
+                browser_assist="off",
+            ),
+            ProductionBrowser(page, detail_open=coordinator),
+        ))
+
+    assert coordinator.clicks == []
+    assert context.listeners == []
+
+
 @pytest.mark.asyncio
 async def test_dynamic_detail_reader_requires_exact_https_url_and_same_id() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import _read_dynamic_detail
@@ -1172,7 +1392,7 @@ def test_dynamic_screenshot_failure_preserves_verified_metrics() -> None:
         ),
     ))[0]
 
-    assert (record["liked"], record["comments"], record["shares"], record["collected"]) == (3, 4, 5, 6)
+    assert (record["liked"], record["comments"], record["shares"], record["collected"]) == (3, 0, 2, 6)
     assert record["screenshot_status"] == "failed"
     assert record["screenshot_error_code"] == "capture-failed"
 

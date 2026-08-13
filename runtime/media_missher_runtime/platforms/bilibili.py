@@ -56,6 +56,48 @@ class SourceResponseError(RuntimeError):
     """A browser-generated source response could not be consumed safely."""
 
 
+@dataclass(slots=True)
+class _DynamicDetailResponseObserver:
+    context: Any
+    expected_dynamic_id: str
+    risk_code: str | None = None
+    _attached: bool = False
+
+    def _on_response(self, response: Any) -> None:
+        request = getattr(response, "request", None)
+        if getattr(request, "resource_type", None) != "document":
+            return
+        if not _valid_dynamic_detail_url(
+            getattr(response, "url", None), self.expected_dynamic_id
+        ):
+            return
+        status = getattr(response, "status", None)
+        if status in {403, 429}:
+            self.risk_code = f"http-{status}"
+
+    def __enter__(self) -> _DynamicDetailResponseObserver:
+        if self.context is None:
+            return self
+        on = getattr(self.context, "on", None)
+        remove = getattr(self.context, "remove_listener", None)
+        if not callable(on) or not callable(remove):
+            raise PreconditionError(
+                "Bilibili detail response observer is unavailable"
+            )
+        on("response", self._on_response)
+        self._attached = True
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if not self._attached:
+            return
+        remove = getattr(self.context, "remove_listener")
+        try:
+            remove("response", self._on_response)
+        finally:
+            self._attached = False
+
+
 def _needs_dynamic_open(
     request: CollectionRequest, record: Mapping[str, Any]
 ) -> bool:
@@ -227,15 +269,26 @@ class BilibiliCollector:
         detail_page = page
         try:
             record["detail_attempted"] = True
-            detail_page = await coordinator.click_exact(
-                page,
-                target,
-                platform="bilibili",
-                native_id=dynamic_id,
-                retry_stale_selector=(
-                    self.request.browser_assist == "browserskill"
-                ),
+            observer = _DynamicDetailResponseObserver(
+                getattr(page, "context", None), dynamic_id
             )
+            with observer:
+                try:
+                    detail_page = await coordinator.click_exact(
+                        page,
+                        target,
+                        platform="bilibili",
+                        native_id=dynamic_id,
+                        retry_stale_selector=(
+                            self.request.browser_assist == "browserskill"
+                        ),
+                    )
+                except BaseException as error:
+                    if observer.risk_code is not None:
+                        raise CollectionStopped(observer.risk_code) from error
+                    raise
+            if observer.risk_code is not None:
+                raise CollectionStopped(observer.risk_code)
             observation = await _read_dynamic_detail(detail_page, dynamic_id)
             _raise_for_risk_observation(observation)
             merged = _merge_dynamic_detail(record, observation)
