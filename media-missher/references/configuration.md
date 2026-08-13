@@ -4,7 +4,7 @@ This reference defines the shared runtime layout, configuration precedence, priv
 
 ## Resolve the runtime home
 
-The repository `VERSION` file is the authoritative product version. Media@Missher V15.2 uses `15.2.0`. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
+The repository `VERSION` file is the authoritative product version. Media@Missher V15.2.1 uses `15.2.1`. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
 
 `MEDIA_MISSHER_HOME` selects the shared runtime home. When it is unset, the runtime and installed skills use `~/.local/share/media-missher`. OpenClaw is retired on the current machine; its source package and dual-skill installer mode remain only for backward compatibility with historical environments.
 

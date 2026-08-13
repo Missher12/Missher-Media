@@ -3,7 +3,7 @@ name: media-missher
 description: Operate and validate the shared Media@Missher runtime for Bilibili, Xiaohongshu, Douyin, and Weibo. Use for authorized creator collection, single-platform keyword search, complete Bilibili or Xiaohongshu evidence, fresh-run validation, and diagnosis of CDP, login, timeout, lock, cooldown, or risk failures. Keep review and planning read-only, and never perform a remote Feishu write.
 ---
 
-# Media@Missher V15.2
+# Media@Missher V15.2.1
 
 Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 

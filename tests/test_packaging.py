@@ -93,7 +93,7 @@ def test_openai_metadata_has_required_interface():
         "default_prompt",
     }
     assert all(interface.values())
-    assert interface["display_name"] == "Media@Missher V15.2"
+    assert interface["display_name"] == "Media@Missher V15.2.1"
     assert 25 <= len(interface["short_description"]) <= 64
     assert "$media-missher" in interface["default_prompt"]
 
@@ -329,7 +329,7 @@ def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflig
 def test_project_context_records_clean_boundaries_and_release_state():
     text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
 
-    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.2.0\n"
+    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.2.1\n"
 
     for phrase in (
         "Source boundary",
@@ -351,8 +351,8 @@ def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
         encoding="utf-8"
     )
 
-    assert "# Media@Missher V15.2" in codex_skill
-    assert "# Media@Missher V15.2" in openclaw_skill
+    assert "# Media@Missher V15.2.1" in codex_skill
+    assert "# Media@Missher V15.2.1" in openclaw_skill
     for phrase in (
         "--browser-assist",
         "--screenshot-mode",

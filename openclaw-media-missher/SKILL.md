@@ -3,7 +3,7 @@ name: media-missher
 description: Use when collecting authorized creator posts or keyword search results from Bilibili, Xiaohongshu, Douyin, or Weibo through an existing signed-in Chrome session.
 ---
 
-# Media@Missher V15.2
+# Media@Missher V15.2.1
 
 Use the shared local runtime. Run preflight before collection, keep platforms sequential, and stop immediately when the runtime reports a risk status.
 
