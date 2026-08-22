@@ -58,6 +58,10 @@ _SOURCE_RESPONSE_ERRORS = (
     douyin.SourceResponseError,
     weibo.SourceResponseError,
 )
+_CREATOR_CAPTURE_TIMEOUTS = (
+    bilibili.CaptureTimeout,
+    douyin.CaptureTimeout,
+)
 _SAFE_RISK_CODES = frozenset(
     {
         "http-403",
@@ -482,6 +486,8 @@ def _failure_diagnostic(error: BaseException) -> dict[str, str]:
         return {"kind": "source-response", "code": "source-response-failed"}
     if isinstance(error, xhs.CaptureTimeout):
         return {"kind": "timeout", "code": error.code}
+    if isinstance(error, _CREATOR_CAPTURE_TIMEOUTS):
+        return {"kind": "timeout", "code": error.code}
     if isinstance(error, TimeoutError):
         return {"kind": "timeout", "code": "platform-timeout"}
     if isinstance(error, CollectorContractError):
@@ -561,6 +567,36 @@ async def _run_requests(
                 statuses[platform] = "failed"
                 diagnostic = _failure_diagnostic(error)
                 diagnostics[platform] = diagnostic
+                if isinstance(error, _CREATOR_CAPTURE_TIMEOUTS):
+                    observation = getattr(error, "observation", "unclassified")
+                    if observation in {
+                        "no-endpoint",
+                        "identity-mismatch",
+                        "unclassified",
+                    }:
+                        print(
+                            "media-missher-observation "
+                            f"platform={platform} stage=creator-source "
+                            f"result={observation}",
+                            file=sys.stderr,
+                        )
+                    routes = getattr(error, "routes", ())
+                    if isinstance(routes, tuple):
+                        for route in routes[:12]:
+                            if (
+                                isinstance(route, str)
+                                and 1 <= len(route) <= 240
+                                and not any(
+                                    character in route
+                                    for character in ("?", "#", "@", "=", "\\")
+                                )
+                            ):
+                                print(
+                                    "media-missher-observation "
+                                    f"platform={platform} stage=creator-source "
+                                    f"route={route}",
+                                    file=sys.stderr,
+                                )
                 if platform == "xhs":
                     partial: list[dict[str, Any]] = []
                     partial_reader = getattr(dispatcher, "partial_records", None)

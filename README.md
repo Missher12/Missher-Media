@@ -2,11 +2,11 @@
 
 > Missher 专用私有仓库。
 
-Media@Missher is an independently maintained collection runtime and Codex skill for authorized Bilibili, Xiaohongshu, Douyin, and Weibo workflows. The current source candidate is V15.2.1 (`15.2.1`); the installed stable release remains V15.2.0 until the Bilibili live-acceptance blocker recorded in `PROJECT_CONTEXT.md` is resolved.
+Media@Missher is an independently maintained collection runtime and Codex skill for authorized Bilibili, Xiaohongshu, Douyin, and Weibo workflows. The current source and installed operational candidate are V15.2.1 (`15.2.1`). Ordinary Bilibili and Douyin creator collection is live-accepted; the optional Bilibili complete-mode blocker recorded in `PROJECT_CONTEXT.md` remains intentionally unresolved.
 
 ## Versions
 
-- `v15.2.1` (draft, not released): Bilibili complete-mode CDP detail completion for non-video dynamics, fill-only engagement merging, and exact-detail HTTP risk stops
+- `v15.2.1` (draft, not released): restored ordinary Bilibili/Douyin creator capture, safe source-timeout diagnostics, Douyin exact-page DOM fallback, and the earlier Bilibili complete-mode CDP detail candidate
 - `v15.2.0`: Xiaohongshu CDP-only ownership, request-bound comments, stricter detail evidence validation, safer screenshot fallback, and duplicate-page pagination hardening
 - `v15.0.0`: CDP detail capture, optional Bilibili BrowserSkill assistance, and private screenshot release
 - `v12.0.0`: first standalone shared-runtime release

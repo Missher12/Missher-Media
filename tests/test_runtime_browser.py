@@ -341,6 +341,47 @@ def test_authorized_authentication_uses_and_closes_only_a_temporary_platform_pag
     assert playwright.stopped is True
 
 
+def test_authorized_entry_navigation_timeout_is_a_platform_precondition() -> None:
+    from runtime.media_missher_runtime import browser as module
+
+    class TimeoutPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__("about:blank")
+            self.closed = False
+
+        async def goto(self, url: str, **kwargs: object) -> object:
+            assert kwargs.get("wait_until") == "domcontentloaded"
+            raise module.PlaywrightTimeoutError("synthetic entry timeout")
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[TimeoutPage] = []
+
+        async def new_page(self) -> TimeoutPage:
+            page = TimeoutPage()
+            self.pages.append(page)
+            return page
+
+    context = Context()
+    remote = FakeBrowser([])
+    remote.contexts = [context]
+    session = module.BrowserSession(
+        FakePlaywright(remote), remote, allow_navigation=True
+    )
+
+    with pytest.raises(module.PreconditionError, match="entry navigation timed out"):
+        _run(session.require_authenticated_page("douyin"))
+
+    _run(session.close())
+    assert context.pages[0].closed is True
+
+
 def test_authorized_temporary_page_is_cleaned_up_when_authentication_fails() -> None:
     from runtime.media_missher_runtime.browser import BrowserSession, PreconditionError
 

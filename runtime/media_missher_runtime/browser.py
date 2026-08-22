@@ -8,9 +8,11 @@ from urllib.parse import urlparse
 
 
 try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
     from playwright.async_api import async_playwright
 except ImportError:  # pragma: no cover - exercised when a real browser is configured
     async_playwright = None
+    PlaywrightTimeoutError = TimeoutError
 
 
 _HOSTS = {
@@ -236,11 +238,14 @@ class BrowserSession:
         page = await context.new_page()
         self._temporary_pages.append(page)
         self._prepared_pages[platform] = page
-        response = await self.navigate(
-            page,
-            _ENTRY_URLS[platform],
-            allowed_hosts=tuple(_HOSTS[platform]),
-        )
+        try:
+            response = await self.navigate(
+                page,
+                _ENTRY_URLS[platform],
+                allowed_hosts=tuple(_HOSTS[platform]),
+            )
+        except PlaywrightTimeoutError as error:
+            raise PreconditionError("platform entry navigation timed out") from error
         status = getattr(response, "status", None)
         if isinstance(status, bool) or not isinstance(status, int):
             raise PreconditionError("platform entry navigation returned no response")

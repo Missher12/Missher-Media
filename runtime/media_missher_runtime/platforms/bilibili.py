@@ -35,12 +35,14 @@ _BILIBILI_HOSTS = (
 )
 _API_HOST = "api.bilibili.com"
 _FEED_PATH = "/x/polymer/web-dynamic/v1/feed/space"
+_FEED_IDENTITY_QUERY_KEYS = ("host_mid", "mid")
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _PLACEHOLDER_TITLES = frozenset({"", "-", "--", "暂无标题", "untitled"})
 _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控"})
 _CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _MAX_TITLE_CHARS = 100
 _MAX_DESC_CHARS = 20_000
+_SAFE_OBSERVED_API_PATH = re.compile(r"/x/[A-Za-z0-9_./-]{1,180}")
 _DYNAMIC_TARGET_TIMEOUT_MS = 5_000
 _SENSITIVE_URL_PART = re.compile(
     r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec|auth|signature|sign|expires?|expiry)",
@@ -54,6 +56,33 @@ class CollectionStopped(RuntimeError):
 
 class SourceResponseError(RuntimeError):
     """A browser-generated source response could not be consumed safely."""
+
+
+class CaptureTimeout(TimeoutError):
+    """The initial creator response did not arrive inside the bounded wait."""
+
+    _CODES = frozenset({"creator-capture-timeout"})
+    _OBSERVATIONS = frozenset(
+        {"no-endpoint", "identity-mismatch", "unclassified"}
+    )
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        observation: str = "unclassified",
+        routes: Sequence[str] = (),
+    ) -> None:
+        if code not in self._CODES:
+            raise ValueError("unsupported capture timeout code")
+        if observation not in self._OBSERVATIONS:
+            raise ValueError("unsupported capture timeout observation")
+        self.code = code
+        self.observation = observation
+        self.routes = tuple(
+            route for route in routes if _safe_observed_route_text(route)
+        )[:12]
+        super().__init__(code)
 
 
 @dataclass(slots=True)
@@ -132,11 +161,24 @@ class BilibiliCollector:
         if self.request.uid is None:
             raise ValueError("creator collection requires uid")
         page = self.browser.require_page("bilibili")
-        response = await _capture_feed_while(
-            page,
-            self.request.uid,
-            lambda: self._navigate(page, _creator_page_url(self.request.uid)),
-        )
+        capture_observation = {"value": "no-endpoint"}
+        observed_routes: set[str] = set()
+        try:
+            response = await _capture_feed_while(
+                page,
+                self.request.uid,
+                lambda: self._navigate(page, _creator_page_url(self.request.uid)),
+                observation=capture_observation,
+                observed_routes=observed_routes,
+            )
+        except PlaywrightTimeoutError as error:
+            risk_observation = await _read_dynamic_feed_risk(page)
+            _raise_for_risk_observation(risk_observation)
+            raise CaptureTimeout(
+                "creator-capture-timeout",
+                observation=capture_observation["value"],
+                routes=sorted(observed_routes),
+            ) from error
         records = await self._collect_feed_pages(page, response)
         for record in records:
             opened_video = False
@@ -184,7 +226,9 @@ class BilibiliCollector:
         records: list[dict[str, Any]] = []
         native_ids: set[str] = set()
         for page_number in range(self.request.page_cap):
-            data = _feed_data(await _response_payload(response))
+            payload = await _response_payload(response)
+            _require_feed_payload_binding(response, payload, self.request.uid)
+            data = _feed_data(payload)
             added = _append_creator_records(records, native_ids, _items(data.get("items")), self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
@@ -714,21 +758,102 @@ def _safe_content_url(value: object) -> str | None:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
 
 
-async def _capture_feed_while(page: Any, expected_uid: str, action: Any) -> Any:
-    predicate = lambda response: _is_feed_response(response, expected_uid)
-    async with page.expect_response(predicate, timeout=10_000) as response_info:
+async def _capture_feed_while(
+    page: Any,
+    expected_uid: str,
+    action: Any,
+    *,
+    observation: dict[str, str] | None = None,
+    observed_routes: set[str] | None = None,
+    timeout_ms: int = 10_000,
+) -> Any:
+    def predicate(response: Any) -> bool:
+        if observed_routes is not None:
+            if route := _safe_observed_api_route(response):
+                observed_routes.add(route)
+        binding = _feed_response_binding(response, expected_uid)
+        if observation is not None and binding == "mismatch":
+            observation["value"] = "identity-mismatch"
+        return binding in {"exact", "unbound"}
+
+    async with page.expect_response(predicate, timeout=timeout_ms) as response_info:
         await action()
     return await response_info.value
 
 
 def _is_feed_response(response: Any, expected_uid: str | None = None) -> bool:
+    binding = _feed_response_binding(response, expected_uid)
+    return binding == "endpoint" if expected_uid is None else binding == "exact"
+
+
+def _is_feed_candidate_response(response: Any, expected_uid: str) -> bool:
+    return _feed_response_binding(response, expected_uid) in {"exact", "unbound"}
+
+
+def _safe_observed_api_route(response: Any) -> str | None:
+    parsed = urlparse(getattr(response, "url", ""))
+    hostname = parsed.hostname
+    if not isinstance(hostname, str) or not (
+        hostname == "bilibili.com" or hostname.endswith(".bilibili.com")
+    ):
+        return None
+    if _SAFE_OBSERVED_API_PATH.fullmatch(parsed.path) is None:
+        return None
+    route = f"{hostname}{parsed.path}"
+    return route if _safe_observed_route_text(route) else None
+
+
+def _safe_observed_route_text(value: object) -> bool:
+    if not isinstance(value, str) or not 1 <= len(value) <= 240:
+        return False
+    if any(character in value for character in ("?", "#", "@", "=", "\\")):
+        return False
+    hostname, separator, path = value.partition("/")
+    return bool(separator) and (
+        hostname == "bilibili.com" or hostname.endswith(".bilibili.com")
+    ) and _SAFE_OBSERVED_API_PATH.fullmatch(f"/{path}") is not None
+
+
+def _feed_response_binding(response: Any, expected_uid: str | None) -> str | None:
     parsed = urlparse(getattr(response, "url", ""))
     if parsed.hostname != _API_HOST or parsed.path != _FEED_PATH:
-        return False
+        return None
     if expected_uid is None:
-        return True
-    values = parse_qs(parsed.query, keep_blank_values=True).get("host_mid", [])
-    return values == [expected_uid]
+        return "endpoint"
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    observed = next(
+        (query[key] for key in _FEED_IDENTITY_QUERY_KEYS if query.get(key)),
+        [],
+    )
+    if not observed:
+        return "unbound"
+    return "exact" if all(value == expected_uid for value in observed) else "mismatch"
+
+
+def _require_feed_payload_binding(
+    response: Any, payload: Mapping[str, Any], expected_uid: str
+) -> None:
+    binding = _feed_response_binding(response, expected_uid)
+    if binding == "exact":
+        return
+    if binding != "unbound":
+        raise SourceResponseError("Bilibili creator response identity mismatched")
+    items = _items(_feed_data(payload).get("items"))
+    if not items:
+        raise SourceResponseError("Bilibili creator payload identity is unavailable")
+    for item in items:
+        author = _mapping(_mapping(item).get("modules")).get("module_author")
+        identity = _identity_text(_mapping(author).get("mid"))
+        if identity != expected_uid:
+            raise SourceResponseError("Bilibili creator payload identity mismatched")
+
+
+def _identity_text(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:

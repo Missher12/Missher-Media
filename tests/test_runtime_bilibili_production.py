@@ -81,6 +81,52 @@ def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
     assert _is_feed_response(right, "target") is True
 
 
+def test_safe_observed_api_route_omits_query_and_rejects_dynamic_paths() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        _safe_observed_api_route,
+    )
+
+    response = Response(
+        {},
+        url=(
+            "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space-v2"
+            "?host_mid=must-not-leak&token=must-not-leak"
+        ),
+    )
+
+    assert _safe_observed_api_route(response) == (
+        "api.bilibili.com/x/polymer/web-dynamic/v1/feed/space-v2"
+    )
+    assert _safe_observed_api_route(
+        Response({}, url="https://space.bilibili.com/must-not-leak/dynamic")
+    ) is None
+
+
+@pytest.mark.parametrize("identity_key", ("host_mid", "mid"))
+def test_creator_response_predicate_accepts_exact_official_identity_aliases(
+    identity_key: str,
+) -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import _is_feed_response
+
+    exact = Response(
+        {},
+        url=(
+            "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+            f"?{identity_key}=target"
+        ),
+    )
+    conflicting = Response(
+        {},
+        url=(
+            "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+            f"?{identity_key}=target&{identity_key}=other"
+        ),
+    )
+
+    assert _is_feed_response(exact, "target") is True
+    assert _is_feed_response(conflicting, "target") is False
+
+
 @dataclass
 class ResponseWaiter:
     response: Response
@@ -95,6 +141,22 @@ class ResponseWaiter:
     def value(self) -> Coroutine[Any, Any, Response]:
         async def result() -> Response:
             return self.response
+
+        return result()
+
+
+@dataclass
+class InitialTimeoutWaiter:
+    async def __aenter__(self) -> "InitialTimeoutWaiter":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    @property
+    def value(self) -> Coroutine[Any, Any, Response]:
+        async def result() -> Response:
+            raise PlaywrightTimeoutError("synthetic initial response timeout")
 
         return result()
 
@@ -172,6 +234,29 @@ class ProductionBrowser:
             raise PreconditionError("navigation")
         await page.goto(url)
         return self.navigation_result  # type: ignore[return-value]
+
+
+def test_creator_initial_response_timeout_has_a_safe_specific_code() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        CaptureTimeout,
+        collect_creator,
+    )
+
+    class InitialTimeoutPage(CapturePage):
+        def expect_response(self, predicate: Any, **kwargs: Any) -> InitialTimeoutWaiter:
+            assert kwargs["timeout"] == 10_000
+            return InitialTimeoutWaiter()
+
+    with pytest.raises(CaptureTimeout) as timeout:
+        _run(
+            collect_creator(
+                CollectionRequest(platform="bilibili", count=1, uid="creator"),
+                ProductionBrowser(InitialTimeoutPage()),
+            )
+        )
+
+    assert timeout.value.code == "creator-capture-timeout"
+    assert timeout.value.observation == "no-endpoint"
 
 
 @dataclass
@@ -359,6 +444,48 @@ def test_creator_navigates_and_captures_generated_api_responses_without_page_jso
     assert records[0]["author"] == "Synthetic author"
     assert records[0]["detail_completed"] is False
     assert records[0]["observed_at"].endswith("+00:00")
+
+
+def test_creator_accepts_an_unbound_query_only_after_exact_payload_identity() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import collect_creator
+
+    item = _item("payload-bound")
+    item["modules"]["module_author"]["mid"] = "synthetic-user"
+    response = _feed(item, has_more=False)
+    response.url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+
+    records = _run(
+        collect_creator(
+            CollectionRequest(
+                platform="bilibili", count=1, uid="synthetic-user"
+            ),
+            ProductionBrowser(CapturePage(responses=[response])),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["payload-bound"]
+
+
+def test_creator_rejects_an_unbound_query_without_exact_payload_identity() -> None:
+    from runtime.media_missher_runtime.platforms.bilibili import (
+        SourceResponseError,
+        collect_creator,
+    )
+
+    item = _item("wrong-payload")
+    item["modules"]["module_author"]["mid"] = "other"
+    response = _feed(item, has_more=False)
+    response.url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+
+    with pytest.raises(SourceResponseError, match="payload identity"):
+        _run(
+            collect_creator(
+                CollectionRequest(
+                    platform="bilibili", count=1, uid="synthetic-user"
+                ),
+                ProductionBrowser(CapturePage(responses=[response])),
+            )
+        )
 
 
 def test_creator_navigation_requires_explicit_authorization() -> None:

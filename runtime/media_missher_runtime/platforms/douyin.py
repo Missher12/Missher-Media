@@ -27,7 +27,9 @@ _SEARCH_PATH = "/aweme/v1/web/general/search/"
 _CHALLENGE_REASONS = frozenset({"challenge-selector", "请完成验证", "访问受限", "请求过于频繁", "账号异常", "风控", "安全验证", "验证码"})
 _RISK_CODES = frozenset({461, 471, 999})
 _CONTENT_QUERY_KEYS = frozenset({"keyword", "q", "uid", "sec_uid"})
+_CREATOR_IDENTITY_QUERY_KEYS = ("sec_user_id", "sec_uid", "uid")
 _AWEME_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_SAFE_OBSERVED_API_PATH = re.compile(r"/aweme/[A-Za-z0-9_./-]{1,180}")
 _CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _SENSITIVE_URL_VALUE = re.compile(
     r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec)",
@@ -49,6 +51,33 @@ class SourceResponseError(RuntimeError):
     """A browser-generated Douyin response cannot be safely consumed."""
 
 
+class CaptureTimeout(TimeoutError):
+    """The initial creator response did not arrive inside the bounded wait."""
+
+    _CODES = frozenset({"creator-capture-timeout"})
+    _OBSERVATIONS = frozenset(
+        {"no-endpoint", "identity-mismatch", "unclassified"}
+    )
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        observation: str = "unclassified",
+        routes: Sequence[str] = (),
+    ) -> None:
+        if code not in self._CODES:
+            raise ValueError("unsupported capture timeout code")
+        if observation not in self._OBSERVATIONS:
+            raise ValueError("unsupported capture timeout observation")
+        self.code = code
+        self.observation = observation
+        self.routes = tuple(
+            route for route in routes if _safe_observed_route_text(route)
+        )[:12]
+        super().__init__(code)
+
+
 @dataclass(slots=True)
 class DouyinCollector:
     request: CollectionRequest
@@ -65,13 +94,44 @@ class DouyinCollector:
         if not getattr(self.browser, "allow_navigation", False):
             _require_open_target(page, target, "matching Douyin creator page")
         await _raise_for_page_challenge(page)
-        creator_predicate = lambda response: _is_creator_response(
-            response, self.request.uid
-        )
-        if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, creator_predicate, lambda: self._navigate_and_check(page, target))
-        else:
-            response = await _capture_response_while(page, creator_predicate, _noop)
+        observation = {"value": "no-endpoint"}
+        observed_routes: set[str] = set()
+
+        def creator_predicate(response: Any) -> bool:
+            if route := _safe_observed_api_route(response):
+                observed_routes.add(route)
+            binding = _creator_response_binding(response, self.request.uid)
+            if binding == "mismatch":
+                observation["value"] = "identity-mismatch"
+            return binding in {"exact", "unbound"}
+        try:
+            if getattr(self.browser, "allow_navigation", False):
+                response = await _capture_response_while(
+                    page,
+                    creator_predicate,
+                    lambda: self._navigate_and_check(page, target),
+                )
+            else:
+                response = await _capture_response_while(
+                    page, creator_predicate, _noop
+                )
+        except PlaywrightTimeoutError as error:
+            await _raise_for_page_challenge(page)
+            _require_open_target(
+                page, target, "matching Douyin creator page"
+            )
+            dom_observation = await _read_creator_dom(page)
+            await _raise_for_page_challenge(page)
+            records = _creator_dom_records(
+                dom_observation, self.request.target_count
+            )
+            if records:
+                return records
+            raise CaptureTimeout(
+                "creator-capture-timeout",
+                observation=observation["value"],
+                routes=sorted(observed_routes),
+            ) from error
         return await self._collect_pages(page, response, source="creator")
 
     async def search(self) -> list[dict[str, Any]]:
@@ -95,13 +155,17 @@ class DouyinCollector:
         native_ids: set[str] = set()
         prior_cursor: object = _MISSING
         predicate = (
-            (lambda candidate: _is_creator_response(candidate, self.request.uid))
+            (lambda candidate: _is_creator_candidate_response(candidate, self.request.uid))
             if source == "creator"
             else _is_search_response
         )
         for page_number in range(self.request.page_cap):
             await _raise_for_page_challenge(page)
             payload = await _response_payload(response)
+            if source == "creator" and self.request.uid is not None:
+                _require_creator_payload_binding(
+                    response, payload, self.request.uid
+                )
             items, has_more, cursor = _page_items(payload, source)
             added = _append_records(
                 records,
@@ -145,21 +209,218 @@ async def search(request: CollectionRequest, browser: BrowserSession | Any) -> l
     return await DouyinCollector(request, browser).search()
 
 
-async def _capture_response_while(page: Any, predicate: Callable[[Any], bool], action: Callable[[], Any]) -> Any:
-    async with page.expect_response(predicate, timeout=10_000) as response_info:
+async def _capture_response_while(
+    page: Any,
+    predicate: Callable[[Any], bool],
+    action: Callable[[], Any],
+    *,
+    timeout_ms: int = 10_000,
+) -> Any:
+    async with page.expect_response(predicate, timeout=timeout_ms) as response_info:
         await action()
     return await response_info.value
 
 
 def _is_creator_response(response: Any, expected_uid: str | None = None) -> bool:
+    binding = _creator_response_binding(response, expected_uid)
+    return binding == "endpoint" if expected_uid is None else binding == "exact"
+
+
+def _is_creator_candidate_response(response: Any, expected_uid: str) -> bool:
+    return _creator_response_binding(response, expected_uid) in {"exact", "unbound"}
+
+
+def _safe_observed_api_route(response: Any) -> str | None:
+    parsed = urlparse(getattr(response, "url", ""))
+    hostname = parsed.hostname
+    if not isinstance(hostname, str) or not (
+        hostname == "douyin.com" or hostname.endswith(".douyin.com")
+    ):
+        return None
+    if _SAFE_OBSERVED_API_PATH.fullmatch(parsed.path) is None:
+        return None
+    route = f"{hostname}{parsed.path}"
+    return route if _safe_observed_route_text(route) else None
+
+
+def _safe_observed_route_text(value: object) -> bool:
+    if not isinstance(value, str) or not 1 <= len(value) <= 240:
+        return False
+    if any(character in value for character in ("?", "#", "@", "=", "\\")):
+        return False
+    hostname, separator, path = value.partition("/")
+    return bool(separator) and (
+        hostname == "douyin.com" or hostname.endswith(".douyin.com")
+    ) and _SAFE_OBSERVED_API_PATH.fullmatch(f"/{path}") is not None
+
+
+def _creator_response_binding(
+    response: Any, expected_uid: str | None
+) -> str | None:
     parsed = urlparse(getattr(response, "url", ""))
     if parsed.hostname != _DOUYIN_HOST or parsed.path != _CREATOR_PATH:
-        return False
+        return None
     if expected_uid is None:
-        return True
+        return "endpoint"
     query = parse_qs(parsed.query, keep_blank_values=True)
-    values = query.get("sec_user_id", []) or query.get("uid", [])
-    return values == [expected_uid]
+    observed = next(
+        (query[key] for key in _CREATOR_IDENTITY_QUERY_KEYS if query.get(key)),
+        [],
+    )
+    if not observed:
+        return "unbound"
+    return "exact" if all(value == expected_uid for value in observed) else "mismatch"
+
+
+def _require_creator_payload_binding(
+    response: Any, payload: Mapping[str, Any], expected_uid: str
+) -> None:
+    binding = _creator_response_binding(response, expected_uid)
+    if binding == "exact":
+        return
+    if binding != "unbound":
+        raise SourceResponseError("Douyin creator response identity mismatched")
+    items = [item for item in _items(payload.get("aweme_list")) if isinstance(item, Mapping)]
+    if not items:
+        raise SourceResponseError("Douyin creator payload identity is unavailable")
+    for item in items:
+        author = _mapping(item.get("author"))
+        identities = (
+            _identity_text(author.get("sec_uid")),
+            _identity_text(author.get("sec_user_id")),
+        )
+        if expected_uid not in identities:
+            raise SourceResponseError("Douyin creator payload identity mismatched")
+
+
+def _identity_text(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
+async def _read_creator_dom(page: Any) -> Mapping[str, Any]:
+    result = await page.evaluate(
+        """/* MEDIA_MISSHER_DOUYIN_CREATOR_DOM */ () => {
+            const visible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || '1') !== 0
+                    && rect.width > 0 && rect.height > 0;
+            };
+            const bodyText = document.body?.innerText || '';
+            const challengeSelector = document.querySelector(
+                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]'
+            );
+            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
+            const selectors = [
+                '[data-e2e="user-post-list"]',
+                '[data-e2e="scroll-list"]',
+                'main'
+            ];
+            let containers = [];
+            for (const selector of selectors) {
+                containers = Array.from(document.querySelectorAll(selector))
+                    .filter((node) => visible(node) && node.querySelector('a[href*="/video/"]'));
+                if (containers.length) break;
+            }
+            if (containers.length !== 1) {
+                return {
+                    risk_text: challengeSelector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || ''),
+                    list_unique: false,
+                    cards: [],
+                };
+            }
+            const seen = new Set();
+            const cards = [];
+            for (const anchor of containers[0].querySelectorAll('a[href*="/video/"]')) {
+                let parsed;
+                try {
+                    parsed = new URL(anchor.getAttribute('href') || '', window.location.href);
+                } catch (_error) {
+                    continue;
+                }
+                const segments = parsed.pathname.split('/').filter(Boolean);
+                if (parsed.protocol !== 'https:'
+                    || parsed.hostname !== 'www.douyin.com'
+                    || segments.length !== 2
+                    || segments[0] !== 'video'
+                    || !/^[A-Za-z0-9_-]{1,64}$/.test(segments[1])
+                    || seen.has(segments[1])) continue;
+                seen.add(segments[1]);
+                const card = anchor.closest('li, article, [data-e2e*="post-item"]') || anchor;
+                const image = card.querySelector('img') || anchor.querySelector('img');
+                const title = anchor.getAttribute('aria-label')
+                    || image?.getAttribute('alt')
+                    || anchor.getAttribute('title')
+                    || '';
+                cards.push({
+                    aweme_id: segments[1],
+                    title,
+                    cover: image?.currentSrc || image?.getAttribute('src') || '',
+                });
+            }
+            return {
+                risk_text: challengeSelector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || ''),
+                list_unique: true,
+                cards,
+            };
+        }"""
+    )
+    return _mapping(result)
+
+
+def _creator_dom_records(
+    observation: Mapping[str, Any], target: int | None
+) -> list[dict[str, Any]]:
+    risk_text = _text(observation.get("risk_text"))
+    if risk_text is not None and (
+        risk_text in _CHALLENGE_REASONS or "captcha" in risk_text.casefold()
+    ):
+        raise CollectionStopped(risk_text)
+    if observation.get("list_unique") is not True:
+        return []
+    records: list[dict[str, Any]] = []
+    native_ids: set[str] = set()
+    observed_at = _observed_at()
+    for raw in _items(observation.get("cards")):
+        card = _mapping(raw)
+        aweme_id = _safe_aweme_id(card.get("aweme_id"))
+        if aweme_id is None or aweme_id in native_ids:
+            continue
+        native_ids.add(aweme_id)
+        link = _video_link(aweme_id)
+        records.append(
+            {
+                "platform": "douyin",
+                "type": "video",
+                "aweme_id": aweme_id,
+                "title": _text(card.get("title")),
+                "link": link,
+                "date": None,
+                "liked": None,
+                "comments": None,
+                "shares": None,
+                "collected": None,
+                "plays": None,
+                "duration_ms": None,
+                "id": aweme_id,
+                "native_id": aweme_id,
+                "url": link,
+                "author": None,
+                "author_avatar": None,
+                "cover": _safe_content_url(card.get("cover")),
+                "published_at": None,
+                "observed_at": observed_at,
+            }
+        )
+        if target is not None and len(records) >= target:
+            break
+    return records
 
 
 def _is_search_response(response: Any) -> bool:

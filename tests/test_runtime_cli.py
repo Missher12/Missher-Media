@@ -686,6 +686,48 @@ def test_xhs_capture_timeout_keeps_only_its_fixed_code(
     assert report["reason"] == capture_code
 
 
+@pytest.mark.parametrize("platform", ["bilibili", "douyin"])
+def test_creator_capture_timeout_keeps_only_its_fixed_code(
+    platform: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = __import__(
+        f"runtime.media_missher_runtime.platforms.{platform}",
+        fromlist=["CaptureTimeout"],
+    )
+    dispatcher = FakeDispatcher(
+        {
+            platform: module.CaptureTimeout(
+                "creator-capture-timeout", observation="identity-mismatch"
+            )
+        }
+    )
+
+    from runtime.media_missher_runtime.cli import main
+
+    returncode = main(
+        [
+            "creator",
+            "--platforms",
+            platform,
+            f"--{platform}-uid",
+            "private-uid",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert returncode == 1
+    _, manifest = _manifest(tmp_path)
+    assert manifest["diagnostics"] == {
+        platform: {"kind": "timeout", "code": "creator-capture-timeout"}
+    }
+    assert capsys.readouterr().err.strip() == (
+        f"media-missher-observation platform={platform} "
+        "stage=creator-source result=identity-mismatch"
+    )
+
+
 @pytest.mark.parametrize(
     ("reason", "code"),
     [

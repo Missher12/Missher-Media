@@ -45,6 +45,52 @@ def test_creator_response_predicate_is_bound_to_the_requested_uid() -> None:
     assert _is_creator_response(right, "target") is True
 
 
+def test_safe_observed_api_route_omits_query_and_rejects_dynamic_paths() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import (
+        _safe_observed_api_route,
+    )
+
+    response = Response(
+        {},
+        url=(
+            "https://api.douyin.com/aweme/v1/web/tab/feed/"
+            "?sec_user_id=must-not-leak&token=must-not-leak"
+        ),
+    )
+
+    assert _safe_observed_api_route(response) == (
+        "api.douyin.com/aweme/v1/web/tab/feed/"
+    )
+    assert _safe_observed_api_route(
+        Response({}, url="https://www.douyin.com/user/must-not-leak")
+    ) is None
+
+
+@pytest.mark.parametrize("identity_key", ("sec_user_id", "sec_uid", "uid"))
+def test_creator_response_predicate_accepts_exact_official_identity_aliases(
+    identity_key: str,
+) -> None:
+    from runtime.media_missher_runtime.platforms.douyin import _is_creator_response
+
+    exact = Response(
+        {},
+        url=(
+            "https://www.douyin.com/aweme/v1/web/aweme/post/"
+            f"?{urlencode({identity_key: 'target'})}"
+        ),
+    )
+    conflicting = Response(
+        {},
+        url=(
+            "https://www.douyin.com/aweme/v1/web/aweme/post/"
+            f"?{urlencode([(identity_key, 'target'), (identity_key, 'other')])}"
+        ),
+    )
+
+    assert _is_creator_response(exact, "target") is True
+    assert _is_creator_response(conflicting, "target") is False
+
+
 @dataclass
 class ResponseWaiter:
     response: Response
@@ -92,6 +138,22 @@ class LazyResponseWaiter:
 
 
 @dataclass
+class InitialTimeoutWaiter:
+    async def __aenter__(self) -> "InitialTimeoutWaiter":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    @property
+    def value(self) -> Coroutine[Any, Any, Response]:
+        async def result() -> Response:
+            raise PlaywrightTimeoutError("synthetic initial response timeout")
+
+        return result()
+
+
+@dataclass
 class CapturePage:
     url: str = "https://www.douyin.com/"
     responses: list[Response] = field(default_factory=list)
@@ -103,7 +165,7 @@ class CapturePage:
     def expect_response(self, predicate: Any, **kwargs: Any) -> ResponseWaiter:
         response = self.responses.pop(0)
         assert predicate(response)
-        assert kwargs["timeout"] == 10_000
+        assert kwargs["timeout"] in {10_000, 30_000}
         return ResponseWaiter(response)
 
     async def goto(self, url: str, **kwargs: Any) -> None:
@@ -129,7 +191,7 @@ class ChallengeTimingPage(CapturePage):
     listener_waiters: list[LazyResponseWaiter] = field(default_factory=list)
 
     def expect_response(self, predicate: Any, **kwargs: Any) -> LazyResponseWaiter:
-        assert kwargs["timeout"] == 10_000
+        assert kwargs["timeout"] in {10_000, 30_000}
         waiter = LazyResponseWaiter(self, predicate)
         self.listener_waiters.append(waiter)
         return waiter
@@ -163,6 +225,67 @@ class ProductionBrowser:
             raise PreconditionError("navigation")
         await page.goto(url)
         return self.navigation_result
+
+
+def test_creator_initial_response_timeout_has_a_safe_specific_code() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import (
+        CaptureTimeout,
+        collect_creator,
+    )
+
+    class InitialTimeoutPage(CapturePage):
+        def expect_response(self, predicate: Any, **kwargs: Any) -> InitialTimeoutWaiter:
+            assert kwargs["timeout"] == 10_000
+            return InitialTimeoutWaiter()
+
+    with pytest.raises(CaptureTimeout) as timeout:
+        _run(
+            collect_creator(
+                CollectionRequest(platform="douyin", count=1, uid="creator"),
+                ProductionBrowser(InitialTimeoutPage()),
+            )
+        )
+
+    assert timeout.value.code == "creator-capture-timeout"
+    assert timeout.value.observation == "no-endpoint"
+
+
+def test_creator_initial_response_timeout_uses_exact_page_dom_fallback() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator
+
+    class DomFallbackPage(CapturePage):
+        def expect_response(self, predicate: Any, **kwargs: Any) -> InitialTimeoutWaiter:
+            assert kwargs["timeout"] == 10_000
+            return InitialTimeoutWaiter()
+
+        async def evaluate(self, script: str) -> Any:
+            if "MEDIA_MISSHER_DOUYIN_CREATOR_DOM" in script:
+                return {
+                    "risk_text": "",
+                    "list_unique": True,
+                    "cards": [
+                        {
+                            "aweme_id": "dom-one",
+                            "title": "Synthetic DOM title",
+                            "cover": "https://cdn.example.invalid/cover.jpg",
+                        }
+                    ],
+                }
+            return await super().evaluate(script)
+
+    records = _run(
+        collect_creator(
+            CollectionRequest(platform="douyin", count=1, uid="creator"),
+            ProductionBrowser(DomFallbackPage()),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["dom-one"]
+    assert records[0]["link"] == "https://www.douyin.com/video/dom-one"
+    assert records[0]["title"] == "Synthetic DOM title"
+    assert records[0]["cover"] == "https://cdn.example.invalid/cover.jpg"
+    assert records[0]["date"] is None
+    assert records[0]["liked"] is None
 
 
 def _aweme(identifier: str, *, title: object = "Synthetic title", images: object = None, duration: object = 3210) -> dict[str, Any]:
@@ -219,6 +342,42 @@ def test_creator_captures_browser_generated_responses_and_emits_safe_compatibili
     rendered = json.dumps(records)
     for secret in ("sec_uid", "authentication_token", "play_addr", "url_list", "must-not-leak"):
         assert secret not in rendered
+
+
+def test_creator_accepts_an_unbound_query_only_after_exact_payload_identity() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import collect_creator
+
+    item = _aweme("payload-bound")
+    item["author"]["sec_uid"] = "creator"
+    response = _creator(item, has_more=False)
+    response.url = "https://www.douyin.com/aweme/v1/web/aweme/post/"
+
+    records = _run(
+        collect_creator(
+            CollectionRequest(platform="douyin", count=1, uid="creator"),
+            ProductionBrowser(CapturePage(responses=[response])),
+        )
+    )
+
+    assert [record["native_id"] for record in records] == ["payload-bound"]
+
+
+def test_creator_rejects_an_unbound_query_without_exact_payload_identity() -> None:
+    from runtime.media_missher_runtime.platforms.douyin import (
+        SourceResponseError,
+        collect_creator,
+    )
+
+    response = _creator(_aweme("wrong-payload"), has_more=False)
+    response.url = "https://www.douyin.com/aweme/v1/web/aweme/post/"
+
+    with pytest.raises(SourceResponseError, match="payload identity"):
+        _run(
+            collect_creator(
+                CollectionRequest(platform="douyin", count=1, uid="creator"),
+                ProductionBrowser(CapturePage(responses=[response])),
+            )
+        )
 
 
 def test_aweme_parser_restores_safe_public_avatar_and_cover_without_signed_parameters() -> None:
