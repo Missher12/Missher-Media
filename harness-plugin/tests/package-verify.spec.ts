@@ -41,6 +41,7 @@ describe('canonical package verification', () => {
     const result = await verifyPackage(await fakeArchive())
     expect(result.bytes).toBeGreaterThan(0)
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/u)
+    expect(result.entrySha256).toMatch(/^[a-f0-9]{64}$/u)
   })
 
   it('rejects a file outside the package allowlist', async () => {

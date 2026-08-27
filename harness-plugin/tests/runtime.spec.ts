@@ -103,6 +103,26 @@ describe('runtime lifecycle', () => {
     expect(runner).not.toHaveBeenCalled()
   })
 
+  it('reuses the normal executable symlink created by a Python venv', async () => {
+    const setup = await fixture()
+    const target = join(setup.runtimeHome, 'venv', 'bin', 'python3.11')
+    const python = join(setup.runtimeHome, 'venv', 'bin', 'python')
+    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '15.2.1\n')
+    await writeFile(target, '#!/bin/sh\n', { mode: 0o700 })
+    await chmod(target, 0o700)
+    await symlink('python3.11', python)
+    const runner = vi.fn(() => Promise.reject(new Error('must_not_install')))
+
+    const layout = await ensureRuntime(setup.config, {
+      payloadRoot: setup.payloadRoot,
+      platform: 'darwin',
+      processRunner: runner,
+    })
+
+    expect(layout.python).toBe(python)
+    expect(runner).not.toHaveBeenCalled()
+  })
+
   it('atomically provisions a stale runtime from the embedded payload', async () => {
     const setup = await fixture()
     await markRuntimeReady(setup.runtimeHome, '15.0.0')

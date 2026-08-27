@@ -35,4 +35,14 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(setup).not.toContain('command -v node')
     expect(setup).not.toContain('command -v pnpm')
   })
+
+  it('forces same-spec refreshes and verifies the installed entry bytes', async () => {
+    const installer = await readFile(
+      resolve(pluginRoot, 'scripts', 'install-current-profile.mjs'),
+      'utf8',
+    )
+    expect(installer).toContain("'add', '--force', stagedArchive")
+    expect(installer).toContain('verified.sha256.slice(0, 16)')
+    expect(installer).toContain('harness_plugin_bytes_mismatch')
+  })
 })

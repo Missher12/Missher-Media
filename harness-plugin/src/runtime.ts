@@ -65,6 +65,15 @@ async function regularFile(path: string, code: string): Promise<void> {
   if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(code)
 }
 
+async function executableFile(path: string, code: string): Promise<void> {
+  const metadata = await lstat(path)
+  if (!metadata.isFile() && !metadata.isSymbolicLink()) throw new Error(code)
+  const target = await realpath(path)
+  const targetMetadata = await lstat(target)
+  if (!targetMetadata.isFile()) throw new Error(code)
+  await access(path, constants.X_OK)
+}
+
 async function privateProfile(path: string): Promise<void> {
   await regularFile(path, 'profile_invalid')
   const metadata = await lstat(path)
@@ -91,8 +100,7 @@ async function exactRuntimePython(runtimeHome: string): Promise<string | undefin
   const python = resolve(runtimeHome, 'venv', 'bin', 'python')
   try {
     await regularFile(versionPath, 'runtime_version_invalid')
-    await regularFile(python, 'runtime_python_invalid')
-    await access(python, constants.X_OK)
+    await executableFile(python, 'runtime_python_invalid')
     if (await readFile(versionPath, 'utf8') !== `${EMBEDDED_VERSION}\n`) return undefined
     return python
   } catch (error) {

@@ -34,6 +34,6 @@ pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
 
 ## 手动 CLI 回退
 
-普通用户不需要此步骤。维护者可以用 Harness CLI 的 `plugin --profile web add <archive>` 与 `remove dsh-media-missher` 做诊断；必须设置 `DSH_DESKTOP_PNPM_ENTRY` 指向 Harness.app 内置 pnpm。安装前的 profile 备份位于 `~/.dsh/backups/media-missher-plugin-*/package.json`。
+普通用户不需要此步骤。维护者可以用 Harness CLI 的 `plugin --profile web add <archive>` 与 `remove dsh-media-missher` 做诊断；必须设置 `DSH_DESKTOP_PNPM_ENTRY` 指向 Harness.app 内置 pnpm。一键安装器会把验过的归档固定到 `~/.dsh/artifacts/media-missher/` 的 SHA 命名文件，避免同版本缓存和仓库移动影响，安装前的 profile 备份位于 `~/.dsh/backups/media-missher-plugin-*/package.json`。
 
 本包为 `UNLICENSED` 私有 Bundle，不得公开发布到 npm 或公共 Release。

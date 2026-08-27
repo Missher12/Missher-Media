@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import ExcelJS from 'exceljs'
+import { installCurrentProfile } from './install-current-profile.mjs'
 import { verifyPackage } from './verify-package.mjs'
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -112,13 +113,14 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
     await mkdir(dirname(statePath), { recursive: true, mode: 0o700 })
     await writeFile(adjacentPath, 'preserve\n', { mode: 0o600 })
     await writeFile(statePath, 'preserve\n', { mode: 0o600 })
-    run(
-      resolve(options.runtime),
-      resolve(options.cli),
-      ['plugin', '--profile', options.profile, 'add', verified.archive],
-      environment,
-      'native_smoke_install_failed',
-    )
+    await installCurrentProfile([
+      '--archive', verified.archive,
+      '--profile', options.profile,
+      '--runtime', resolve(options.runtime),
+      '--cli', resolve(options.cli),
+      '--pnpm', resolve(options.pnpm),
+      '--dsh-home', dshHome,
+    ], { writeOutput: false })
     installed = true
     const configuration = run(
       resolve(options.runtime),

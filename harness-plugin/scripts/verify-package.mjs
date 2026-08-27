@@ -61,6 +61,7 @@ export async function verifyPackage(requestedArchive) {
   }
 
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-media-package-'))
+  let entrySha256 = ''
   try {
     await execute('/usr/bin/tar', ['-xzf', archive, '-C', temporary])
     const extractedRoot = join(temporary, 'package')
@@ -93,6 +94,9 @@ export async function verifyPackage(requestedArchive) {
     if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '15.2.1\n') {
       throw new Error('package_payload_version_invalid')
     }
+    entrySha256 = createHash('sha256')
+      .update(await readFile(join(extractedRoot, 'lib', 'index.js')))
+      .digest('hex')
     for (const path of files.filter(path => path.startsWith('package/lib/') && path.endsWith('.js'))) {
       const source = await readFile(join(temporary, path), 'utf8')
       for (const marker of [pluginRoot, repositoryRoot, pluginRoot.replaceAll('\\', '/'), repositoryRoot.replaceAll('\\', '/')]) {
@@ -108,6 +112,7 @@ export async function verifyPackage(requestedArchive) {
     archive,
     bytes: bytes.byteLength,
     sha256: createHash('sha256').update(bytes).digest('hex'),
+    entrySha256,
   }
 }
 

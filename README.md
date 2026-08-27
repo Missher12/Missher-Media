@@ -10,7 +10,7 @@ Media@Missher 是 Missher 私用的四平台内容采集工具。当前版本把
 2. 双击根目录的 **`Install Media@Missher Harness Plugin.command`**。
 3. 安装完成后点击弹窗里的“打开 Harness”。
 
-安装器直接使用 Harness.app 自带的 Electron、CLI 和 pnpm，不要求用户安装 Node.js、pnpm，也不要求打开终端。它会先校验内置 Bundle，再备份当前 `web` profile 的 `package.json`，最后确认 `media-missher` 已进入 Harness 的有效 Cordis 配置。
+安装器直接使用 Harness.app 自带的 Electron、CLI 和 pnpm，不要求用户安装 Node.js、pnpm，也不要求打开终端。它会先校验内置 Bundle，把精确字节复制到按 SHA 命名的私有 `~/.dsh/artifacts/media-missher/` 路径，再备份当前 `web` profile 的 `package.json`；最后同时确认已安装入口字节和有效 Cordis 配置，仓库之后移动或删除也不会破坏依赖来源。
 
 如果 macOS 第一次拦截未签名的私有脚本，请在 Finder 中右键该文件并选择“打开”。这不是公开签名发行版；不要关闭系统安全机制。
 

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
 import {
   chmod,
   copyFile,
   lstat,
   mkdir,
+  readFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -93,7 +96,31 @@ async function backupProfilePackage(dshHome, profile) {
   return destination
 }
 
-export async function installCurrentProfile(argv = process.argv.slice(2)) {
+async function stageVerifiedArchive(dshHome, verified) {
+  const directory = join(dshHome, 'artifacts', 'media-missher')
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  if (process.platform !== 'win32') await chmod(directory, 0o700)
+  const destination = join(
+    directory,
+    `dsh-media-missher-0.1.0-${verified.sha256.slice(0, 16)}.tgz`,
+  )
+  try {
+    await copyFile(verified.archive, destination, fsConstants.COPYFILE_EXCL)
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+  }
+  if (process.platform !== 'win32') await chmod(destination, 0o600)
+  const stagedSha256 = createHash('sha256')
+    .update(await readFile(destination))
+    .digest('hex')
+  if (stagedSha256 !== verified.sha256) throw new Error('staged_archive_bytes_mismatch')
+  return destination
+}
+
+export async function installCurrentProfile(
+  argv = process.argv.slice(2),
+  { writeOutput = true } = {},
+) {
   const options = argumentsFrom(argv)
   if ('help' in options) {
     help()
@@ -110,6 +137,7 @@ export async function installCurrentProfile(argv = process.argv.slice(2)) {
     regularFile(pnpm, 'harness_pnpm_missing'),
   ])
   const verified = await verifyPackage(options.archive)
+  const stagedArchive = await stageVerifiedArchive(dshHome, verified)
   const backup = await backupProfilePackage(dshHome, options.profile)
   const environment = {
     ...process.env,
@@ -121,10 +149,25 @@ export async function installCurrentProfile(argv = process.argv.slice(2)) {
   run(
     runtime,
     cli,
-    ['plugin', '--profile', options.profile, 'add', verified.archive],
+    ['plugin', '--profile', options.profile, 'add', '--force', stagedArchive],
     environment,
     'harness_plugin_add_failed',
   )
+  const installedEntry = join(
+    dshHome,
+    'profiles',
+    options.profile,
+    'node_modules',
+    'dsh-media-missher',
+    'lib',
+    'index.js',
+  )
+  const installedEntrySha256 = createHash('sha256')
+    .update(await readFile(installedEntry))
+    .digest('hex')
+  if (installedEntrySha256 !== verified.entrySha256) {
+    throw new Error('harness_plugin_bytes_mismatch')
+  }
   const configuration = run(
     runtime,
     cli,
@@ -141,9 +184,10 @@ export async function installCurrentProfile(argv = process.argv.slice(2)) {
     archive: verified.archive,
     bytes: verified.bytes,
     sha256: verified.sha256,
+    stagedArchive,
     backup,
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`)
+  if (writeOutput) process.stdout.write(`${JSON.stringify(result)}\n`)
   return result
 }
 
