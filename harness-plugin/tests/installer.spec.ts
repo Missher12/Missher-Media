@@ -32,6 +32,8 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(setup).toContain('ELECTRON_RUN_AS_NODE=1')
     expect(setup).toContain('DSH_DESKTOP_PNPM_ENTRY')
     expect(setup).toContain('dsh-media-missher-0.1.0.tgz')
+    expect(setup).toContain('tell application "DeepSeek Harness" to quit')
+    expect(setup).toContain('/usr/bin/open -a "DeepSeek Harness"')
     expect(setup).not.toContain('command -v node')
     expect(setup).not.toContain('command -v pnpm')
   })
