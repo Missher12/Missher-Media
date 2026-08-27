@@ -18,6 +18,14 @@ Harness never receives UIDs as tool arguments and the model result contains no r
 
 The canonical private artifact is `harness-plugin/dist/dsh-media-missher-0.1.0.tgz`. `harness-plugin/scripts/native-smoke.mjs` proves the real Harness CLI lifecycle in a temporary `DSH_HOME`: install, effective-config discovery, default 4x10 synthetic tool projection, six-sheet workbook reopen, uninstall, and preservation of adjacent profile/state files. Public npm or GitHub Release publication remains prohibited until a repository-wide license and provenance review is complete.
 
+### Harness live acceptance (2026-08-28)
+
+The final private Bundle SHA-256 is `fc8ab1412d2ae3484dbe24c28c36390137da6b411c815d5b3562e8f819e4fa65`. The one-click installer copied it to `~/.dsh/artifacts/media-missher/dsh-media-missher-0.1.0-fc8ab1412d2ae348.tgz`, installed it into the real `web` profile, preserved `dsh-missher-evolution`, and proved the installed `lib/index.js` hash matches the verified archive. The exact prior profile manifest is retained in the timestamped private backup reported by the installer.
+
+After the installed payload's live preflight passed against Chrome `152.0.7977.64`, the zero-argument installed tool completed the required sequential 4x10 run at `~/.dsh/media-missher/runs/run-20260827T183804Z-qzh734e9`. Its manifest is `complete`; Bilibili, Xiaohongshu, Douyin, and Weibo each contain exactly ten records with `complete` status and `ok/ok` diagnostics. The tool returned 40 total records and created `Media-Missher-全平台抓取结果-20260827T184039577Z.xlsx` in that run. The directory is mode `0700`; the manifest and workbook are mode `0600`; the run contains no symlink or Feishu artifact; and the XLSX ZIP container passes full integrity testing.
+
+Two real-integration defects were found and fixed before this final acceptance. A normal Python virtual environment uses an executable `bin/python` symlink, so the adapter now permits only that executable path to resolve to a regular executable while profile, payload, manifest, and evidence symlink rejection remains unchanged. The controller declares its exact manifest through `validation.diagnostics`, not the platform `evidence` list, so the Harness adapter now validates that declared manifest beneath the controller-owned run directory and creates a workbook even for independently validated partial records. The initial four-platform diagnostic run therefore yielded a truthful 30-record partial workbook after Bilibili's non-risk `creator-capture-timeout`; one fresh-preflight Bilibili-only retry passed 10/10, and the final required zero-argument run then passed 40/40 without another platform failure.
+
 ## Architecture
 
 The repository separates source, deployed runtime, adapters, and installed skills.
