@@ -43,6 +43,7 @@ function argumentsFrom(argv) {
   }
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index]
+    if (key === '--') continue
     if (key === '--help' || key === '-h') return { help: true }
     const value = argv[index + 1]
     if (value === undefined || value.startsWith('--')) throw new Error(`argument_value_missing:${key}`)

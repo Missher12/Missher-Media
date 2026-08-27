@@ -13,4 +13,6 @@ harness-plugin/node_modules/
 harness-plugin/lib/
 harness-plugin/payload/
 harness-plugin/.work/
-harness-plugin/dist/
+harness-plugin/dist/*
+!harness-plugin/dist/dsh-media-missher-0.1.0.tgz
+!harness-plugin/dist/SHA256SUMS.txt

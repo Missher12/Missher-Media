@@ -37,7 +37,9 @@
     "stage:payload": "node scripts/stage-payload.mjs",
     "test": "vitest run",
     "prepack": "pnpm run build && pnpm run stage:payload",
-    "verify:package": "node scripts/verify-package.mjs"
+    "pack:bundle": "pnpm pack --pack-destination dist",
+    "verify:package": "node scripts/verify-package.mjs",
+    "smoke:native": "node scripts/native-smoke.mjs"
   },
   "dependencies": {
     "exceljs": "4.4.0"

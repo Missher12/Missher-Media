@@ -8,6 +8,16 @@ The current source and installed operational candidate version is Media@Missher 
 
 Preserve creator collection, single-platform search, complete Bilibili and Xiaohongshu evidence, native identifiers, null-versus-zero values, private output, sequential execution, and immediate risk stops without retaining replaced implementations in active paths.
 
+## DeepSeek Harness Bundle
+
+The current Agent-facing delivery is the private macOS Bundle `dsh-media-missher` version `0.1.0`, built from the exact Media@Missher `15.2.1` source. It is installed into the Harness `web` profile by double-clicking `Install Media@Missher Harness Plugin.command`. The installer uses only the Electron runtime, CLI, and pnpm bundled in `/Applications/DeepSeek Harness.app`; it requires no user-managed Node.js or terminal workflow. Before mutation it verifies the canonical archive and privately backs up the profile package manifest. Installation succeeds only when the effective Cordis configuration contains both `id: media-missher` and `name: dsh-media-missher`.
+
+The Bundle registers one model-visible tool, `media_missher_collect`. A zero-argument call selects Bilibili, Xiaohongshu, Douyin, and Weibo, requests ten records per platform, runs the existing controller sequentially, disables Feishu, and creates one mode-`0600` Excel workbook in the unique private run directory. The workbook has `Summary`, `All Platforms`, `Bilibili`, `Xiaohongshu`, `Douyin`, and `Weibo` sheets. Identifiers remain text, formula-prefixed strings are escaped, nested values are JSON strings, and the destination is linked atomically without overwriting an existing file.
+
+Harness never receives UIDs as tool arguments and the model result contains no raw records. The adapter reads the existing mode-`0600` profile, reuses or atomically provisions only exact runtime version `15.2.1`, validates controller-owned manifest evidence beneath the configured output root, and returns only status, selected platforms, requested and collected counts, and local manifest/workbook/run paths. Existing controller rules remain authoritative for one-browser ownership, exact response binding, risk stops, private output, and navigation cleanup.
+
+The canonical private artifact is `harness-plugin/dist/dsh-media-missher-0.1.0.tgz`. `harness-plugin/scripts/native-smoke.mjs` proves the real Harness CLI lifecycle in a temporary `DSH_HOME`: install, effective-config discovery, default 4x10 synthetic tool projection, six-sheet workbook reopen, uninstall, and preservation of adjacent profile/state files. Public npm or GitHub Release publication remains prohibited until a repository-wide license and provenance review is complete.
+
 ## Architecture
 
 The repository separates source, deployed runtime, adapters, and installed skills.

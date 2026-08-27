@@ -112,7 +112,7 @@ export async function verifyPackage(requestedArchive) {
 }
 
 if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const requestedArchive = process.argv[2]
+  const requestedArchive = process.argv.slice(2).find(argument => argument !== '--')
   if (requestedArchive === undefined) throw new Error('usage: verify-package.mjs <archive.tgz>')
   const result = await verifyPackage(requestedArchive)
   process.stdout.write(`${JSON.stringify(result)}\n`)
