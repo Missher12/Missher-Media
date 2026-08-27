@@ -1,0 +1,12 @@
+# Private, independently removable Media@Missher Bundle.
+- insert:
+    - id: media-missher
+      name: dsh-media-missher
+      config:
+        defaultPlatforms: bilibili,xhs,douyin,weibo
+        defaultCount: 10
+        defaultXhsComments: 0
+        defaultAllowNavigation: true
+        platformTimeoutSeconds: 300
+        executionTimeoutSeconds: 1260
+        maxCount: 50
