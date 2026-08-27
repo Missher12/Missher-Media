@@ -41,6 +41,7 @@ function allowedFile(path) {
   ].includes(path)
     || /^package\/lib\/.+\.(?:js|d\.ts)$/u.test(path)
     || path === 'package/payload/VERSION'
+    || path === 'package/payload/.media-missher-source-tree'
     || /^package\/payload\/runtime\/.+/u.test(path)
     || /^package\/payload\/media-missher\/scripts\/.+\.py$/u.test(path)
     || /^package\/payload\/tools\/(?:install_media_missher|scan_active_residuals)\.py$/u.test(path)
@@ -72,6 +73,7 @@ export async function verifyPackage(requestedArchive) {
       'package/README.md',
       'package/lib/index.js',
       'package/payload/VERSION',
+      'package/payload/.media-missher-source-tree',
     ])
     for (const path of files) {
       if (!allowedFile(path) || forbiddenName.test(path)) throw new Error(`package_file_unexpected:${path}`)
@@ -94,6 +96,10 @@ export async function verifyPackage(requestedArchive) {
     if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '15.2.1\n') {
       throw new Error('package_payload_version_invalid')
     }
+    if (
+      await readFile(join(extractedRoot, 'payload', '.media-missher-source-tree'), 'utf8')
+      !== 'media-missher-source-v1\n'
+    ) throw new Error('package_payload_source_identity_invalid')
     entrySha256 = createHash('sha256')
       .update(await readFile(join(extractedRoot, 'lib', 'index.js')))
       .digest('hex')

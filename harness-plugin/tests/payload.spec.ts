@@ -36,6 +36,9 @@ describe('embedded Media runtime payload', () => {
 
     const files = await filesBelow(payload)
     expect(await readFile(join(payload, 'VERSION'), 'utf8')).toBe('15.2.1\n')
+    expect(await readFile(join(payload, '.media-missher-source-tree'), 'utf8')).toBe(
+      'media-missher-source-v1\n',
+    )
     expect(files).toContain('runtime/requirements.lock')
     expect(files).toContain('runtime/scripts/scrape_all.py')
     expect(files).toContain('runtime/media_missher_runtime/platforms/bilibili.py')
@@ -46,6 +49,7 @@ describe('embedded Media runtime payload', () => {
     expect(files.some(path => /(?:profile|cookie|credential|\.env|\.png|\.log|\.pyc|__pycache__)/iu.test(path))).toBe(false)
     expect(files.every(path => (
       path === 'VERSION'
+      || path === '.media-missher-source-tree'
       || path.startsWith('runtime/')
       || path.startsWith('media-missher/scripts/')
       || path === 'tools/install_media_missher.py'

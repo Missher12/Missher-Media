@@ -193,12 +193,20 @@ describe('controller invocation', () => {
   })
 
   it('parses one bounded controller summary', () => {
+    const manifestPath = '/private/run/engine/manifest.json'
     expect(parseControllerSummary(JSON.stringify({
       status: 'success',
       run_dir: '/private/run',
-      evidence: ['/private/run/manifest.json'],
-      validation: { counts: { bilibili: 10 } },
-    }))).toMatchObject({ status: 'success', runDirectory: '/private/run' })
+      evidence: ['/private/run/engine/bilibili.json'],
+      validation: {
+        counts: { bilibili: 10 },
+        diagnostics: [{ path: manifestPath, status: 'complete', platforms: {} }],
+      },
+    }))).toMatchObject({
+      status: 'success',
+      runDirectory: '/private/run',
+      manifestPath,
+    })
     expect(() => parseControllerSummary('{}')).toThrow('controller_summary_invalid')
   })
 })
@@ -211,6 +219,7 @@ describe('fresh run evidence', () => {
       status: 'success',
       runDirectory: evidence.runDirectory,
       evidence: evidence.evidence,
+      manifestPath: evidence.manifestPath,
     }, setup.config)
 
     expect(result.manifestPath).toBe(await realpath(evidence.manifestPath))
@@ -229,6 +238,7 @@ describe('fresh run evidence', () => {
       status: 'success',
       runDirectory: evidence.runDirectory,
       evidence: [outside],
+      manifestPath: evidence.manifestPath,
     }, setup.config)).rejects.toThrow('evidence_path_escape')
   })
 
@@ -241,6 +251,7 @@ describe('fresh run evidence', () => {
       status: 'success',
       runDirectory: evidence.runDirectory,
       evidence: [link],
+      manifestPath: link,
     }, setup.config)).rejects.toThrow('evidence_symlink_forbidden')
 
     const manifest = JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(evidence.manifestPath, 'utf8')))
@@ -250,6 +261,7 @@ describe('fresh run evidence', () => {
       status: 'success',
       runDirectory: evidence.runDirectory,
       evidence: evidence.evidence,
+      manifestPath: evidence.manifestPath,
     }, setup.config)).rejects.toThrow('manifest_count_mismatch')
   })
 })

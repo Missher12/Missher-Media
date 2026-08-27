@@ -26,6 +26,10 @@ async function fakeArchive(extraFile?: string): Promise<string> {
   await writeFile(join(packageRoot, 'README.md'), '# private\n')
   await writeFile(join(packageRoot, 'lib', 'index.js'), 'export const name = "media-missher"\n')
   await writeFile(join(packageRoot, 'payload', 'VERSION'), '15.2.1\n')
+  await writeFile(
+    join(packageRoot, 'payload', '.media-missher-source-tree'),
+    'media-missher-source-v1\n',
+  )
   if (extraFile !== undefined) await writeFile(join(packageRoot, extraFile), 'forbidden\n')
   const archive = join(root, 'dsh-media-missher-0.1.0.tgz')
   await execute('/usr/bin/tar', ['-czf', archive, '-C', root, 'package'])

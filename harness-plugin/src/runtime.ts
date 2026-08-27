@@ -44,6 +44,7 @@ export interface ControllerSummary {
   status: 'success' | 'partial' | 'failed' | 'preflight-failed' | 'risk-stopped'
   runDirectory: string | null
   evidence: string[]
+  manifestPath: string | null
 }
 
 export interface RunEvidence {
@@ -212,10 +213,34 @@ export function parseControllerSummary(stdout: string): ControllerSummary {
   if (!Array.isArray(record.evidence) || record.evidence.length > 32 || record.evidence.some(item => typeof item !== 'string')) {
     throw new Error('controller_summary_invalid')
   }
+  const manifestCandidates = (record.evidence as string[])
+    .filter(path => path.endsWith('/manifest.json'))
+  const validation = record.validation
+  if (validation !== undefined) {
+    if (validation === null || typeof validation !== 'object' || Array.isArray(validation)) {
+      throw new Error('controller_summary_invalid')
+    }
+    const diagnostics = (validation as Record<string, unknown>).diagnostics
+    if (diagnostics !== undefined) {
+      if (!Array.isArray(diagnostics) || diagnostics.length > 32) {
+        throw new Error('controller_summary_invalid')
+      }
+      for (const candidate of diagnostics) {
+        if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+          throw new Error('controller_summary_invalid')
+        }
+        const path = (candidate as Record<string, unknown>).path
+        if (typeof path === 'string' && path.endsWith('/manifest.json')) manifestCandidates.push(path)
+      }
+    }
+  }
+  const uniqueManifestCandidates = [...new Set(manifestCandidates)]
+  if (uniqueManifestCandidates.length > 1) throw new Error('controller_summary_invalid')
   return {
     status: record.status as ControllerSummary['status'],
     runDirectory: record.run_dir as string | null,
     evidence: [...record.evidence] as string[],
+    manifestPath: uniqueManifestCandidates[0] ?? null,
   }
 }
 
@@ -256,7 +281,12 @@ export async function loadRunEvidence(
   const outputRoot = await realpath(config.outputRoot)
   const runDirectory = await safePath(summary.runDirectory, outputRoot, 'directory')
   const safeEvidence: string[] = []
-  for (const path of summary.evidence) safeEvidence.push(await safePath(path, runDirectory, 'file'))
+  const declaredEvidence = summary.manifestPath === null
+    ? summary.evidence
+    : [...summary.evidence, summary.manifestPath]
+  for (const path of new Set(declaredEvidence)) {
+    safeEvidence.push(await safePath(path, runDirectory, 'file'))
+  }
   const manifestCandidates = safeEvidence.filter(path => path.endsWith(`${sep}manifest.json`))
   if (manifestCandidates.length !== 1) throw new Error('manifest_missing')
   const manifestPath = manifestCandidates[0] as string

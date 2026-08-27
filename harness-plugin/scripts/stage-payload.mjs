@@ -45,6 +45,10 @@ await rm(output, { recursive: true, force: true })
 await mkdir(output, { recursive: true })
 
 await copyTree(resolve(repositoryRoot, 'VERSION'), resolve(output, 'VERSION'))
+await copyTree(
+  resolve(repositoryRoot, '.media-missher-source-tree'),
+  resolve(output, '.media-missher-source-tree'),
+)
 await copyTree(resolve(repositoryRoot, 'runtime'), resolve(output, 'runtime'))
 await copyTree(
   resolve(repositoryRoot, 'media-missher', 'scripts'),
@@ -57,6 +61,13 @@ for (const name of ['install_media_missher.py', 'scan_active_residuals.py']) {
 if (await readFile(resolve(output, 'VERSION'), 'utf8') !== '15.2.1\n') {
   await rm(output, { recursive: true, force: true })
   throw new Error('payload_version_mismatch')
+}
+if (
+  await readFile(resolve(output, '.media-missher-source-tree'), 'utf8')
+  !== 'media-missher-source-v1\n'
+) {
+  await rm(output, { recursive: true, force: true })
+  throw new Error('payload_source_identity_mismatch')
 }
 
 process.stdout.write(`${output}\n`)

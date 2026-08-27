@@ -144,7 +144,7 @@ export function createMediaTool(
 
       let evidence: RunEvidence | undefined
       let workbookPath = ''
-      if (controller.runDirectory !== null && controller.evidence.some(path => path.endsWith('manifest.json'))) {
+      if (controller.runDirectory !== null && controller.manifestPath !== null) {
         evidence = await (dependencies.loadRunEvidence ?? loadRunEvidence)(controller, config)
         if (evidence.totalCollected > 0) {
           workbookPath = await (dependencies.writeWorkbook ?? writeWorkbook)(evidence, request)

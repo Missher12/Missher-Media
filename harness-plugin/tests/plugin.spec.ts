@@ -96,6 +96,48 @@ describe('Media Agent tool', () => {
     })
   })
 
+  it('projects partial records when the manifest is declared by validation diagnostics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-plugin-test-'))
+    temporaryRoots.push(root)
+    const config = normalizePluginConfig({
+      profilePath: join(root, 'profile.json'),
+      runtimeHome: join(root, 'runtime'),
+      outputRoot: join(root, 'runs'),
+    }, join(root, 'dsh'), root)
+    const runDirectory = join(root, 'runs', 'run-partial')
+    const evidence = completedEvidence(runDirectory)
+    evidence.records.bilibili = []
+    evidence.platformStatuses.bilibili = 'failed'
+    evidence.diagnostics.bilibili = { kind: 'timeout', code: 'creator-capture-timeout' }
+    evidence.totalCollected = 3
+    const load = vi.fn(async () => evidence)
+    const write = vi.fn(async () => join(runDirectory, 'partial.xlsx'))
+    const tool = createMediaTool(config, {
+      ensureRuntime: async () => ({ python: '/runtime/python', payloadRoot: '/payload' }),
+      processRunner: async () => ({
+        code: 1,
+        signal: null,
+        stdout: JSON.stringify({
+          status: 'partial',
+          run_dir: runDirectory,
+          evidence: ['/private/xhs.json'],
+          validation: {
+            diagnostics: [{ path: evidence.manifestPath, status: 'failed', platforms: {} }],
+          },
+        }),
+        stderr: '',
+      }),
+      loadRunEvidence: load,
+      writeWorkbook: write,
+    })
+
+    const value = await tool.execute({}, { signal: new AbortController().signal }) as Record<string, unknown>
+
+    expect(load).toHaveBeenCalledOnce()
+    expect(write).toHaveBeenCalledOnce()
+    expect(value).toMatchObject({ status: 'partial', totalCollected: 3, workbookPath: join(runDirectory, 'partial.xlsx') })
+  })
+
   it('registers one disposable model-visible tool', () => {
     const root = '/Users/test'
     let definition: ReturnType<typeof createMediaTool> | undefined

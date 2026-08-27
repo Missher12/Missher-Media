@@ -6,7 +6,7 @@
 
 请直接双击仓库根目录的 `Install Media@Missher Harness Plugin.command`。这是推荐且唯一面向普通用户的安装方式：安装器使用 DeepSeek Harness.app 自带运行时，无需另装 Node.js、pnpm 或使用终端。
 
-默认无参数调用会顺序抓取 `bilibili,xhs,douyin,weibo`，每个平台 10 条，并在本次私有运行目录中创建 Excel 工作簿。工作簿包含汇总表、全平台合并表和四个平台独立表。
+默认无参数调用会顺序抓取 `bilibili,xhs,douyin,weibo`，每个平台 10 条，并在本次私有运行目录中创建 Excel 工作簿。工作簿包含汇总表、全平台合并表和四个平台独立表。控制器以 `validation.diagnostics` 声明精确 manifest；即使一个平台出现非风险失败，Bundle 仍会验证并投影其余平台记录，在汇总表保留短缺诊断。
 
 ## Bundle 结构
 
