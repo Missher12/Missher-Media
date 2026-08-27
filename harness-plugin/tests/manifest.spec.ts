@@ -8,6 +8,7 @@ describe('Harness Bundle manifest', () => {
   it('declares the private macOS bundle and 4x10 defaults', async () => {
     const manifest = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'))
     const patch = await readFile(resolve(root, 'cordis.patch.yml'), 'utf8')
+    const buildConfig = await readFile(resolve(root, 'tsdown.config.ts'), 'utf8')
 
     expect(manifest).toMatchObject({
       name: 'dsh-media-missher',
@@ -23,5 +24,7 @@ describe('Harness Bundle manifest', () => {
     expect(patch).toContain('defaultPlatforms: bilibili,xhs,douyin,weibo')
     expect(patch).toContain('defaultCount: 10')
     expect(patch.match(/- insert:/gu)).toHaveLength(1)
+    expect(buildConfig).toContain("outDir: 'lib'")
+    expect(buildConfig).toContain("entry: { index: 'src/index.ts' }")
   })
 })

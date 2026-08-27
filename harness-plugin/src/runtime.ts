@@ -24,6 +24,7 @@ export interface RuntimeDependencies {
   payloadRoot?: string
   platform?: NodeJS.Platform
   installPython?: string
+  signal?: AbortSignal
   processRunner?: (
     executable: string,
     args: readonly string[],
@@ -138,6 +139,7 @@ export async function ensureRuntime(
       '--runtime-only',
     ],
     {
+      ...(dependencies.signal === undefined ? {} : { signal: dependencies.signal }),
       timeoutMs: 15 * 60 * 1000,
       maxOutputBytes: 1024 * 1024,
       env: { PYTHONDONTWRITEBYTECODE: '1' },
