@@ -16,3 +16,5 @@ harness-plugin/.work/
 harness-plugin/dist/*
 !harness-plugin/dist/dsh-media-missher-0.1.0.tgz
 !harness-plugin/dist/SHA256SUMS.txt
+!harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
+!harness-plugin/dist/SETUP-SHA256.txt

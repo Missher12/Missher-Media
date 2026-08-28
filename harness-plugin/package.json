@@ -38,7 +38,9 @@
     "test": "vitest run",
     "prepack": "pnpm run build && pnpm run stage:payload",
     "pack:bundle": "pnpm pack --pack-destination dist",
+    "pack:setup": "node scripts/build-setup.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:setup": "node scripts/verify-setup.mjs",
     "smoke:native": "node scripts/native-smoke.mjs"
   },
   "dependencies": {

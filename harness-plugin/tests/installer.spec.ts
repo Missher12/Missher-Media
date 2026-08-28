@@ -38,6 +38,20 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(setup).not.toContain('command -v pnpm')
   })
 
+  it('offers an authenticated private GitHub bootstrap without embedding a token', async () => {
+    const bootstrap = await readFile(
+      resolve(repositoryRoot, 'Install-Media-Missher-from-GitHub.command'),
+      'utf8',
+    )
+    expect(bootstrap).toContain('Missher12/media-missher')
+    expect(bootstrap).toContain('v15.2.1')
+    expect(bootstrap).toContain('gh release download')
+    expect(bootstrap).toContain('SETUP-SHA256.txt')
+    expect(bootstrap).toContain('Media-Missher-Harness-Setup-v15.2.1.zip')
+    expect(bootstrap).toContain('auth status --hostname github.com')
+    expect(bootstrap).not.toMatch(/github_pat_|ghp_|GITHUB_TOKEN|GH_TOKEN/u)
+  })
+
   it('forces same-spec refreshes and verifies the installed entry bytes', async () => {
     const installer = await readFile(
       resolve(pluginRoot, 'scripts', 'install-current-profile.mjs'),

@@ -42,3 +42,30 @@ jobs:
           python3 runtime/scripts/scrape_weibo.py --help >/dev/null
       - name: Scan active residuals
         run: python3 tools/scan_active_residuals.py --root .
+
+  harness-bundle:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: harness-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.1.3"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm run build
+      - run: pnpm run verify:package -- dist/dsh-media-missher-0.1.0.tgz
+      - run: pnpm run pack:setup
+      - run: pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-v15.2.1.zip
+      - name: Require reproducible tracked Setup assets
+        working-directory: .
+        run: >-
+          git diff --exit-code --
+          harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
+          harness-plugin/dist/SETUP-SHA256.txt

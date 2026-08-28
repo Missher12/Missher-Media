@@ -1,14 +1,20 @@
 # Media@Missher
 
-Media@Missher 是 Missher 私用的四平台内容采集工具。当前版本把已经验证过的 Bilibili、小红书、抖音和微博运行时封装成了原生 DeepSeek Harness Bundle：安装后，Agent 可以直接发起抓取，默认一次顺序抓取四个平台各 10 条，并返回可检查的 Excel 表格。
+Media@Missher 是 Missher 私用的四平台内容采集工具。当前产品版本是 **15.2.1**，Agent Bundle 版本是 **0.1.0**。它把已经验证过的 Bilibili、小红书、抖音和微博运行时封装成了原生 DeepSeek Harness Bundle：安装后，Agent 可以直接发起抓取，默认一次顺序抓取四个平台各 10 条，并返回可检查的 Excel 表格。
 
-## 一键安装到 DeepSeek Harness
+## 从私有 GitHub 一键安装到 DeepSeek Harness
 
-适用环境：macOS，已安装 `/Applications/DeepSeek Harness.app`，且 Media@Missher 的私有浏览器 profile 已配置完成。
+适用环境：macOS，已安装 `/Applications/DeepSeek Harness.app` 和 GitHub CLI（`gh`），`gh` 已登录并能读取私有仓库 `Missher12/media-missher`，且 Media@Missher 的私有浏览器 profile 已配置完成。命令不接收、显示或保存 GitHub token。
 
-1. 下载或克隆这个私有仓库。
-2. 双击根目录的 **`Install Media@Missher Harness Plugin.command`**。
-3. 安装完成后点击弹窗里的“重启 Harness”。安装器会请求 Harness 正常退出、等待退出完成，再重新打开并载入插件；不会强制结束进程。
+把下面整行交给 DeepSeek Harness Agent 执行，或粘贴到终端：
+
+```bash
+MEDIA_BOOTSTRAP_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/media-missher-github.XXXXXX")" && gh release download v15.2.1 --repo Missher12/media-missher --pattern 'Install-Media-Missher-from-GitHub.command' --dir "$MEDIA_BOOTSTRAP_DIR" && /bin/chmod 700 "$MEDIA_BOOTSTRAP_DIR/Install-Media-Missher-from-GitHub.command" && /usr/bin/open "$MEDIA_BOOTSTRAP_DIR/Install-Media-Missher-from-GitHub.command"
+```
+
+这条命令从私有 GitHub Release 拉取一个很小的引导器，并在独立的 Terminal 进程中继续安装，所以 Harness 可以正常退出和重启。引导器再下载完整 Setup ZIP 与独立 SHA-256 文件，校验后才启动内层安装器。安装完成后点击弹窗里的“重启 Harness”；安装器只请求 Harness 正常退出，不会强制结束进程。
+
+如果已经下载或克隆完整仓库，也可以直接双击根目录的 **`Install Media@Missher Harness Plugin.command`**，不经过 GitHub Release。
 
 安装器直接使用 Harness.app 自带的 Electron、CLI 和 pnpm，不要求用户安装 Node.js、pnpm，也不要求打开终端。它会先校验内置 Bundle，把精确字节复制到按 SHA 命名的私有 `~/.dsh/artifacts/media-missher/` 路径，再备份当前 `web` profile 的 `package.json`；最后同时确认已安装入口字节和有效 Cordis 配置，仓库之后移动或删除也不会破坏依赖来源。
 
@@ -44,10 +50,11 @@ Agent 不传参数时会调用 `media_missher_collect`，等价于：
 
 ## 安装包与开发验证
 
-唯一可安装 Bundle 是：
+唯一可安装 Bundle 和自包含安装包是：
 
 ```text
 harness-plugin/dist/dsh-media-missher-0.1.0.tgz
+harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
 ```
 
 开发者在 `harness-plugin/` 下可运行：
@@ -59,6 +66,8 @@ pnpm exec tsc --noEmit
 pnpm run build
 pnpm run pack:bundle
 pnpm run verify:package -- dist/dsh-media-missher-0.1.0.tgz
+pnpm run pack:setup
+pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-v15.2.1.zip
 pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
 ```
 
@@ -68,4 +77,4 @@ pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
 
 ## 私有分发边界
 
-本仓库仅供 Missher 私用和备份。仓库没有选定可公开分发的整体许可证；在完成来源与许可证复核之前，请保持仓库和 Bundle 私有，不发布到 npm 或公开 GitHub Release。
+本仓库仅供 Missher 私用和备份。`v15.2.1` 安装资产只放在同一个私有 GitHub Release 中，用于已获授权的 Harness 拉取安装。仓库没有选定可公开分发的整体许可证；在完成来源与许可证复核之前，请保持仓库、Release 和 Bundle 私有，不发布到 npm 或公开 GitHub Release。
