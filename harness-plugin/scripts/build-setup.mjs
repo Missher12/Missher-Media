@@ -110,7 +110,10 @@ async function makeSetupArchive() {
       '-r',
       outputArchive,
       setupDirectoryName,
-    ], { cwd: temporary })
+    ], {
+      cwd: temporary,
+      env: { ...process.env, TZ: 'UTC' },
+    })
 
     const bytes = await readFile(outputArchive)
     const sha256 = createHash('sha256').update(bytes).digest('hex')
