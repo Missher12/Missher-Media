@@ -24,6 +24,7 @@ async function fakeArchive(extraFile?: string): Promise<string> {
   }))
   await writeFile(join(packageRoot, 'cordis.patch.yml'), '- insert:\n    - id: media-missher\n      name: dsh-media-missher\n')
   await writeFile(join(packageRoot, 'README.md'), '# private\n')
+  await writeFile(join(packageRoot, 'AGENT.md'), '# private onboarding\n')
   await writeFile(join(packageRoot, 'lib', 'index.js'), 'export const name = "media-missher"\n')
   await writeFile(join(packageRoot, 'payload', 'VERSION'), '15.2.1\n')
   await writeFile(

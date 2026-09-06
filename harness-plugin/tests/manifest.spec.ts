@@ -19,12 +19,14 @@ describe('Harness Bundle manifest', () => {
       os: ['darwin'],
       dsh: { bundle: { patch: './cordis.patch.yml' } },
     })
+    expect(manifest.files).toContain('AGENT.md')
     expect(manifest.dependencies['@deepseek-ai/dsh-tools']).toBeUndefined()
     expect(manifest.devDependencies['@deepseek-ai/dsh-tools']).toBe('0.1.1-rc.2')
     expect(patch).toContain('id: media-missher')
     expect(patch).toContain('name: dsh-media-missher')
     expect(patch).toContain('defaultPlatforms: bilibili,xhs,douyin,weibo')
     expect(patch).toContain('defaultCount: 10')
+    expect(patch).toContain('defaultAllowNavigation: false')
     expect(patch.match(/- insert:/gu)).toHaveLength(1)
     expect(buildConfig).toContain("outDir: 'lib'")
     expect(buildConfig).toContain("entry: { index: 'src/index.ts' }")

@@ -125,7 +125,7 @@ export function normalizePluginConfig(
     ),
     defaultCount,
     defaultXhsComments,
-    defaultAllowNavigation: input.defaultAllowNavigation ?? true,
+    defaultAllowNavigation: input.defaultAllowNavigation ?? false,
     platformTimeoutSeconds,
     executionTimeoutSeconds,
     maxCount,

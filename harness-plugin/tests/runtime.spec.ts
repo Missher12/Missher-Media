@@ -183,7 +183,6 @@ describe('controller invocation', () => {
       '--xhs-comments', '0',
       '--platform-timeout', '300',
       '--execution-timeout', '1260',
-      '--allow-navigation',
       '--no-feishu',
       '--json-summary',
     ])

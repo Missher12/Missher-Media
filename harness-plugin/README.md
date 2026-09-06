@@ -2,11 +2,13 @@
 
 Bundle 版本为 **0.1.1**，内置采集主项目仍为 **15.2.1**。本候选未发布，正式 profile 尚未升级。旧版安装与验收记录见根目录 PROJECT_CONTEXT.md 的历史章节。
 
+给新电脑上的 Harness Agent 的逐步接入契约见 [AGENT.md](AGENT.md)。先按该文件完成安装和只读检查，再进行任何真实采集。Markdown 不会自行注册工具，实际注册由 `package.json`、`cordis.patch.yml` 和 `lib/index.js` 完成。
+
 当前 macOS Harness 使用 `Contents/Resources/runtime/node/bin/node` 与 `runtime/app/lib/bin.js`。安装器会自动识别此布局，并只使用 `/usr/local/bin/pnpm` 或 `/opt/homebrew/bin/pnpm` 中已经安装的 pnpm；缺少时在修改 profile 前报 `harness_external_pnpm_required`。不会自动下载安装 pnpm。旧版 `app.asar.unpacked` 布局继续使用自带 Electron/CLI/pnpm。自定义路径可通过 `--runtime`、`--cli`、`--pnpm` 提供。
 
 候选 Setup 为 `dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip`。根目录历史 GitHub bootstrap 仍指向既有 v15.2.1 Release，不用于获取本候选。安装器备份 profile、固定 SHA 命名归档、校验入口字节、实际导入入口并检查有效配置；导入失败不再报告安装成功。失败后保留备份供诊断，不自动重置用户配置。
 
-本版本直接使用 Harness 公开 ToolDefinition/JSON Schema 注册接口，SDK 只参与开发类型检查。工具入口不依赖宿主内部模块在 profile 中可被 Node 解析。保留默认 4x10、正数条数上限、单控制器顺序采集和原有导航默认配置；只有明确授权的采集请求才能调用工具。浏览器辅助和截图仍为控制器默认 off。
+本版本直接使用 Harness 公开 ToolDefinition/JSON Schema 注册接口，SDK 只参与开发类型检查。工具入口不依赖宿主内部模块在 profile 中可被 Node 解析。保留默认 4x10、正数条数上限、单控制器顺序采集；`allow_navigation` 默认是 `false`，只有明确授权的采集请求才能打开精确目标导航。浏览器辅助和截图仍为控制器默认 off。
 
 新增校验覆盖空平台项、非法类型、未知参数、无小红书平台的评论请求；导出前按原生 ID 优先级保留首次出现的记录，对齐 Python 校验器。计数不足会降为 partial，风险状态优先，不导出请求外平台。证据必须属于本次文件系统时间边界并具有私有权限，诊断只接受固定枚举。字符串长 ID 保持原值，不安全的数值 ID 报错而不制造已损失精度的文本。原始 JSON 不改写。
 
@@ -35,6 +37,7 @@ Bundle 版本为 **0.1.1**，内置采集主项目仍为 **15.2.1**。本候选�
 - `scripts/native-smoke.mjs`：隔离原生安装生命周期验证
 - `scripts/build-setup.mjs`：按固定白名单生成可复现的私有 Setup ZIP
 - `scripts/verify-setup.mjs`：校验 ZIP 路径、文件集合、来源字节与内层 Bundle
+- `AGENT.md`：新电脑首次接入、授权和结果核验契约
 
 Bundle 只允许 macOS。工具参数中不接受任何 UID 或凭据；这些值只从 mode-`0600` 的私有 `profile.json` 读取。模型侧结果仅包含固定状态、计数和本地证据路径。
 

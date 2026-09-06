@@ -16,7 +16,7 @@ describe('Media plugin configuration', () => {
       platformText: 'bilibili,xhs,douyin,weibo',
       count: 10,
       xhsComments: 0,
-      allowNavigation: true,
+      allowNavigation: false,
     })
     expect(config).toMatchObject({
       profilePath: '/Users/test/.config/media-missher/profile.json',

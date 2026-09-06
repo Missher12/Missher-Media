@@ -38,6 +38,7 @@ function allowedFile(path) {
     'package/package.json',
     'package/cordis.patch.yml',
     'package/README.md',
+    'package/AGENT.md',
   ].includes(path)
     || /^package\/lib\/.+\.(?:js|d\.ts)$/u.test(path)
     || path === 'package/payload/VERSION'
@@ -71,6 +72,7 @@ export async function verifyPackage(requestedArchive) {
       'package/package.json',
       'package/cordis.patch.yml',
       'package/README.md',
+      'package/AGENT.md',
       'package/lib/index.js',
       'package/payload/VERSION',
       'package/payload/.media-missher-source-tree',

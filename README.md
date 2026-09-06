@@ -1,8 +1,16 @@
 # Media@Missher
 
-Media@Missher 是 Missher 私用的四平台内容采集工具。当前产品版本是 **15.2.1**，Agent Bundle 版本是 **0.1.0**。它把已经验证过的 Bilibili、小红书、抖音和微博运行时封装成了原生 DeepSeek Harness Bundle：安装后，Agent 可以直接发起抓取，默认一次顺序抓取四个平台各 10 条，并返回可检查的 Excel 表格。
+Media@Missher 是 Missher 私用的四平台内容采集工具。当前产品版本是 **15.2.1**，Harness Bundle 的本地维护候选版本是 **0.1.1**。历史已发布 Release 使用 Bundle 0.1.0。它把已经验证过的 Bilibili、小红书、抖音和微博运行时封装成了原生 DeepSeek Harness Bundle：安装后，Agent 可以直接发起抓取，默认一次顺序抓取四个平台各 10 条，并返回可检查的 Excel 表格。
 
-## 从私有 GitHub 一键安装到 DeepSeek Harness
+## 给 Harness Agent 的新电脑首启指南
+
+请先阅读 [Harness Agent 首次接入指南](harness-plugin/AGENT.md)，再执行安装或采集。它定义了新电脑上的环境检查、外层和内层校验、Harness profile 接入、私有 profile、明确授权、结果核验和故障处理。Markdown 负责让 Agent 按正确顺序工作；实际工具注册仍由 Bundle 的 `package.json`、`cordis.patch.yml` 和 `lib/index.js` 完成。
+
+当前候选只支持 macOS。新版 Harness 可能要求本机已经存在 `/usr/local/bin/pnpm` 或 `/opt/homebrew/bin/pnpm`；安装器缺少它时会停止，不会自动下载或安装 pnpm。BrowserSkill 默认关闭，不由本插件安装或启用。
+
+## 历史 v15.2.1 Release 安装流程（Bundle 0.1.0）
+
+下面的 GitHub bootstrap 只对应历史已发布的 Bundle 0.1.0，不用于获取当前 0.1.1 本地候选。
 
 适用环境：macOS，已安装 `/Applications/DeepSeek Harness.app` 和 GitHub CLI（`gh`），`gh` 已登录并能读取私有仓库 `Missher12/media-missher`，且 Media@Missher 的私有浏览器 profile 已配置完成。命令不接收、显示或保存 GitHub token。
 
@@ -34,7 +42,7 @@ Agent 不传参数时会调用 `media_missher_collect`，等价于：
 - 输出：一个 `.xlsx` 工作簿
 - 工作表：`Summary`、`All Platforms` 和四个平台独立表
 - 小红书评论：默认不额外抓取
-- 页面导航：本次明确调用即授权在既有 Media 浏览器中进行精确目标导航
+- 页面导航：默认关闭，只有本次调用明确传入 `allow_navigation: true` 才允许在既有 Media 浏览器中进行精确目标导航
 
 如果某个平台出现非风险短缺或超时，工具仍会把其余已验证记录写入同样的六表工作簿，并在 `Summary` 中明确标出该平台的请求数、实得数和固定诊断码，不会把已抓到的数据隐藏成 0 条。
 
@@ -50,12 +58,14 @@ Agent 不传参数时会调用 `media_missher_collect`，等价于：
 
 ## 安装包与开发验证
 
-唯一可安装 Bundle 和自包含安装包是：
+当前本地维护候选的可安装 Bundle 和自包含安装包是：
 
 ```text
-harness-plugin/dist/dsh-media-missher-0.1.0.tgz
-harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
+harness-plugin/dist/dsh-media-missher-0.1.1.tgz
+harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip
 ```
+
+历史 Release 资产仍保留为 `harness-plugin/dist/dsh-media-missher-0.1.0.tgz` 与 `harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip`，不要将两组版本混用。
 
 开发者在 `harness-plugin/` 下可运行：
 
@@ -65,10 +75,10 @@ pnpm test
 pnpm exec tsc --noEmit
 pnpm run build
 pnpm run pack:bundle
-pnpm run verify:package -- dist/dsh-media-missher-0.1.0.tgz
+pnpm run verify:package -- dist/dsh-media-missher-0.1.1.tgz
 pnpm run pack:setup
-pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-v15.2.1.zip
-pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
+pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip
+pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.1.tgz
 ```
 
 `smoke:native` 使用临时 `DSH_HOME` 验证真实 Harness CLI 安装、默认工具执行、六表工作簿复开、卸载以及相邻状态保留，不修改正式 profile。

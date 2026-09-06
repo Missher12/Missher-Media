@@ -72,7 +72,7 @@ export function createMediaTool(
 ): ToolDefinition {
   return {
     name: 'media_missher_collect',
-    description: 'Collect authorized creator records with Media@Missher. With no arguments, collect 10 records from each of Bilibili, Xiaohongshu, Douyin, and Weibo sequentially and create a private Excel workbook.',
+    description: 'Collect authorized creator records with Media@Missher from an existing signed-in browser and private profile. Creator collection only: no keyword search, browser installation, BrowserSkill activation, login bypass, or credential arguments. With no arguments, collect 10 records from each of Bilibili, Xiaohongshu, Douyin, and Weibo sequentially and create a private Excel workbook.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -94,7 +94,7 @@ export function createMediaTool(
         },
         allow_navigation: {
           type: 'boolean',
-          description: `Authorize exact-host navigation in the signed-in Media browser. Default: ${config.defaultAllowNavigation}.`,
+          description: `Authorize exact-host navigation in the existing signed-in Media browser for this call. Default: ${config.defaultAllowNavigation}; omit or use false for passive collection.`,
           default: config.defaultAllowNavigation,
         },
       },
@@ -105,7 +105,10 @@ export function createMediaTool(
         additionalProperties: false,
         required: ['status', 'platforms', 'requestedPerPlatform', 'totalCollected', 'runDirectory', 'manifestPath', 'workbookPath', 'summary'],
         properties: {
-          status: { type: 'string' },
+          status: {
+            type: 'string',
+            enum: ['success', 'partial', 'risk-stopped', 'preflight-failed', 'failed'],
+          },
           platforms: { type: 'string' },
           requestedPerPlatform: { type: 'integer' },
           totalCollected: { type: 'integer' },

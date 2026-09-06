@@ -47,6 +47,11 @@ const setupFiles = [
     mode: 0o600,
   },
   {
+    source: join(pluginRoot, 'AGENT.md'),
+    destination: 'harness-plugin/AGENT.md',
+    mode: 0o600,
+  },
+  {
     source: join(distributionDirectory, 'dsh-media-missher-0.1.1.tgz'),
     destination: 'harness-plugin/dist/dsh-media-missher-0.1.1.tgz',
     mode: 0o600,

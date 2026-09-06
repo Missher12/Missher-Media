@@ -38,6 +38,10 @@ const expectedFiles = new Map([
     join(pluginRoot, 'scripts', 'verify-package.mjs'),
   ],
   [
+    `${setupDirectoryName}/harness-plugin/AGENT.md`,
+    join(pluginRoot, 'AGENT.md'),
+  ],
+  [
     `${setupDirectoryName}/harness-plugin/dist/dsh-media-missher-0.1.1.tgz`,
     join(pluginRoot, 'dist', 'dsh-media-missher-0.1.1.tgz'),
   ],

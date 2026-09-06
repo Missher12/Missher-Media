@@ -25,7 +25,8 @@
     "lib",
     "payload",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "AGENT.md"
   ],
   "dsh": {
     "bundle": {
