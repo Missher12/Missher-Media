@@ -46,14 +46,14 @@ Markdown 不会自行注册工具。真正的接入由安装包的 `package.json
 先在包含 Setup ZIP 和外层校验文件的目录执行校验。下面的变量只表示本地文件路径，不要把 Cookie、UID 或其他用户数据写进命令行。
 
 ```bash
-SETUP_DIR="/path/to/Media-Missher-Harness-Setup"
-/usr/bin/shasum -a 256 -c "$SETUP_DIR/SETUP-SHA256.txt"
+DELIVERY_DIR="/path/to/media-missher-delivery"
+/usr/bin/shasum -a 256 -c "$DELIVERY_DIR/SETUP-SHA256.txt"
 ```
 
 校验通过后，解压并运行 Setup 中的安装器：
 
 ```bash
-/usr/bin/unzip -q "/path/to/Media-Missher-Harness-Setup-bundle-v0.1.1.zip" -d "/path/to/unpacked"
+/usr/bin/unzip -q "$DELIVERY_DIR/Media-Missher-Harness-Setup-bundle-v0.1.1.zip" -d "/path/to/unpacked"
 /bin/chmod 700 "/path/to/unpacked/Media-Missher-Harness-Setup/Install Media@Missher Harness Plugin.command"
 /usr/bin/open "/path/to/unpacked/Media-Missher-Harness-Setup/Install Media@Missher Harness Plugin.command"
 ```
@@ -74,7 +74,6 @@ Bundle 不从工具参数接收 UID、Cookie 或凭据。创作者采集所需�
 
 ```json
 {
-  "data_root": "~/.local/share/media-missher/state/runs",
   "cdp_url": "http://127.0.0.1:9222",
   "platform_uids": {
     "bilibili": "your_bilibili_uid",
