@@ -20,7 +20,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(scriptDirectory, '..')
 const repositoryRoot = resolve(pluginRoot, '..')
 const setupDirectoryName = 'Media-Missher-Harness-Setup'
-const archiveName = 'Media-Missher-Harness-Setup-v15.2.1.zip'
+const archiveName = 'Media-Missher-Harness-Setup-bundle-v0.1.1.zip'
 const defaultArchive = join(pluginRoot, 'dist', archiveName)
 const maximumArchiveBytes = 128 * 1024 * 1024
 
@@ -38,8 +38,8 @@ const expectedFiles = new Map([
     join(pluginRoot, 'scripts', 'verify-package.mjs'),
   ],
   [
-    `${setupDirectoryName}/harness-plugin/dist/dsh-media-missher-0.1.0.tgz`,
-    join(pluginRoot, 'dist', 'dsh-media-missher-0.1.0.tgz'),
+    `${setupDirectoryName}/harness-plugin/dist/dsh-media-missher-0.1.1.tgz`,
+    join(pluginRoot, 'dist', 'dsh-media-missher-0.1.1.tgz'),
   ],
   [
     `${setupDirectoryName}/harness-plugin/dist/SHA256SUMS.txt`,
@@ -107,14 +107,14 @@ export async function verifySetup(requestedArchive = defaultArchive) {
       setupDirectoryName,
       'harness-plugin',
       'dist',
-      'dsh-media-missher-0.1.0.tgz',
+      'dsh-media-missher-0.1.1.tgz',
     )
     const bundle = await verifyPackage(bundlePath)
     const bundleChecksum = await readFile(
       join(temporary, setupDirectoryName, 'harness-plugin', 'dist', 'SHA256SUMS.txt'),
       'utf8',
     )
-    if (bundleChecksum !== `${bundle.sha256}  dsh-media-missher-0.1.0.tgz\n`) {
+    if (bundleChecksum !== `${bundle.sha256}  dsh-media-missher-0.1.1.tgz\n`) {
       throw new Error('setup_inner_checksum_invalid')
     }
 
@@ -125,7 +125,7 @@ export async function verifySetup(requestedArchive = defaultArchive) {
       bytes: bytes.byteLength,
       sha256: createHash('sha256').update(bytes).digest('hex'),
       bundleSha256: bundle.sha256,
-      bundleVersion: '0.1.0',
+      bundleVersion: '0.1.1',
       productVersion: '15.2.1',
     }
   } finally {

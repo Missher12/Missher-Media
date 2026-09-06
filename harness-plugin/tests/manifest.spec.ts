@@ -12,13 +12,15 @@ describe('Harness Bundle manifest', () => {
 
     expect(manifest).toMatchObject({
       name: 'dsh-media-missher',
-      version: '0.1.0',
+      version: '0.1.1',
       type: 'module',
       license: 'UNLICENSED',
       private: true,
       os: ['darwin'],
       dsh: { bundle: { patch: './cordis.patch.yml' } },
     })
+    expect(manifest.dependencies['@deepseek-ai/dsh-tools']).toBeUndefined()
+    expect(manifest.devDependencies['@deepseek-ai/dsh-tools']).toBe('0.1.1-rc.2')
     expect(patch).toContain('id: media-missher')
     expect(patch).toContain('name: dsh-media-missher')
     expect(patch).toContain('defaultPlatforms: bilibili,xhs,douyin,weibo')

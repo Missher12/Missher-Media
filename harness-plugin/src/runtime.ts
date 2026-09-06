@@ -272,20 +272,140 @@ function stringMap(value: unknown, code: string): Record<string, string> {
   return source as Record<string, string>
 }
 
+// Fixed controller diagnostics only; free-form text must never reach the model.
+const DIAGNOSTIC_CODES: Record<string, string[]> = {
+  "ok": [
+    "ok"
+  ],
+  "result": [
+    "count-shortfall",
+    "incomplete-record",
+    "screenshot-shortfall"
+  ],
+  "not-run": [
+    "preflight-aborted",
+    "prior-risk-stop"
+  ],
+  "dependency": [
+    "module-not-found"
+  ],
+  "precondition": [
+    "bsk-busy",
+    "bsk-click",
+    "bsk-incompatible",
+    "bsk-missing",
+    "bsk-session-start",
+    "bsk-session-stop",
+    "bsk-snapshot",
+    "bsk-tab-borrow",
+    "bsk-tab-list",
+    "bsk-tab-return",
+    "bsk-target-ambiguous",
+    "bsk-timeout",
+    "bsk-transport",
+    "bsk-unhealthy",
+    "precondition-failed",
+    "xhs-browser-assist-unsupported"
+  ],
+  "source-response": [
+    "source-response-failed"
+  ],
+  "risk-stop": [
+    "challenge",
+    "http-403",
+    "http-429",
+    "payload-461",
+    "payload-471",
+    "payload-999",
+    "risk-signal"
+  ],
+  "timeout": [
+    "creator-capture-timeout",
+    "detail-capture-timeout",
+    "platform-timeout"
+  ],
+  "collector-contract": [
+    "invalid-records"
+  ],
+  "internal": [
+    "unexpected"
+  ]
+}
+
+const STATUS_KINDS: Record<string, string[]> = {
+  "complete": [
+    "ok"
+  ],
+  "shortfall": [
+    "result"
+  ],
+  "incomplete": [
+    "result"
+  ],
+  "failed": [
+    "collector-contract",
+    "dependency",
+    "internal",
+    "precondition",
+    "source-response",
+    "timeout"
+  ],
+  "risk-stopped": [
+    "risk-stop"
+  ],
+  "not-run": [
+    "not-run"
+  ]
+}
+
+const NATIVE_ID_KEYS: Record<Platform, string[]> = {
+  bilibili: ['dynamic_id', 'bvid'], xhs: ['note_id'], douyin: ['aweme_id'], weibo: ['mblog_id'],
+}
+
+/** Mirror the controller's first-seen native identity projection, never count duplicate rows. */
+function uniqueRecords(records: Record<string, unknown>[], platform: Platform): Record<string, unknown>[] {
+  const seen = new Set<string>()
+  return records.filter(record => {
+    const key = NATIVE_ID_KEYS[platform].find(key => record[key] !== undefined && record[key] !== null && record[key] !== '')
+    if (key === undefined || typeof record.link !== 'string' || !record.link.trim()) {
+      throw new Error('record_identity_invalid')
+    }
+    const value = record[key]
+    if (typeof value !== 'string' && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
+      throw new Error('record_identity_invalid')
+    }
+    if (record.platform !== undefined && record.platform !== platform) throw new Error('record_platform_invalid')
+    const identity = `${key}:${value}`
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
 /** Load only fresh, manifest-declared platform JSON from the controller run. */
 export async function loadRunEvidence(
   summary: ControllerSummary,
   config: PluginConfig,
+  options: { startedAtMs?: number } = {},
 ): Promise<RunEvidence> {
   if (summary.runDirectory === null) throw new Error('run_directory_missing')
   const outputRoot = await realpath(config.outputRoot)
   const runDirectory = await safePath(summary.runDirectory, outputRoot, 'directory')
+  if (options.startedAtMs !== undefined && ((await lstat(runDirectory)).mode & 0o777) !== 0o700) {
+    throw new Error('run_permissions_invalid')
+  }
   const safeEvidence: string[] = []
   const declaredEvidence = summary.manifestPath === null
     ? summary.evidence
     : [...summary.evidence, summary.manifestPath]
   for (const path of new Set(declaredEvidence)) {
-    safeEvidence.push(await safePath(path, runDirectory, 'file'))
+    const safe = await safePath(path, runDirectory, 'file')
+    if (options.startedAtMs !== undefined) {
+      const metadata = await lstat(safe)
+      if (metadata.mtimeMs < options.startedAtMs) throw new Error('evidence_stale')
+      if ((metadata.mode & 0o777) !== 0o600) throw new Error('evidence_permissions_invalid')
+    }
+    safeEvidence.push(safe)
   }
   const manifestCandidates = safeEvidence.filter(path => path.endsWith(`${sep}manifest.json`))
   if (manifestCandidates.length !== 1) throw new Error('manifest_missing')
@@ -297,11 +417,17 @@ export async function loadRunEvidence(
     throw new Error('manifest_invalid')
   }
   const manifest = object(manifestValue, 'manifest_invalid')
-  if (typeof manifest.status !== 'string') throw new Error('manifest_invalid')
+  if (typeof manifest.status !== 'string' || !['complete', 'failed', 'risk-stopped'].includes(manifest.status)) throw new Error('manifest_invalid')
   const countsValue = object(manifest.counts, 'manifest_invalid')
   const paths = stringMap(manifest.paths, 'manifest_invalid')
   const platformStatusesValue = stringMap(manifest.platforms, 'manifest_invalid')
   const diagnosticsValue = object(manifest.diagnostics, 'manifest_invalid')
+  const selected = Object.keys(platformStatusesValue).sort()
+  if (selected.length === 0 || selected.some(platform => !PLATFORMS.includes(platform as Platform))
+    || JSON.stringify(Object.keys(countsValue).sort()) !== JSON.stringify(selected)
+    || JSON.stringify(Object.keys(diagnosticsValue).sort()) !== JSON.stringify(selected)) {
+    throw new Error('manifest_platforms_invalid')
+  }
   const engineDirectory = dirname(manifestPath)
   const evidenceSet = new Set(safeEvidence)
   const records: RunEvidence['records'] = {
@@ -318,6 +444,16 @@ export async function loadRunEvidence(
     if (candidate === undefined) return [platform, { kind: 'not-selected', code: 'not-selected' }]
     const diagnostic = object(candidate, 'manifest_diagnostic_invalid')
     if (typeof diagnostic.kind !== 'string' || typeof diagnostic.code !== 'string') {
+      throw new Error('manifest_diagnostic_invalid')
+    }
+    if (!Object.hasOwn(DIAGNOSTIC_CODES, diagnostic.kind)
+      || !DIAGNOSTIC_CODES[diagnostic.kind]?.includes(diagnostic.code)
+      || !Object.hasOwn(STATUS_KINDS, platformStatuses[platform])
+      || !STATUS_KINDS[platformStatuses[platform]]?.includes(diagnostic.kind)) {
+      throw new Error('manifest_diagnostic_invalid')
+    }
+    if ((platformStatuses[platform] === 'shortfall' && diagnostic.code !== 'count-shortfall')
+      || (platformStatuses[platform] === 'incomplete' && !['incomplete-record', 'screenshot-shortfall'].includes(diagnostic.code))) {
       throw new Error('manifest_diagnostic_invalid')
     }
     return [platform, { kind: diagnostic.kind, code: diagnostic.code }]
@@ -348,6 +484,7 @@ export async function loadRunEvidence(
     }
     records[platform] = payload as Record<string, unknown>[]
     if (records[platform].length !== expectedCount) throw new Error('manifest_count_mismatch')
+    records[platform] = uniqueRecords(records[platform], platform)
   }
 
   return {

@@ -1,6 +1,8 @@
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
@@ -24,14 +26,14 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(smoke.stdout).toContain('--archive')
   })
 
-  it('uses the Harness app runtime instead of requiring system Node or pnpm', async () => {
+  it('uses the Harness app runtime and delegates dependency checks to the installer', async () => {
     const setup = await readFile(
       resolve(repositoryRoot, 'Install Media@Missher Harness Plugin.command'),
       'utf8',
     )
     expect(setup).toContain('ELECTRON_RUN_AS_NODE=1')
-    expect(setup).toContain('DSH_DESKTOP_PNPM_ENTRY')
-    expect(setup).toContain('dsh-media-missher-0.1.0.tgz')
+    expect(setup).toContain('Contents/Resources/runtime/node/bin/node')
+    expect(setup).toContain('dsh-media-missher-0.1.1.tgz')
     expect(setup).toContain('tell application "DeepSeek Harness" to quit')
     expect(setup).toContain('/usr/bin/open -a "DeepSeek Harness"')
     expect(setup).not.toContain('command -v node')
@@ -61,4 +63,31 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(installer).toContain('verified.sha256.slice(0, 16)')
     expect(installer).toContain('harness_plugin_bytes_mismatch')
   })
+  it('detects both packaged runtime layouts and fails before mutation without pnpm', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-layout-test-'))
+    const { resolveHarnessLayout } = await import(pathToFileURL(resolve(pluginRoot, 'scripts/install-current-profile.mjs')).href)
+    const put = async (name: string) => {
+      const path = join(root, name)
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, 'fixture')
+      return path
+    }
+    try {
+      const runtime = await put('Contents/Resources/runtime/node/bin/node')
+      const cli = await put('Contents/Resources/runtime/app/lib/bin.js')
+      await expect(resolveHarnessLayout(root, [])).rejects.toThrow('harness_external_pnpm_required')
+      const target = await put('pnpm.mjs')
+      const shim = join(root, 'pnpm')
+      await symlink(target, shim)
+      expect(await resolveHarnessLayout(root, [shim])).toMatchObject({ runtime, cli, pnpm: await realpath(target) })
+      await rm(runtime)
+      const legacyRuntime = await put('Contents/MacOS/DeepSeek Harness')
+      await put('Contents/Resources/app.asar.unpacked/node_modules/@deepseek-ai/dsh/lib/bin.js')
+      await put('Contents/Resources/app.asar.unpacked/node_modules/pnpm/bin/pnpm.cjs')
+      expect(await resolveHarnessLayout(root, [])).toMatchObject({ runtime: legacyRuntime })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
 })

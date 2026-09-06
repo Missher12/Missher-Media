@@ -1,5 +1,38 @@
 # Media@Missher V15.2.1 project context
 
+## Current maintenance candidate — 2026-09-07
+
+This section supersedes conflicting current-state wording in historical sections below. Source baseline: `9d70e1a3030b1534c464155df618e661b56a1f70`; private remote `Missher12/media-missher` verified through GitHub metadata. Worktree: `/Users/missher/Documents/Media@Missher/.worktrees/harness-maintenance-20260906`; branch `codex/media-harness-maintenance-20260906`. Main and the pre-existing platform-capture-fix worktree were not edited. The current task list showed no other active Media maintenance task; the old Media task was not loaded. No collection-core source changes were necessary.
+
+Bundle candidate is **0.1.1**; product VERSION and embedded runtime remain **15.2.1**. The real web profile was read-only inspected and still names Bundle 0.1.0. Its entry SHA-256 was `e436e16c8046400d2fd46a19e8a152de885381f555b318b419abc186b6dc5c65`. Installed runtime current/VERSION was 15.2.1. Do not infer byte equality of installed runtime source from VERSION alone.
+
+### Verified source-to-controller path
+
+`harness-plugin/src/index.ts` -> tsdown `lib/index.js` -> allowlisted payload staging -> private `dsh-media-missher-0.1.1.tgz` -> Bundle-specific Setup ZIP -> installer SHA-named archive under the selected DSH_HOME -> profile node_modules -> `payload/media-missher/scripts/run_collection.py` -> existing runtime `venv/bin/python` and `current/scripts/scrape_all.py`. The existing Python adapter owns runtime/install and browser collection leases, preflight, risk handling and unique-run validation. The Bundle projects declared platform JSON into a private workbook. Runtime provisioning uses the payload installer only if the exact product version is unavailable; this branch did not provision the real runtime.
+
+The local Harness now contains `Contents/Resources/runtime/node/bin/node` and `Contents/Resources/runtime/app/lib/bin.js` (CLI package 0.1.3-alpha.1). There is no bundled pnpm at the old path. The installer now detects this layout and requires an already installed standard-location pnpm; old bundled Electron/CLI/pnpm layout remains supported by fixture tests. No automatic pnpm/BrowserSkill/browser installation occurs. The root historical GitHub bootstrap still downloads the previously released v15.2.1 Setup, not this unpublished candidate.
+
+### Capability and priorities
+
+- Existing creator tool: bilibili/xhs/douyin/weibo, canonical sequential order, default ten per platform, bounded positive count, optional XHS comment count and navigation flag. No tool UID/credential arguments. XLSX Summary + combined + four platform sheets. Existing standalone search/other conversions were not newly exposed.
+- P0 fixed: child cancellation/timeout escalation; malformed/unknown parameters; no-XHS comment mismatch; native-ID duplicate export; successful status with insufficient validated rows; request/platform mismatch; stale or non-private evidence; free-form diagnostic leakage; unsafe numeric identifier export.
+- P0 fixed: SDK runtime import assumed host internals were available through peer dependencies. The Bundle now registers a typed public ToolDefinition with full JSON Schema and explicit argument normalization, using SDK packages only at development time. The installer verifies real entry import as well as entry hash and effective config.
+- P1 fixed: old/new Harness layout discovery; candidate Bundle/Setup version separation; reproducible test preparation from current source; isolated install/reinstall/backup/uninstall evidence.
+- P2 design only: explicit resume and offline re-export. No new collection ability was implemented. Existing checkpoint output is not an implemented resume input.
+
+### Resume proposal requiring a separate agreed scope
+
+Goal: recover useful work after a non-risk interruption while preserving truthful freshness. Add an explicit request for a previous owned run, selected platforms and bounded new count. Validate the exact prior manifest/checkpoint, native IDs, private permissions, schema/version, profile identity via a local digest, and absence of a risk/cooldown stop. Keep the previous run immutable. A newly authorized run reacquires the existing lease and passes fresh preflight; it records a parent-run reference and separately labels prior versus newly observed items. It must never count historical items as fresh observations or automatically replay a risk stop. Only after agreeing this contract should controller/checkpoint input change; recheck parallel ownership before touching Python core. Acceptance must cover interrupted partial runs, ID collisions, profile mismatch, stale checkpoints, risk stops and current-run export attribution. Offline re-export should likewise be explicit and labeled historical, without navigation.
+
+### Verification and boundaries
+
+Python sockets-disabled regression: **988 passed**, one intentional pytest-socket warning. Test dependencies were installed only into uv's test environment; no browser binary was downloaded. Bundle test, typecheck, package checksums and exact native lifecycle results are recorded in HANDOVER.md and `harness-plugin/dist/MAINTENANCE-EVIDENCE.json` after final packaging. Native lifecycle uses a temporary DSH_HOME and synthetic records; it does not prove platform login or real collection.
+
+Live account/platform requests this session: **0**. No live preflight, navigation, Cookie/profile read, BrowserSkill session or remote write was performed. Required for live acceptance: selected platform(s), exact target or permission to use an existing private profile, per-platform count and explicit navigation permission where needed. Report actual platform/request/success/failure/output counts then; never reuse the historical 40/40 as current proof.
+
+No push, tag, release, main merge, real-profile installation or change to Desktop repositories was performed. Preserve the old working trees, runtime, user profile, browser and private outputs.
+
+
 Media@Missher collects and validates Bilibili, Xiaohongshu, Douyin, and Weibo records through one independently authored shared runtime. This file records the architecture, verification workflow, deployment state, and recovery boundaries for future work.
 
 The current source and installed operational candidate version is Media@Missher V15.2.1 (`15.2.1`), recorded once in the repository `VERSION` file. Ordinary Bilibili and Douyin creator collection is live-accepted; the optional Bilibili complete-mode exact-target blocker below remains intentionally unresolved. Product versioning is separate from the installer's unique UTC timestamp-and-random-suffix deployment release so repeated upgrades and exact rollback paths remain collision-free.

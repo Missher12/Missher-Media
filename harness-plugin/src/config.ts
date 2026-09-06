@@ -60,15 +60,17 @@ function positiveFinite(value: number, code: string): number {
 }
 
 function safeAbsolutePath(value: string, code: string): string {
-  if (!value || !isAbsolute(value)) fail(code)
+  if (typeof value !== 'string' || !value || value.includes('\0') || !isAbsolute(value)) fail(code)
   const normalized = resolve(value)
   if (normalized === parse(normalized).root) fail(code)
   return normalized
 }
 
 function parsePlatforms(value: string): Platform[] {
-  const requested = value.split(',').map(item => item.trim().toLowerCase()).filter(Boolean)
-  if (requested.length === 0) fail('platforms_empty')
+  if (typeof value !== 'string') fail('platforms_invalid')
+  const requested = value.split(',').map(item => item.trim().toLowerCase())
+  if (requested.every(item => item === '')) fail('platforms_empty')
+  if (requested.some(item => item === '')) fail('platforms_invalid')
   if (new Set(requested).size !== requested.length) fail('platforms_duplicate')
   if (requested.some(item => !PLATFORMS.includes(item as Platform))) fail('platforms_invalid')
   const selected = new Set(requested)
@@ -135,27 +137,36 @@ export function normalizePluginConfig(
 
 /** Resolve a model request into one canonical, bounded collection request. */
 export function normalizeCollectArgs(
-  input: CollectArgsInput,
+  input: unknown,
   config: PluginConfig,
 ): CollectArgs {
-  const platforms = input.platforms === undefined
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) fail('arguments_invalid')
+  const supplied = input as Record<string, unknown>
+  const allowed = ['platforms', 'count', 'xhs_comments', 'allow_navigation']
+  if (Object.keys(supplied).some(key => !allowed.includes(key))) fail('arguments_invalid')
+  for (const key of allowed) {
+    if (supplied[key] === null) fail('arguments_invalid')
+  }
+  const args = supplied as CollectArgsInput
+  const platforms = args.platforms === undefined
     ? [...config.defaultPlatforms]
-    : parsePlatforms(input.platforms)
-  const count = finiteInteger(input.count ?? config.defaultCount, 1, config.maxCount, 'count_invalid')
+    : parsePlatforms(args.platforms)
+  const count = finiteInteger(args.count ?? config.defaultCount, 1, config.maxCount, 'count_invalid')
   const xhsComments = finiteInteger(
-    input.xhs_comments ?? config.defaultXhsComments,
+    args.xhs_comments ?? config.defaultXhsComments,
     0,
     100,
     'xhs_comments_invalid',
   )
-  if (input.allow_navigation !== undefined && typeof input.allow_navigation !== 'boolean') {
+  if (args.allow_navigation !== undefined && typeof args.allow_navigation !== 'boolean') {
     fail('allow_navigation_invalid')
   }
+  if (xhsComments > 0 && !platforms.includes('xhs')) fail('xhs_comments_platform_invalid')
   return {
     platforms,
     platformText: platforms.join(','),
     count,
     xhsComments,
-    allowNavigation: input.allow_navigation ?? config.defaultAllowNavigation,
+    allowNavigation: args.allow_navigation ?? config.defaultAllowNavigation,
   }
 }

@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 const execute = promisify(execFile)
 const pluginRoot = resolve(import.meta.dirname, '..')
@@ -10,10 +11,17 @@ const repositoryRoot = resolve(pluginRoot, '..')
 const setupArchive = resolve(
   pluginRoot,
   'dist',
-  'Media-Missher-Harness-Setup-v15.2.1.zip',
+  'Media-Missher-Harness-Setup-bundle-v0.1.1.zip',
 )
 
 describe('private GitHub setup release', () => {
+  beforeAll(async () => {
+    await execute('pnpm', ['run', 'pack:bundle'], { cwd: pluginRoot })
+    const archive = await readFile(resolve(pluginRoot, 'dist', 'dsh-media-missher-0.1.1.tgz'))
+    await writeFile(resolve(pluginRoot, 'dist', 'SHA256SUMS.txt'),
+      `${createHash('sha256').update(archive).digest('hex')}  dsh-media-missher-0.1.1.tgz\n`)
+  }, 30000)
+
   it('builds a self-contained setup archive with an exact allowlist', async () => {
     const built = await execute(process.execPath, [
       resolve(pluginRoot, 'scripts', 'build-setup.mjs'),
@@ -27,7 +35,7 @@ describe('private GitHub setup release', () => {
     ])
     const verifyResult = JSON.parse(verified.stdout)
     expect(verifyResult.ok).toBe(true)
-    expect(verifyResult.bundleVersion).toBe('0.1.0')
+    expect(verifyResult.bundleVersion).toBe('0.1.1')
     expect(verifyResult.productVersion).toBe('15.2.1')
 
     const setupChecksum = await readFile(
@@ -35,7 +43,7 @@ describe('private GitHub setup release', () => {
       'utf8',
     )
     expect(setupChecksum).toBe(
-      `${verifyResult.sha256}  Media-Missher-Harness-Setup-v15.2.1.zip\n`,
+      `${verifyResult.sha256}  Media-Missher-Harness-Setup-bundle-v0.1.1.zip\n`,
     )
   })
 

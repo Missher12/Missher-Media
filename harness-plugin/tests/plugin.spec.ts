@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,7 +43,7 @@ afterEach(async () => {
 })
 
 describe('Media Agent tool', () => {
-  it('executes the zero-argument request through the runtime and returns the workbook', async () => {
+  it('downgrades a claimed success when verified rows fall short of the request', async () => {
     const root = await mkdtemp(join(tmpdir(), 'media-plugin-test-'))
     temporaryRoots.push(root)
     const config = normalizePluginConfig({
@@ -67,6 +67,7 @@ describe('Media Agent tool', () => {
         stderr: '',
       }
     })
+    await mkdir(config.outputRoot, { recursive: true })
     const tool = createMediaTool(config, {
       ensureRuntime: vi.fn(async (_config, dependencies) => {
         expect(dependencies.signal).toBe(signal)
@@ -80,14 +81,14 @@ describe('Media Agent tool', () => {
     const value = await tool.execute({}, { signal } as never) as Record<string, unknown>
 
     expect(value).toEqual({
-      status: 'success',
+      status: 'partial',
       platforms: 'bilibili,xhs,douyin,weibo',
       requestedPerPlatform: 10,
       totalCollected: 4,
       runDirectory,
       manifestPath: evidence.manifestPath,
       workbookPath: join(runDirectory, 'inspection.xlsx'),
-      summary: 'bilibili 1/10 ok; xhs 1/10 ok; douyin 1/10 ok; weibo 1/10 ok',
+      summary: 'bilibili 1/10 count-shortfall; xhs 1/10 count-shortfall; douyin 1/10 count-shortfall; weibo 1/10 count-shortfall',
     })
     expect(processRunner.mock.calls[0]?.[1]).toContain('bilibili,xhs,douyin,weibo')
     expect(tool.output.render({}, value)[0]).toMatchObject({
@@ -112,6 +113,7 @@ describe('Media Agent tool', () => {
     evidence.totalCollected = 3
     const load = vi.fn(async () => evidence)
     const write = vi.fn(async () => join(runDirectory, 'partial.xlsx'))
+    await mkdir(config.outputRoot, { recursive: true })
     const tool = createMediaTool(config, {
       ensureRuntime: async () => ({ python: '/runtime/python', payloadRoot: '/payload' }),
       processRunner: async () => ({

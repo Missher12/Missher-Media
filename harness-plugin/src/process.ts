@@ -17,11 +17,11 @@ export interface ProcessResult {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
-function terminateProcessGroup(child: ReturnType<typeof spawn>): void {
+function terminateProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return
   try {
-    if (process.platform === 'win32') child.kill('SIGTERM')
-    else process.kill(-child.pid, 'SIGTERM')
+    if (process.platform === 'win32') child.kill(signal)
+    else process.kill(-child.pid, signal)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
   }
@@ -58,11 +58,13 @@ export function runProcess(
     let stdoutBytes = 0
     let stderrBytes = 0
     let failure: Error | undefined
+    let forceStop: ReturnType<typeof setTimeout> | undefined
 
     const stop = (error: Error): void => {
       if (failure !== undefined) return
       failure = error
-      terminateProcessGroup(child)
+      terminateProcessGroup(child, 'SIGTERM')
+      forceStop = setTimeout(() => terminateProcessGroup(child, 'SIGKILL'), 1000)
     }
     const collect = (target: Buffer[], stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
       if (failure !== undefined) return
@@ -79,6 +81,7 @@ export function runProcess(
 
     const onAbort = (): void => stop(new Error('process_aborted'))
     options.signal?.addEventListener('abort', onAbort, { once: true })
+    if (options.signal?.aborted) onAbort()
     const timeout = timeoutMs > 0
       ? setTimeout(() => stop(new Error('process_timed_out')), timeoutMs)
       : undefined
@@ -88,6 +91,11 @@ export function runProcess(
     })
     child.once('close', (code, signal) => {
       if (timeout !== undefined) clearTimeout(timeout)
+      if (forceStop !== undefined) {
+        // The leader may exit before a descendant that closed its inherited pipes.
+        if (failure !== undefined) terminateProcessGroup(child, 'SIGKILL')
+        clearTimeout(forceStop)
+      }
       options.signal?.removeEventListener('abort', onAbort)
       if (failure !== undefined) {
         reject(failure)

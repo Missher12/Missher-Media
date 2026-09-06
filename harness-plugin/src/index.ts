@@ -1,5 +1,7 @@
+import { mkdtemp, lstat, rmdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import {
   normalizeCollectArgs,
   normalizePluginConfig,
@@ -68,55 +70,63 @@ export function createMediaTool(
   config: PluginConfig,
   dependencies: MediaToolDependencies = {},
 ): ToolDefinition {
-  return defineTool({
+  return {
     name: 'media_missher_collect',
     description: 'Collect authorized creator records with Media@Missher. With no arguments, collect 10 records from each of Bilibili, Xiaohongshu, Douyin, and Weibo sequentially and create a private Excel workbook.',
     parameters: {
-      platforms: {
-        type: 'string',
-        description: 'Optional comma-separated subset of bilibili,xhs,douyin,weibo. Default: all four.',
-        default: 'bilibili,xhs,douyin,weibo',
-      },
-      count: {
-        type: 'integer',
-        description: `Records per selected platform, from 1 through ${config.maxCount}. Default: ${config.defaultCount}.`,
-        default: config.defaultCount,
-      },
-      xhs_comments: {
-        type: 'integer',
-        description: 'Optional Xiaohongshu comments per record, from 0 through 100. Default: 0.',
-        default: config.defaultXhsComments,
-      },
-      allow_navigation: {
-        type: 'boolean',
-        description: 'Authorize exact-host navigation in the signed-in Media browser. Default: true.',
-        default: config.defaultAllowNavigation,
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        platforms: {
+          type: 'string',
+          description: 'Optional comma-separated subset of bilibili,xhs,douyin,weibo. Default: all four.',
+          default: 'bilibili,xhs,douyin,weibo',
+        },
+        count: {
+          type: 'integer',
+          description: `Records per selected platform, from 1 through ${config.maxCount}. Default: ${config.defaultCount}.`,
+          default: config.defaultCount,
+        },
+        xhs_comments: {
+          type: 'integer',
+          description: 'Optional Xiaohongshu comments per record, from 0 through 100. Default: 0.',
+          default: config.defaultXhsComments,
+        },
+        allow_navigation: {
+          type: 'boolean',
+          description: `Authorize exact-host navigation in the signed-in Media browser. Default: ${config.defaultAllowNavigation}.`,
+          default: config.defaultAllowNavigation,
+        },
       },
     },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
+        required: ['status', 'platforms', 'requestedPerPlatform', 'totalCollected', 'runDirectory', 'manifestPath', 'workbookPath', 'summary'],
         properties: {
-          status: { type: 'string', required: true },
-          platforms: { type: 'string', required: true },
-          requestedPerPlatform: { type: 'integer', required: true },
-          totalCollected: { type: 'integer', required: true },
-          runDirectory: { type: 'string', required: true },
-          manifestPath: { type: 'string', required: true },
-          workbookPath: { type: 'string', required: true },
-          summary: { type: 'string', required: true },
+          status: { type: 'string' },
+          platforms: { type: 'string' },
+          requestedPerPlatform: { type: 'integer' },
+          totalCollected: { type: 'integer' },
+          runDirectory: { type: 'string' },
+          manifestPath: { type: 'string' },
+          workbookPath: { type: 'string' },
+          summary: { type: 'string' },
         },
       },
-      render: (_args, value) => [{
-        type: 'text',
-        text: [
-          `Media@Missher: ${value.status}`,
-          value.summary,
-          value.workbookPath ? `Workbook: ${value.workbookPath}` : 'Workbook: not created',
-          value.runDirectory ? `Run: ${value.runDirectory}` : 'Run: not created',
-        ].join('\n'),
-      }],
+      render: (_args, rawValue) => {
+        const value = rawValue as unknown as ToolValue
+        return [{
+          type: 'text',
+          text: [
+            `Media@Missher: ${value.status}`,
+            value.summary,
+            value.workbookPath ? `Workbook: ${value.workbookPath}` : 'Workbook: not created',
+            value.runDirectory ? `Run: ${value.runDirectory}` : 'Run: not created',
+          ].join('\n'),
+        }]
+      },
     },
     timeoutMs: Math.ceil((config.executionTimeoutSeconds + 60) * 1000),
     presentCall: () => ({
@@ -130,6 +140,14 @@ export function createMediaTool(
       const runtime = await runtimeProvider(config, { signal: exec.signal })
       const invocation = buildControllerInvocation(config, request, runtime)
       const processRunner = dependencies.processRunner ?? runProcess
+      // Use the output filesystem clock, matching the Python validator's freshness boundary.
+      const marker = await mkdtemp(join(config.outputRoot, '.evidence-start-'))
+      let startedAtMs: number
+      try {
+        startedAtMs = (await lstat(marker)).mtimeMs
+      } finally {
+        await rmdir(marker)
+      }
       const completed = await processRunner(invocation.executable, invocation.args, {
         cwd: invocation.cwd,
         env: invocation.env,
@@ -145,7 +163,29 @@ export function createMediaTool(
       let evidence: RunEvidence | undefined
       let workbookPath = ''
       if (controller.runDirectory !== null && controller.manifestPath !== null) {
-        evidence = await (dependencies.loadRunEvidence ?? loadRunEvidence)(controller, config)
+        evidence = await (dependencies.loadRunEvidence ?? loadRunEvidence)(controller, config, { startedAtMs })
+        for (const platform of Object.keys(evidence.records) as (keyof RunEvidence['records'])[]) {
+          if (!request.platforms.includes(platform) && (
+            evidence.records[platform].length > 0 || evidence.platformStatuses[platform] !== 'not-selected'
+          )) throw new Error('controller_platform_mismatch')
+        }
+        const loaded = evidence
+        // A controller success must also satisfy the independently loaded projection.
+        if (controller.status === 'success' && (evidence.runStatus !== 'complete'
+          || request.platforms.some(platform => loaded.platformStatuses[platform] !== 'complete'
+            || loaded.records[platform].length < request.count))) {
+          controller.status = 'partial'
+          evidence.runStatus = 'partial'
+          for (const platform of request.platforms) {
+            if (evidence.platformStatuses[platform] === 'complete' && evidence.records[platform].length < request.count) {
+              evidence.platformStatuses[platform] = 'shortfall'
+              evidence.diagnostics[platform] = { kind: 'result', code: 'count-shortfall' }
+            }
+          }
+        }
+        if (request.platforms.some(platform => loaded.platformStatuses[platform] === 'risk-stopped')) {
+          controller.status = 'risk-stopped'
+        }
         if (evidence.totalCollected > 0) {
           workbookPath = await (dependencies.writeWorkbook ?? writeWorkbook)(evidence, request)
         }
@@ -164,7 +204,7 @@ export function createMediaTool(
         summary: resultSummary(request, evidence, controller.status),
       }
     },
-  })
+  }
 }
 
 /** Register the Bundle's one Agent tool and return its exact disposer. */

@@ -24,7 +24,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(scriptDirectory, '..')
 const repositoryRoot = resolve(pluginRoot, '..')
 const distributionDirectory = join(pluginRoot, 'dist')
-const archiveName = 'Media-Missher-Harness-Setup-v15.2.1.zip'
+const archiveName = 'Media-Missher-Harness-Setup-bundle-v0.1.1.zip'
 const outputArchive = join(distributionDirectory, archiveName)
 const checksumPath = join(distributionDirectory, 'SETUP-SHA256.txt')
 const setupDirectoryName = 'Media-Missher-Harness-Setup'
@@ -47,8 +47,8 @@ const setupFiles = [
     mode: 0o600,
   },
   {
-    source: join(distributionDirectory, 'dsh-media-missher-0.1.0.tgz'),
-    destination: 'harness-plugin/dist/dsh-media-missher-0.1.0.tgz',
+    source: join(distributionDirectory, 'dsh-media-missher-0.1.1.tgz'),
+    destination: 'harness-plugin/dist/dsh-media-missher-0.1.1.tgz',
     mode: 0o600,
   },
   {
@@ -78,13 +78,13 @@ async function makeSetupArchive() {
   for (const file of setupFiles) await requireRegularFile(file.source)
 
   const bundle = await verifyPackage(
-    join(distributionDirectory, 'dsh-media-missher-0.1.0.tgz'),
+    join(distributionDirectory, 'dsh-media-missher-0.1.1.tgz'),
   )
   const bundleChecksum = await readFile(
     join(distributionDirectory, 'SHA256SUMS.txt'),
     'utf8',
   )
-  if (bundleChecksum !== `${bundle.sha256}  dsh-media-missher-0.1.0.tgz\n`) {
+  if (bundleChecksum !== `${bundle.sha256}  dsh-media-missher-0.1.1.tgz\n`) {
     throw new Error('setup_bundle_checksum_invalid')
   }
 

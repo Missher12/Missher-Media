@@ -17,7 +17,7 @@ async function fakeArchive(extraFile?: string): Promise<string> {
   await mkdir(join(packageRoot, 'payload'), { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     name: 'dsh-media-missher',
-    version: '0.1.0',
+    version: '0.1.1',
     private: true,
     os: ['darwin'],
     dsh: { bundle: { patch: './cordis.patch.yml' } },
@@ -31,7 +31,7 @@ async function fakeArchive(extraFile?: string): Promise<string> {
     'media-missher-source-v1\n',
   )
   if (extraFile !== undefined) await writeFile(join(packageRoot, extraFile), 'forbidden\n')
-  const archive = join(root, 'dsh-media-missher-0.1.0.tgz')
+  const archive = join(root, 'dsh-media-missher-0.1.1.tgz')
   await execute('/usr/bin/tar', ['-czf', archive, '-C', root, 'package'])
   return archive
 }

@@ -13,14 +13,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import ExcelJS from 'exceljs'
-import { installCurrentProfile } from './install-current-profile.mjs'
+import { installCurrentProfile, resolveHarnessLayout, harnessEnvironmentPath } from './install-current-profile.mjs'
 import { verifyPackage } from './verify-package.mjs'
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-0.1.0.tgz')
-const defaultRuntime = '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'
-const defaultCli = '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar.unpacked/node_modules/@deepseek-ai/dsh/lib/bin.js'
-const defaultPnpm = '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar.unpacked/node_modules/pnpm/bin/pnpm.cjs'
+const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-0.1.1.tgz')
 const platforms = ['bilibili', 'xhs', 'douyin', 'weibo']
 
 function help() {
@@ -36,9 +33,9 @@ function argumentsFrom(argv) {
   const result = {
     archive: defaultArchive,
     profile: 'media-smoke',
-    runtime: defaultRuntime,
-    cli: defaultCli,
-    pnpm: defaultPnpm,
+    runtime: undefined,
+    cli: undefined,
+    pnpm: undefined,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index]
@@ -95,6 +92,10 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
     return null
   }
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(options.profile)) throw new Error('profile_name_invalid')
+  if (!options.runtime || !options.cli || !options.pnpm) {
+    const layout = await resolveHarnessLayout()
+    for (const [key, value] of Object.entries(layout)) options[key] ??= value
+  }
   const verified = await verifyPackage(options.archive)
   const dshHome = await mkdtemp(join(tmpdir(), 'dsh-media-native-smoke-'))
   const profileRoot = join(dshHome, 'profiles', options.profile)
@@ -102,6 +103,7 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
   const statePath = join(dshHome, 'media-missher', 'state.keep')
   const environment = {
     ...process.env,
+    PATH: harnessEnvironmentPath(options.runtime, options.pnpmBin),
     DSH_HOME: dshHome,
     DSH_DESKTOP_PNPM_ENTRY: resolve(options.pnpm),
     DSH_TELEMETRY_MODE: 'DISABLED',
@@ -122,6 +124,15 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
       '--dsh-home', dshHome,
     ], { writeOutput: false })
     installed = true
+    const packageBeforeRefresh = await readFile(join(profileRoot, 'package.json'), 'utf8')
+    const refreshed = await installCurrentProfile([
+      '--archive', verified.archive, '--profile', options.profile,
+      '--runtime', resolve(options.runtime), '--cli', resolve(options.cli),
+      '--pnpm', resolve(options.pnpm), '--dsh-home', dshHome,
+    ], { writeOutput: false })
+    if (!refreshed.backup || await readFile(refreshed.backup, 'utf8') !== packageBeforeRefresh) {
+      throw new Error('native_smoke_refresh_backup_invalid')
+    }
     const configuration = run(
       resolve(options.runtime),
       resolve(options.cli),
@@ -206,6 +217,7 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
       totalCollected: value.totalCollected,
       workbookSheets: workbook.worksheets.length,
       adjacentStatePreserved: true,
+      sameVersionRefreshVerified: true,
     }
     process.stdout.write(`${JSON.stringify(result)}\n`)
     return result

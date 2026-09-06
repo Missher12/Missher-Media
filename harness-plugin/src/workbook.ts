@@ -35,6 +35,7 @@ function cellValue(key: string, value: unknown): string | number | boolean | nul
   if (typeof value === 'string') return safeString(value)
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new Error('workbook_non_finite_number')
+    if (IDENTIFIER_KEY.test(key) && !Number.isSafeInteger(value)) throw new Error('workbook_unsafe_identifier')
     return IDENTIFIER_KEY.test(key) ? String(value) : value
   }
   if (typeof value === 'boolean') return value

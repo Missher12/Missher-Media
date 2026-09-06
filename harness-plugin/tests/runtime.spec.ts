@@ -3,6 +3,8 @@ import {
   mkdir,
   mkdtemp,
   realpath,
+  readFile,
+  utimes,
   rm,
   symlink,
   writeFile,
@@ -62,7 +64,7 @@ async function evidenceFixture(outputRoot: string) {
   for (const platform of ['bilibili', 'xhs', 'douyin', 'weibo']) {
     const name = `${platform}.json`
     const path = join(engineDirectory, name)
-    await writeFile(path, `${JSON.stringify([{ platform, native_id: `${platform}-1`, title: platform }])}\n`)
+    await writeFile(path, `${JSON.stringify([{ platform, [{ bilibili: 'dynamic_id', xhs: 'note_id', douyin: 'aweme_id', weibo: 'mblog_id' }[platform]!]: `${platform}-1`, link: 'https://example.invalid/content', title: platform }])}\n`)
     paths[platform] = name
     counts[platform] = 1
     platforms[platform] = 'complete'
@@ -224,7 +226,7 @@ describe('fresh run evidence', () => {
 
     expect(result.manifestPath).toBe(await realpath(evidence.manifestPath))
     expect(result.totalCollected).toBe(4)
-    expect(result.records.bilibili[0]).toMatchObject({ native_id: 'bilibili-1' })
+    expect(result.records.bilibili[0]).toMatchObject({ dynamic_id: 'bilibili-1' })
     expect(result.diagnostics.weibo).toEqual({ kind: 'ok', code: 'ok' })
   })
 
@@ -264,4 +266,42 @@ describe('fresh run evidence', () => {
       manifestPath: evidence.manifestPath,
     }, setup.config)).rejects.toThrow('manifest_count_mismatch')
   })
+  it('exports first-seen native IDs only even when the source manifest counts duplicate rows', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    const path = join(evidence.engineDirectory, 'bilibili.json')
+    const records = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(path, JSON.stringify([...records, { ...records[0], title: 'duplicate' }]))
+    const manifest = JSON.parse(await readFile(evidence.manifestPath, 'utf8'))
+    manifest.counts.bilibili = 2
+    await writeFile(evidence.manifestPath, JSON.stringify(manifest))
+    const result = await loadRunEvidence({ status: 'success', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config)
+    expect(result.records.bilibili).toHaveLength(1)
+    expect(result.records.bilibili[0]!.title).toBe('bilibili')
+    expect(result.totalCollected).toBe(4)
+  })
+
+  it('rejects stale evidence before export using this invocation start time', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    await chmod(evidence.runDirectory, 0o700)
+    for (const path of evidence.evidence) await chmod(path, 0o600)
+    await utimes(evidence.manifestPath, new Date(0), new Date(0))
+    await expect(loadRunEvidence({ status: 'success', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config,
+      { startedAtMs: Date.now() - 1000 })).rejects.toThrow('evidence_stale')
+  })
+
+  it('rejects free-form private diagnostic text before projection', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    const manifest = JSON.parse(await readFile(evidence.manifestPath, 'utf8'))
+    manifest.diagnostics.bilibili = { kind: 'internal', code: 'private fixture text' }
+    await writeFile(evidence.manifestPath, JSON.stringify(manifest))
+    await expect(loadRunEvidence({ status: 'failed', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config))
+      .rejects.toThrow('manifest_diagnostic_invalid')
+  })
+
 })

@@ -32,6 +32,8 @@ describe('Media plugin configuration', () => {
     ['bilibili,bilibili', 'platforms_duplicate'],
     ['bilibili,unknown', 'platforms_invalid'],
     ['', 'platforms_empty'],
+    ['bilibili,', 'platforms_invalid'],
+    [',weibo', 'platforms_invalid'],
   ])('rejects invalid platform selection %s', (platforms, code) => {
     const config = normalizePluginConfig({}, dshHome, userHome)
     expect(() => normalizeCollectArgs({ platforms }, config)).toThrow(code)
@@ -66,4 +68,20 @@ describe('Media plugin configuration', () => {
   ])('rejects unsafe plugin config %#', (input, code) => {
     expect(() => normalizePluginConfig(input, dshHome, userHome)).toThrow(code)
   })
+  it('rejects wrong platform types with a fixed diagnostic', () => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs({ platforms: 42 as never }, config)).toThrow('platforms_invalid')
+  })
+
+  it('rejects comments requested without Xiaohongshu', () => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs({ platforms: 'weibo', xhs_comments: 1 }, config))
+      .toThrow('xhs_comments_platform_invalid')
+  })
+
+  it.each([null, [], { count: null }, { cookie: 'synthetic' }])('rejects malformed or undeclared arguments %#', (input) => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs(input, config)).toThrow('arguments_invalid')
+  })
+
 })

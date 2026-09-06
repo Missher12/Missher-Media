@@ -84,7 +84,7 @@ export async function verifyPackage(requestedArchive) {
     const manifest = JSON.parse(await readFile(join(extractedRoot, 'package.json'), 'utf8'))
     if (
       manifest.name !== 'dsh-media-missher'
-      || manifest.version !== '0.1.0'
+      || manifest.version !== '0.1.1'
       || manifest.private !== true
       || JSON.stringify(manifest.os) !== '["darwin"]'
       || manifest.dsh?.bundle?.patch !== './cordis.patch.yml'

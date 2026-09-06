@@ -48,4 +48,12 @@ describe('bounded child process execution', () => {
       { timeoutMs: 40 },
     )).rejects.toThrow('process_timed_out')
   })
+  it('force-stops a child that ignores SIGTERM within a bounded grace period', async () => {
+    const started = Date.now()
+    await expect(runProcess(process.execPath, ['-e',
+      'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000)',
+    ], { timeoutMs: 500 })).rejects.toThrow('process_timed_out')
+    expect(Date.now() - started).toBeLessThan(4000)
+  }, 5000)
+
 })

@@ -19,7 +19,7 @@ function evidence(runDirectory: string): RunEvidence {
   for (const platform of PLATFORMS) {
     records[platform] = Array.from({ length: 10 }, (_, index) => ({
       platform,
-      native_id: 10_000_000_000_000_000 + index,
+      native_id: String(10_000_000_000_000_000n + BigInt(index)),
       title: `${platform}-${index}`,
       formula_text: '=SUM(1,1)',
       nested: { order: index },
@@ -87,8 +87,20 @@ describe('private inspection workbook', () => {
     const idColumn = headers.indexOf('native_id')
     const formulaColumn = headers.indexOf('formula_text')
     const nestedColumn = headers.indexOf('nested')
-    expect(combined?.getRow(2).getCell(idColumn).value).toBeTypeOf('string')
+    expect(combined?.getRow(2).getCell(idColumn).value).toBe('10000000000000000')
+    expect(combined?.getRow(3).getCell(idColumn).value).toBe('10000000000000001')
     expect(combined?.getRow(2).getCell(formulaColumn).value).toBe("'=SUM(1,1)")
     expect(combined?.getRow(2).getCell(nestedColumn).value).toBe('{"order":0}')
   })
+  it('rejects numeric identifiers that have already lost precision', async () => {
+    const runDirectory = await mkdtemp(join(tmpdir(), 'media-workbook-test-'))
+    temporaryRoots.push(runDirectory)
+    const fixture = evidence(runDirectory)
+    fixture.records.bilibili[0]!.native_id = Number.MAX_SAFE_INTEGER + 1
+    const config = normalizePluginConfig({}, join(runDirectory, 'dsh'), runDirectory)
+    await expect(writeWorkbook(fixture, normalizeCollectArgs({}, config)))
+      .rejects.toThrow('workbook_unsafe_identifier')
+    expect(await readdir(runDirectory)).toEqual([])
+  })
+
 })
