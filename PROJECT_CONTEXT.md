@@ -26,7 +26,7 @@ Goal: recover useful work after a non-risk interruption while preserving truthfu
 
 ### Verification and boundaries
 
-Python sockets-disabled regression: **988 passed**, one intentional pytest-socket warning. Test dependencies were installed only into uv's test environment; no browser binary was downloaded. Bundle test, typecheck, package checksums and exact native lifecycle results are recorded in HANDOVER.md and `harness-plugin/dist/MAINTENANCE-EVIDENCE.json` after final packaging. Native lifecycle uses a temporary DSH_HOME and synthetic records; it does not prove platform login or real collection.
+Python sockets-disabled regression: **988 passed**, one intentional pytest-socket warning. Test dependencies were installed only into uv's test environment; no browser binary was downloaded. Implementation/artifact commit: `60ec3272aaec6c8ff4107a2ad4d77b13ba7e01fd`. Bundle regression: **61 passed**; typecheck, package checksums and exact native lifecycle results are recorded in HANDOVER.md and `harness-plugin/dist/MAINTENANCE-EVIDENCE.json` after final packaging. Native lifecycle uses a temporary DSH_HOME and synthetic records; it does not prove platform login or real collection.
 
 Live account/platform requests this session: **0**. No live preflight, navigation, Cookie/profile read, BrowserSkill session or remote write was performed. Required for live acceptance: selected platform(s), exact target or permission to use an existing private profile, per-platform count and explicit navigation permission where needed. Report actual platform/request/success/failure/output counts then; never reuse the historical 40/40 as current proof.
 

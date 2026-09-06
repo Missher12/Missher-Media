@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "verifiedDate": "2026-09-07",
+  "sourceCommit": "60ec3272aaec6c8ff4107a2ad4d77b13ba7e01fd",
+  "baseCommit": "9d70e1a3030b1534c464155df618e661b56a1f70",
+  "branch": "codex/media-harness-maintenance-20260906",
+  "repositoryPrivate": true,
+  "bundleVersion": "0.1.1",
+  "productVersion": "15.2.1",
+  "artifacts": [
+    {
+      "file": "dsh-media-missher-0.1.1.tgz",
+      "bytes": 185980,
+      "sha256": "74e12a0d230869726606c7c858bdb9df9180b0c2a99e9b6db22b212c199c0878"
+    },
+    {
+      "file": "Media-Missher-Harness-Setup-bundle-v0.1.1.zip",
+      "bytes": 193792,
+      "sha256": "44720471c85d2ae8d3fad33368aded3c0463068034ce4ed00594ec9e8d447a7d"
+    }
+  ],
+  "entrySha256": "c7ca17dc541cfa947a310a94efaae12d46552c05a9098cbffb8e6cf6182b56bb",
+  "tests": {
+    "typescript": "passed",
+    "bundle": {
+      "files": 10,
+      "passed": 61,
+      "failed": 0
+    },
+    "python": {
+      "passed": 988,
+      "failed": 0,
+      "socketPolicy": "disabled; Unix sockets allowed",
+      "warnings": 1,
+      "warningReason": "intentional socket-block test"
+    },
+    "packageAllowlist": "passed",
+    "setupAllowlistAndSourceBytes": "passed",
+    "gitDiffCheck": "passed",
+    "native": {
+      "cliVersion": "0.1.3-alpha.1",
+      "runtimeLayout": "Resources/runtime",
+      "isolatedDshHome": true,
+      "realCliInstall": true,
+      "realEntryImport": true,
+      "sameVersionRefresh": true,
+      "exactPreviousManifestBackup": true,
+      "workbookSheets": 6,
+      "uninstall": true,
+      "adjacentStatePreserved": true,
+      "collection": "synthetic infrastructure injection; no platform calls",
+      "platforms": [
+        {
+          "platform": "bilibili",
+          "requested": 10,
+          "accepted": 10,
+          "failed": 0
+        },
+        {
+          "platform": "xhs",
+          "requested": 10,
+          "accepted": 10,
+          "failed": 0
+        },
+        {
+          "platform": "douyin",
+          "requested": 10,
+          "accepted": 10,
+          "failed": 0
+        },
+        {
+          "platform": "weibo",
+          "requested": 10,
+          "accepted": 10,
+          "failed": 0
+        }
+      ],
+      "temporarySyntheticOutput": "removed by smoke after verification"
+    },
+    "live": {
+      "requests": 0,
+      "performed": false,
+      "reason": "no current platform/target/count/navigation authorization"
+    }
+  },
+  "boundaries": {
+    "coreModified": false,
+    "realProfileInstalled": false,
+    "realRuntimeProvisioned": false,
+    "browserSkillStarted": false,
+    "published": false,
+    "pushed": false
+  },
+  "commands": [
+    "pnpm exec tsc --noEmit",
+    "pnpm test",
+    "node scripts/native-smoke.mjs --archive dist/dsh-media-missher-0.1.1.tgz",
+    "node scripts/verify-package.mjs dist/dsh-media-missher-0.1.1.tgz",
+    "node scripts/verify-setup.mjs dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --no-project --with pytest --with pytest-asyncio --with pytest-socket --with-requirements runtime/requirements.lock python -m pytest -q -p no:cacheprovider --disable-socket --allow-unix-socket"
+  ]
+}
