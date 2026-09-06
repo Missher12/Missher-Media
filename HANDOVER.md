@@ -2,7 +2,7 @@
 
 当前交付：Bundle **0.1.1 本地候选**，采集主项目 **15.2.1**。独立工作树 `/Users/missher/Documents/Media@Missher/.worktrees/harness-maintenance-20260906`，分支 `codex/media-harness-maintenance-20260906`。私有仓库 `Missher12/media-missher`，基线 `9d70e1a3030b1534c464155df618e661b56a1f70`。
 
-实现及安装包提交：`60ec3272aaec6c8ff4107a2ad4d77b13ba7e01fd`。其后的交接提交仅增加本文件、证据 JSON 和项目上下文索引；未改变已验证源码或安装包。完整交付提交可在本工作树运行 `git rev-parse HEAD` 核对。
+实现与 Agent 首启文档提交：`6799e07624de28fd74cf5b01c4c7c16d098aa8cf`。最终安装包刷新提交：`fa6a21c63772373e5d50091672c83a459d437321`。`harness-plugin/AGENT.md` 已进入内层 Bundle 和 Setup 白名单；它描述安装、profile、授权、结果和故障边界，不能替代 Harness 的实际工具注册。
 
 ## 已完成
 
@@ -12,17 +12,19 @@
 - 按输出文件系统时间检查证据新鲜度与私有权限；固定诊断枚举阻止私密文本进入工具结果。
 - XLSX 长字符串 ID 精确保留；拒绝已超出安全整数范围的数值 ID，保留原始 JSON 不改写。
 - 通过公开 ToolDefinition/JSON Schema 注册，SDK 只用于类型检查，消除入口对宿主内部运行依赖的假设。
+- Agent 工具描述补充已有浏览器、创作者采集、无凭据参数和 BrowserSkill 默认关闭边界；`allow_navigation` 默认改为 `false`，只有本次调用明确授权才导航。
 - 新旧 macOS Harness 布局识别、入口字节校验及实际导入、独立 DSH_HOME 安装/同版本重装/备份/卸载验证。
+- 新增 `harness-plugin/AGENT.md`，并由包与 Setup 的精确文件白名单、来源字节校验覆盖。
 - 61 个 Bundle 测试、TypeScript 检查、988 个 Python 禁网测试、Bundle 与 Setup 白名单/字节验证通过。
 
 ## 文件与产物
 
-主要实现：`harness-plugin/src/{config,index,process,runtime,workbook}.ts`；安装入口、`harness-plugin/scripts/` 和相应 tests；manifest 及 README；PROJECT_CONTEXT.md。没有修改 `runtime/`、`media-missher/`、`tools/` 采集核心。
+主要实现：`harness-plugin/src/{config,index,process,runtime,workbook}.ts`；安装入口、`harness-plugin/scripts/` 和相应 tests；manifest、`AGENT.md`、README；PROJECT_CONTEXT.md。没有修改 `runtime/`、`media-missher/`、`tools/` 采集核心。
 
 | 产物 | 字节 | SHA-256 |
 |---|---:|---|
-| `harness-plugin/dist/dsh-media-missher-0.1.1.tgz` | 185980 | `74e12a0d230869726606c7c858bdb9df9180b0c2a99e9b6db22b212c199c0878` |
-| `harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip` | 193792 | `44720471c85d2ae8d3fad33368aded3c0463068034ce4ed00594ec9e8d447a7d` |
+| `harness-plugin/dist/dsh-media-missher-0.1.1.tgz` | 189927 | `17768e0c576d40c0e269bae7b5c0a33e7b20c31e0078ac26d9512c23f24db3dd` |
+| `harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip` | 202392 | `2d459fc95d3e0136e59b687ad05efb6b7b004904171e4ed1e11e4d9605bbd0fd` |
 
 完整分层证据：`harness-plugin/dist/MAINTENANCE-EVIDENCE.json`。单独校验文件：`SHA256SUMS.txt` 与 `SETUP-SHA256.txt`。旧 0.1.0 tgz 与旧 v15.2.1 Setup 保持原始字节。
 
@@ -34,7 +36,7 @@ Python 全套 988 项通过，唯一警告来自有意触发的 socket 阻断测
 
 ## 安装条件与下一步
 
-本机新版 Harness 提供自己的 Node/CLI，但不含 pnpm。安装器只寻找 `/usr/local/bin/pnpm`、`/opt/homebrew/bin/pnpm` 中已有实例；缺失时修改 profile 前停止，报 `harness_external_pnpm_required`。不会自动安装 pnpm。自定义部署允许显式 runtime/cli/pnpm 参数；新版 CLI 仍要求该 pnpm 可从 PATH 启动。没有提供不依赖 pnpm 的通用安装产品。
+本机新版 Harness 提供自己的 Node/CLI，但不含 pnpm。安装器只寻找 `/usr/local/bin/pnpm`、`/opt/homebrew/bin/pnpm` 中已有实例；缺失时修改 profile 前停止，报 `harness_external_pnpm_required`。不会自动安装 pnpm。自定义部署允许显式 runtime/cli/pnpm 参数；新版 CLI 仍要求该 pnpm 可从 PATH 启动。没有提供不依赖 pnpm 的通用安装产品。新电脑按 `harness-plugin/AGENT.md` 先做只读环境和校验检查；未取得目标、平台、条数和导航授权前，不做真实采集。
 
 正式 web profile 仍是 0.1.0，主运行时版本为 15.2.1。本轮仅在临时 DSH_HOME 安装候选，没有推送、tag、Release 或主分支合并。根目录 GitHub bootstrap 仍指向历史已发布版本，不用于获取当前候选。
 
