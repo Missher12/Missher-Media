@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "verifiedDate": "2026-09-07",
-  "sourceCommit": "6799e07624de28fd74cf5b01c4c7c16d098aa8cf",
-  "artifactCommit": "fa6a21c63772373e5d50091672c83a459d437321",
+  "sourceCommit": "9b101b889d955345935fc052c4912e6b545af659",
+  "artifactCommit": "f8ee0943582136000fde22552de72bf17254e497",
   "baseCommit": "9d70e1a3030b1534c464155df618e661b56a1f70",
   "branch": "codex/media-harness-maintenance-20260906",
   "repositoryPrivate": true,
@@ -11,13 +11,13 @@
   "artifacts": [
     {
       "file": "dsh-media-missher-0.1.1.tgz",
-      "bytes": 189927,
-      "sha256": "17768e0c576d40c0e269bae7b5c0a33e7b20c31e0078ac26d9512c23f24db3dd"
+      "bytes": 189914,
+      "sha256": "3704010bb73e7ad37dc81e4535c175161d7fa9bab316956bbb1354a88a23608e"
     },
     {
       "file": "Media-Missher-Harness-Setup-bundle-v0.1.1.zip",
-      "bytes": 202392,
-      "sha256": "2d459fc95d3e0136e59b687ad05efb6b7b004904171e4ed1e11e4d9605bbd0fd"
+      "bytes": 202365,
+      "sha256": "e44571457086b471227819bd35510b92422682876e09c2903cf1e365accbf9e5"
     }
   ],
   "entrySha256": "8629d04cc85da8120cd44edc50f7d48a27edd348cb6f6cbc7bc51b8cd89551fe",

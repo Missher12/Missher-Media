@@ -2,7 +2,7 @@
 
 当前交付：Bundle **0.1.1 本地候选**，采集主项目 **15.2.1**。独立工作树 `/Users/missher/Documents/Media@Missher/.worktrees/harness-maintenance-20260906`，分支 `codex/media-harness-maintenance-20260906`。私有仓库 `Missher12/media-missher`，基线 `9d70e1a3030b1534c464155df618e661b56a1f70`。
 
-实现与 Agent 首启文档提交：`6799e07624de28fd74cf5b01c4c7c16d098aa8cf`。最终安装包刷新提交：`fa6a21c63772373e5d50091672c83a459d437321`。`harness-plugin/AGENT.md` 已进入内层 Bundle 和 Setup 白名单；它描述安装、profile、授权、结果和故障边界，不能替代 Harness 的实际工具注册。
+实现与 Agent 首启文档提交：`6799e07624de28fd74cf5b01c4c7c16d098aa8cf`、`9b101b889d955345935fc052c4912e6b545af659`。最终安装包刷新提交：`f8ee0943582136000fde22552de72bf17254e497`。`harness-plugin/AGENT.md` 已进入内层 Bundle 和 Setup 白名单；它描述安装、profile、授权、结果和故障边界，不能替代 Harness 的实际工具注册。
 
 ## 已完成
 
@@ -23,8 +23,8 @@
 
 | 产物 | 字节 | SHA-256 |
 |---|---:|---|
-| `harness-plugin/dist/dsh-media-missher-0.1.1.tgz` | 189927 | `17768e0c576d40c0e269bae7b5c0a33e7b20c31e0078ac26d9512c23f24db3dd` |
-| `harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip` | 202392 | `2d459fc95d3e0136e59b687ad05efb6b7b004904171e4ed1e11e4d9605bbd0fd` |
+| `harness-plugin/dist/dsh-media-missher-0.1.1.tgz` | 189914 | `3704010bb73e7ad37dc81e4535c175161d7fa9bab316956bbb1354a88a23608e` |
+| `harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip` | 202365 | `e44571457086b471227819bd35510b92422682876e09c2903cf1e365accbf9e5` |
 
 完整分层证据：`harness-plugin/dist/MAINTENANCE-EVIDENCE.json`。单独校验文件：`SHA256SUMS.txt` 与 `SETUP-SHA256.txt`。旧 0.1.0 tgz 与旧 v15.2.1 Setup 保持原始字节。
 
