@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,8 +44,9 @@ afterEach(async () => {
 
 describe('Media Agent tool', () => {
   it('downgrades a claimed success when verified rows fall short of the request', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'media-plugin-test-'))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'media-plugin-test-')))
     temporaryRoots.push(root)
+    await writeFile(join(root, 'profile.json'), '{"platform_uids":{"bilibili":"12345","xhs":"abcdef0123456789abcdef01","douyin":"MS4wLjAB_fixture","weibo":"12345"}}', { mode: 0o600 })
     const config = normalizePluginConfig({
       profilePath: join(root, 'profile.json'),
       runtimeHome: join(root, 'runtime'),
@@ -87,19 +88,20 @@ describe('Media Agent tool', () => {
       totalCollected: 4,
       runDirectory,
       manifestPath: evidence.manifestPath,
-      workbookPath: join(runDirectory, 'inspection.xlsx'),
+      workbookPath: '',
       summary: 'bilibili 1/10 count-shortfall; xhs 1/10 count-shortfall; douyin 1/10 count-shortfall; weibo 1/10 count-shortfall',
     })
     expect(processRunner.mock.calls[0]?.[1]).toContain('bilibili,xhs,douyin,weibo')
     expect(tool.output.render({}, value)[0]).toMatchObject({
       type: 'text',
-      text: expect.stringContaining('inspection.xlsx'),
+      text: expect.not.stringContaining('inspection.xlsx'),
     })
   })
 
   it('projects partial records when the manifest is declared by validation diagnostics', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'media-plugin-test-'))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'media-plugin-test-')))
     temporaryRoots.push(root)
+    await writeFile(join(root, 'profile.json'), '{"platform_uids":{"bilibili":"12345","xhs":"abcdef0123456789abcdef01","douyin":"MS4wLjAB_fixture","weibo":"12345"}}', { mode: 0o600 })
     const config = normalizePluginConfig({
       profilePath: join(root, 'profile.json'),
       runtimeHome: join(root, 'runtime'),
@@ -136,8 +138,8 @@ describe('Media Agent tool', () => {
     const value = await tool.execute({}, { signal: new AbortController().signal }) as Record<string, unknown>
 
     expect(load).toHaveBeenCalledOnce()
-    expect(write).toHaveBeenCalledOnce()
-    expect(value).toMatchObject({ status: 'partial', totalCollected: 3, workbookPath: join(runDirectory, 'partial.xlsx') })
+    expect(write).not.toHaveBeenCalled()
+    expect(value).toMatchObject({ status: 'partial', totalCollected: 3, workbookPath: '' })
   })
 
   it('registers one disposable model-visible tool', () => {
@@ -171,4 +173,30 @@ describe('Media Agent tool', () => {
     dispose()
     expect(disposed).toBe(true)
   })
+})
+
+it('accepts explicit search targets without asking for an unrelated saved account', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'media-direct-target-')))
+  temporaryRoots.push(root)
+  const config = normalizePluginConfig({ profilePath: join(root, 'missing-profile.json'), runtimeHome: join(root, 'runtime'), outputRoot: join(root, 'runs') }, join(root, 'dsh'), root)
+  const ensure = vi.fn(async () => ({ python: '/runtime/python', payloadRoot: '/payload' }))
+  const runner = vi.fn(async () => ({ code: 1, signal: null, stdout: JSON.stringify({ status: 'failed', run_dir: null, evidence: [] }), stderr: '' }))
+  const tool = createMediaTool(config, { ensureRuntime: ensure, processRunner: runner })
+  const value = await tool.execute({ targets: [{ platform: 'x', mode: 'search', keyword: 'fixture' }], count: 1 }, { signal: new AbortController().signal } as never) as Record<string, unknown>
+  expect(ensure).toHaveBeenCalledOnce()
+  expect(runner).toHaveBeenCalledOnce()
+  expect(value.status).toBe('failed')
+})
+
+it('refuses retired computer use before any runtime or CDP factory', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'media-cu-refusal-')))
+  temporaryRoots.push(root)
+  const config = normalizePluginConfig({ profilePath: join(root, 'missing.json'), runtimeHome: join(root, 'runtime'), outputRoot: join(root, 'runs') }, join(root, 'dsh'), root)
+  const ensure = vi.fn(async () => { throw new Error('unexpected-runtime') })
+  const runner = vi.fn(async () => { throw new Error('unexpected-CDP') })
+  const tool = createMediaTool(config, { ensureRuntime: ensure, processRunner: runner })
+  const value = await tool.execute({ targets: [{ platform: 'x', mode: 'search', keyword: 'fixture' }], backend: 'computer_use', count_mode: 'best_effort', run_deadline_seconds: 600 }, { signal: new AbortController().signal } as never) as Record<string, unknown>
+  expect(value.summary).toContain('backend-retired-computer-use')
+  expect(ensure).not.toHaveBeenCalled()
+  expect(runner).not.toHaveBeenCalled()
 })

@@ -10,7 +10,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
-from ..browser import BrowserSession, PreconditionError
+from ..browser import BrowserSession, PreconditionError, publish_accepted
 from ..models import CollectionRequest
 from ..safety import classify_response
 
@@ -109,7 +109,7 @@ class DouyinCollector:
                 response = await _capture_response_while(
                     page,
                     creator_predicate,
-                    lambda: self._navigate_and_check(page, target),
+                    lambda: _scroll_and_check(page) if self.request.continue_page and page.url == target else self._navigate_and_check(page, target),
                 )
             else:
                 response = await _capture_response_while(
@@ -123,7 +123,7 @@ class DouyinCollector:
             dom_observation = await _read_creator_dom(page)
             await _raise_for_page_challenge(page)
             records = _creator_dom_records(
-                dom_observation, self.request.target_count
+                dom_observation, self.request.target_count, self.request.exclude_ids
             )
             if records:
                 return records
@@ -145,14 +145,14 @@ class DouyinCollector:
             _require_open_target(page, target, "matching Douyin search page")
         await _raise_for_page_challenge(page)
         if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, _is_search_response, lambda: self._navigate_and_check(page, target))
+            response = await _capture_response_while(page, _is_search_response, lambda: _scroll_and_check(page) if self.request.continue_page and page.url == target else self._navigate_and_check(page, target))
         else:
             response = await _capture_response_while(page, _is_search_response, _noop)
         return await self._collect_pages(page, response, source="search")
 
     async def _collect_pages(self, page: Any, response: Any, *, source: str) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        native_ids: set[str] = set()
+        native_ids: set[str] = set(self.request.exclude_ids)
         prior_cursor: object = _MISSING
         predicate = (
             (lambda candidate: _is_creator_candidate_response(candidate, self.request.uid))
@@ -160,6 +160,8 @@ class DouyinCollector:
             else _is_search_response
         )
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             await _raise_for_page_challenge(page)
             payload = await _response_payload(response)
             if source == "creator" and self.request.uid is not None:
@@ -175,9 +177,10 @@ class DouyinCollector:
                 cursor=cursor if source == "search" else _MISSING,
                 target=self.request.target_count,
             )
+            publish_accepted(self.browser, "douyin", records)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or not has_more or page_number + 1 >= self.request.page_cap:
+            if not has_more or page_number + 1 >= self.request.page_cap:
                 break
             if _empty_cursor(cursor):
                 break
@@ -375,7 +378,7 @@ async def _read_creator_dom(page: Any) -> Mapping[str, Any]:
 
 
 def _creator_dom_records(
-    observation: Mapping[str, Any], target: int | None
+    observation: Mapping[str, Any], target: int | None, exclude_ids: Sequence[str] = ()
 ) -> list[dict[str, Any]]:
     risk_text = _text(observation.get("risk_text"))
     if risk_text is not None and (
@@ -385,7 +388,7 @@ def _creator_dom_records(
     if observation.get("list_unique") is not True:
         return []
     records: list[dict[str, Any]] = []
-    native_ids: set[str] = set()
+    native_ids: set[str] = set(exclude_ids)
     observed_at = _observed_at()
     for raw in _items(observation.get("cards")):
         card = _mapping(raw)

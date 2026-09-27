@@ -26,20 +26,6 @@ describe('one-click and native lifecycle entrypoints', () => {
     expect(smoke.stdout).toContain('--archive')
   })
 
-  it('uses the Harness app runtime and delegates dependency checks to the installer', async () => {
-    const setup = await readFile(
-      resolve(repositoryRoot, 'Install Media@Missher Harness Plugin.command'),
-      'utf8',
-    )
-    expect(setup).toContain('ELECTRON_RUN_AS_NODE=1')
-    expect(setup).toContain('Contents/Resources/runtime/node/bin/node')
-    expect(setup).toContain('dsh-media-missher-0.1.1.tgz')
-    expect(setup).toContain('tell application "DeepSeek Harness" to quit')
-    expect(setup).toContain('/usr/bin/open -a "DeepSeek Harness"')
-    expect(setup).not.toContain('command -v node')
-    expect(setup).not.toContain('command -v pnpm')
-  })
-
   it('offers an authenticated private GitHub bootstrap without embedding a token', async () => {
     const bootstrap = await readFile(
       resolve(repositoryRoot, 'Install-Media-Missher-from-GitHub.command'),
@@ -88,6 +74,24 @@ describe('one-click and native lifecycle entrypoints', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('detects the Desktop ASAR layout with its bundled pnpm and Node shim', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-asar-layout-'))
+    const { resolveHarnessLayout } = await import(pathToFileURL(resolve(pluginRoot, 'scripts/install-current-profile.mjs')).href)
+    try {
+      for (const name of ['Contents/MacOS/DeepSeek Harness', 'Contents/Resources/app.asar', 'Contents/Resources/runtime/pnpm/bin/pnpm.cjs']) {
+        const path = join(root, name)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, 'fixture')
+      }
+      expect(await resolveHarnessLayout(root, [])).toEqual({
+        runtime: join(root, 'Contents/MacOS/DeepSeek Harness'),
+        cli: join(root, 'Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'),
+        pnpm: join(root, 'Contents/Resources/runtime/pnpm/bin/pnpm.cjs'),
+        pnpmBin: join(root, 'Contents/Resources/runtime/bin'),
+      })
+    } finally { await rm(root, { recursive: true, force: true }) }
   })
 
 })

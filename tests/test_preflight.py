@@ -47,6 +47,7 @@ def make_runtime_layout(fake_engine_root, *, version="3.12.0", playwright=True):
     home = fake_engine_root.parent / "runtime-home"
     current_scripts = home / "current" / "scripts"
     shutil.copytree(fake_engine_root / "scripts", current_scripts)
+    (home / "current" / "VERSION").write_text(adapter.REQUIRED_RUNTIME_VERSION + "\n", encoding="ascii")
     interpreter = home / "venv" / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     playwright_status = 0 if playwright else 1
@@ -68,6 +69,21 @@ def make_runtime_layout(fake_engine_root, *, version="3.12.0", playwright=True):
     return resolve_runtime_layout(environ={"MEDIA_MISSHER_HOME": str(home)})
 
 
+def test_old_runtime_preflight_matches_collection_and_never_probes(fake_engine_root, tmp_path, monkeypatch):
+    layout = make_runtime_layout(fake_engine_root)
+    (layout.current / "VERSION").write_text("15.2.1\n", encoding="ascii")
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("version mismatch must stop before subprocess or CDP")
+    monkeypatch.setattr(adapter.subprocess, "run", unexpected)
+    report = run_preflight(layout, live=True, urlopen=unexpected)
+    collection = adapter.run_collection_request(adapter.CollectionRequest(("xhs",), count=1, platform_uids={"xhs": "fixture"}), layout=layout, data_root=tmp_path / "out", preflight_runner=unexpected)
+    assert report["status"] == "failed"
+    assert report["checks"]["runtime_version"] is False
+    assert report["runtime_version"] == {"current": "15.2.1", "required": adapter.REQUIRED_RUNTIME_VERSION, "matches": False}
+    assert collection["preflight"]["runtime_version"] == report["runtime_version"]
+    assert not (tmp_path / "out").exists()
+
+
 def test_preflight_checks_complete_runtime_without_live_network(fake_engine_root):
     layout = make_runtime_layout(fake_engine_root)
 
@@ -77,6 +93,7 @@ def test_preflight_checks_complete_runtime_without_live_network(fake_engine_root
     assert report["checks"] == {
         "runtime_lease": True,
         "release": True,
+        "runtime_version": True,
         "layout": True,
         "runtime_home": True,
         "current": True,
@@ -352,14 +369,15 @@ def test_preflight_probes_state_with_create_fsync_and_unlink(
     assert any("synthetic write denial" in error for error in report["errors"])
 
 
-def test_preflight_requires_python_311_or_newer(fake_engine_root):
-    layout = make_runtime_layout(fake_engine_root, version="3.10.14")
+@pytest.mark.parametrize("version", ("3.10.14", "3.13.7", "3.14.7"))
+def test_preflight_requires_a_supported_runtime_python(fake_engine_root, version):
+    layout = make_runtime_layout(fake_engine_root, version=version)
 
     report = run_preflight(layout, live=False)
 
     assert report["status"] == "failed"
     assert report["checks"]["python_version"] is False
-    assert any("3.11" in error for error in report["errors"])
+    assert any("3.11 or 3.12" in error for error in report["errors"])
 
 
 def test_preflight_requires_playwright_import(fake_engine_root):

@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
-from ..browser import BrowserSession, PageJson, PreconditionError
+from ..browser import BrowserSession, PageJson, PreconditionError, publish_accepted
 from ..detail_open import missing_engagement_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
@@ -142,7 +142,6 @@ def _needs_dynamic_open(
                 missing
                 and (
                     request.complete
-                    or request.browser_assist == "browserskill"
                 )
             )
         )
@@ -167,7 +166,7 @@ class BilibiliCollector:
             response = await _capture_feed_while(
                 page,
                 self.request.uid,
-                lambda: self._navigate(page, _creator_page_url(self.request.uid)),
+                lambda: _scroll(page) if self.request.continue_page and page.url == _creator_page_url(self.request.uid) else self._navigate(page, _creator_page_url(self.request.uid)),
                 observation=capture_observation,
                 observed_routes=observed_routes,
             )
@@ -180,7 +179,7 @@ class BilibiliCollector:
                 routes=sorted(observed_routes),
             ) from error
         records = await self._collect_feed_pages(page, response)
-        for record in records:
+        for index, record in enumerate(records):
             opened_video = False
             if self.request.complete:
                 opened_video = await self._complete_record(page, record)
@@ -203,6 +202,7 @@ class BilibiliCollector:
                     record,
                     record["bvid"],
                 )
+            publish_accepted(self.browser, "bilibili", records[: index + 1])
         return records
 
     async def _ensure_creator_feed(self, page: Any, dynamic_id: str) -> None:
@@ -224,16 +224,25 @@ class BilibiliCollector:
 
     async def _collect_feed_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        native_ids: set[str] = set()
+        native_ids: set[str] = set(self.request.exclude_ids)
+        seen_offsets: set[str] = set()
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             payload = await _response_payload(response)
             _require_feed_payload_binding(response, payload, self.request.uid)
             data = _feed_data(payload)
             added = _append_creator_records(records, native_ids, _items(data.get("items")), self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or not data.get("has_more") or page_number + 1 >= self.request.page_cap:
+            if not data.get("has_more") or page_number + 1 >= self.request.page_cap:
                 break
+            offset = data.get("offset")
+            advancing_offset = isinstance(offset, str) and bool(offset) and offset not in seen_offsets
+            if added == 0 and not advancing_offset:
+                break
+            if isinstance(offset, str):
+                seen_offsets.add(offset)
             try:
                 response = await _capture_feed_while(
                     page, self.request.uid, lambda: _scroll(page)
@@ -258,12 +267,15 @@ class BilibiliCollector:
             raise PreconditionError("an open Bilibili search page is required when navigation is disabled")
 
         records: list[dict[str, Any]] = []
-        native_ids: set[str] = set()
+        native_ids: set[str] = set(self.request.exclude_ids)
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             observation = await _read_search_cards(page)
             _raise_for_risk_observation(observation)
             raw_records = [item for item in _items(observation.get("cards")) if isinstance(item, Mapping)]
             added = _append_search_records(records, native_ids, raw_records, self.request.keyword, self.request.target_count)
+            publish_accepted(self.browser, "bilibili", records)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
             if added == 0 or page_number + 1 >= self.request.page_cap:
@@ -316,6 +328,16 @@ class BilibiliCollector:
             observer = _DynamicDetailResponseObserver(
                 getattr(page, "context", None), dynamic_id
             )
+
+            def guard_exact_detail_click() -> None:
+                """Re-check the live risk signal immediately before each dispatch.
+
+                R0: the stale-selector retry must never re-dispatch a click after
+                an interleaved risk response, timeout, or unknown outcome.
+                """
+                if observer.risk_code is not None:
+                    raise CollectionStopped(observer.risk_code)
+
             with observer:
                 try:
                     detail_page = await coordinator.click_exact(
@@ -323,9 +345,7 @@ class BilibiliCollector:
                         target,
                         platform="bilibili",
                         native_id=dynamic_id,
-                        retry_stale_selector=(
-                            self.request.browser_assist == "browserskill"
-                        ),
+                        guard=guard_exact_detail_click,
                     )
                 except BaseException as error:
                     if observer.risk_code is not None:

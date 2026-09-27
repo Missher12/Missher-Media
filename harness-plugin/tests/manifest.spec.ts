@@ -12,9 +12,10 @@ describe('Harness Bundle manifest', () => {
 
     expect(manifest).toMatchObject({
       name: 'dsh-media-missher',
-      version: '0.1.1',
+      version: '17.0.0',
       type: 'module',
-      license: 'UNLICENSED',
+      license: 'SEE LICENSE IN LICENSE',
+      author: 'Missher',
       private: true,
       os: ['darwin'],
       dsh: { bundle: { patch: './cordis.patch.yml' } },

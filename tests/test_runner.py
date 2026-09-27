@@ -168,6 +168,13 @@ raise SystemExit(75 if mode == "manifest_risk" else 0)
 def make_runtime_layout(fake_engine_root):
     home = fake_engine_root.parent / "runtime-home"
     shutil.copytree(fake_engine_root / "scripts", home / "current" / "scripts")
+    (home / "current" / "VERSION").write_text("17.0.0\n", encoding="ascii")
+    runtime_source = Path(__file__).resolve().parents[1] / "runtime"
+    policy_package = home / "current" / "media_missher_runtime"
+    policy_package.mkdir()
+    for name in ("xhs_policy.py", "shared_safety.py", "progress.py"):
+        shutil.copyfile(runtime_source / "media_missher_runtime" / name, policy_package / name)
+    shutil.copyfile(runtime_source / "scripts" / "xhs_safety.py", home / "current" / "scripts" / "xhs_safety.py")
     interpreter = home / "venv" / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(
@@ -595,7 +602,7 @@ def test_runtime_platform_precondition_maps_to_safe_preflight_summary(
     assert summary["diagnostics"] == {
         "xhs": {"kind": "precondition", "code": "precondition-failed"}
     }
-    assert not list(Path(summary["run_dir"]).glob("run-*"))
+    assert not [path for path in Path(summary["run_dir"]).glob("run-*") if path.is_dir()]
     encoded = json.dumps(summary)
     assert "private-xhs" not in encoded
     persisted_text = "\n".join(
@@ -650,7 +657,7 @@ def test_runtime_browserskill_precondition_maps_to_safe_preflight_summary(
     assert summary["diagnostics"] == {
         "bilibili": {"kind": "precondition", "code": safe_code}
     }
-    assert not list(Path(summary["run_dir"]).glob("run-*"))
+    assert not [path for path in Path(summary["run_dir"]).glob("run-*") if path.is_dir()]
 
 
 def test_forged_runtime_precondition_line_stays_failed_and_is_not_reflected(

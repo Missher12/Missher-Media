@@ -11,7 +11,7 @@ from numbers import Real
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
-from ..browser import BrowserSession, PreconditionError
+from ..browser import BrowserSession, PreconditionError, publish_accepted
 from ..models import CollectionRequest
 from ..safety import classify_response
 
@@ -97,15 +97,17 @@ class WeiboCollector:
         response = await _capture_creator_while(
             page,
             self.request.uid,
-            lambda: self._navigate_and_check(page, target, _WEIBO_HOSTS),
+            lambda: _scroll_and_check(page) if self.request.continue_page and page.url == target else self._navigate_and_check(page, target, _WEIBO_HOSTS),
         )
         return await self._collect_creator_pages(page, response)
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str] = set(self.request.exclude_ids)
         prior_since: object = _MISSING
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             await _raise_for_page_challenge(page)
             data = _creator_data(await _response_payload(response))
             since_id = data.get("since_id")
@@ -114,9 +116,12 @@ class WeiboCollector:
             if prior_since is not _MISSING and since_id == prior_since:
                 break
             added = _append_creator_records(records, seen, _items(data.get("list")), self.request.target_count)
+            publish_accepted(self.browser, "weibo", records)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or _empty_cursor(since_id):
+            if _empty_cursor(since_id):
+                if hasattr(self.browser, "last_exhausted"):
+                    self.browser.last_exhausted = True
                 break
             total = _metric(data.get("total"))
             if total is not None and len(records) >= total:
@@ -141,7 +146,10 @@ class WeiboCollector:
         target = _search_page_url(self.request.keyword)
         try:
             if getattr(self.browser, "allow_navigation", False):
-                await self._navigate_and_wait_search(page, target)
+                if not self.request.continue_page:
+                    await self._navigate_and_wait_search(page, target)
+                else:
+                    _require_open_search_target(page, self.request.keyword)
             else:
                 _require_open_search_target(page, self.request.keyword)
                 await _wait_for_search_cards_or_challenge(page)
@@ -151,14 +159,17 @@ class WeiboCollector:
         await _raise_for_page_challenge(page)
 
         records: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str] = set(self.request.exclude_ids)
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             observation = await _read_search_cards(page)
             _raise_for_risk_observation(observation)
             added = _append_search_records(records, seen, _items(observation.get("cards")), self.request.keyword, self.request.target_count)
+            publish_accepted(self.browser, "weibo", records)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or page_number + 1 >= self.request.page_cap:
+            if (added == 0 and not self.request.exclude_ids) or page_number + 1 >= self.request.page_cap:
                 break
             next_url = _valid_next_search_url(observation.get("next"), self.request.keyword)
             if next_url is None:

@@ -7,8 +7,13 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "media-missher" / "scripts"
+RUNTIME = REPO / "runtime"
 FAKE_ENGINE = REPO / "tests" / "fake_engine.py"
 sys.path.insert(0, str(SCRIPTS))
+# Appended, not inserted: an installed copy keeps priority, and this only makes
+# the checkout importable for tests that do not set PYTHONPATH themselves.
+if str(RUNTIME) not in sys.path:
+    sys.path.append(str(RUNTIME))
 
 
 @pytest.fixture(autouse=True)

@@ -117,11 +117,32 @@ def _runtime_python_version(executable: Path) -> tuple[int, int] | None:
     return (major, minor) if completed.returncode == 0 else None
 
 
-def select_runtime_python(explicit: Path | str | None) -> Path:
+def _existing_runtime_python(home: Path) -> Path | None:
+    """Read-only fallback; never execute an unowned or writable installation."""
+    try:
+        _reject_symlink_components(home / "venv" / "bin", "existing runtime")
+        for directory in (home, home / "venv", home / "venv" / "bin"):
+            info = directory.stat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+                return None
+        marker = home / _OWNER_MARKER
+        info = marker.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_size > 1024 or not _valid_owner_marker(home):
+            return None
+        candidate = home / "venv" / "bin" / "python"
+        info = candidate.stat()  # Normal venv interpreters may link to a trusted Python.
+        if not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.getuid()} or info.st_mode & 0o022 or not os.access(candidate, os.X_OK):
+            return None
+        return candidate
+    except (OSError, ValueError):
+        return None
+
+
+def select_runtime_python(explicit: Path | str | None, *, existing_home: Path | None = None) -> Path:
     if explicit is not None:
         candidates = [_absolute(explicit)]
     else:
-        names = ("python3.13", "python3.12", "python3.11")
+        names = ("python3.12", "python3.11")
         candidates = [Path(sys.executable).absolute(), Path.home() / ".local" / "bin" / "python3.11"]
         candidates.extend(Path(found).absolute() for name in names if (found := shutil.which(name)))
     seen: set[str] = set()
@@ -131,10 +152,14 @@ def select_runtime_python(explicit: Path | str | None) -> Path:
             continue
         seen.add(identity)
         version = _runtime_python_version(candidate)
-        if version is not None and version >= (3, 11):
+        if version in {(3, 11), (3, 12)}:
+            return candidate
+    if explicit is None and existing_home is not None:
+        candidate = _existing_runtime_python(existing_home)
+        if candidate is not None and _runtime_python_version(candidate) in {(3, 11), (3, 12)}:
             return candidate
     qualifier = f": {explicit}" if explicit is not None else ""
-    raise ValueError(f"Python 3.11 or newer is required{qualifier}")
+    raise ValueError(f"Python 3.11 or 3.12 is required for the pinned runtime dependencies{qualifier}")
 
 
 def _absolute(path: Path | str) -> Path:
@@ -432,8 +457,15 @@ def install(
         package_sources.append(source_path / "openclaw-media-missher")
     for item in (runtime_source, *package_sources):
         _reject_source_symlinks(item)
+    notice_sources: list[Path] = []
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        notice = source_path / name
+        if notice.is_symlink() or (notice.exists() and not notice.is_file()):
+            raise ValueError("copyright notice source is invalid")
+        if notice.is_file():
+            notice_sources.append(notice)
     product_version = _read_product_version(source_path)
-    runtime_python = select_runtime_python(python)
+    runtime_python = select_runtime_python(python, existing_home=runtime_home)
 
     _prepare_owned_runtime_home(runtime_home)
     install_parents: list[Path] = []
@@ -474,8 +506,16 @@ def install(
     try:
         _copy_source(runtime_source, runtime_stage)
         shutil.copyfile(source_path / _PRODUCT_VERSION_FILE, runtime_stage / _PRODUCT_VERSION_FILE)
+        # Git installs carry the canonical notices. Bundle payloads already carry
+        # them inside runtime, which also preserves older minimal source layouts.
+        for notice in notice_sources:
+            shutil.copyfile(notice, runtime_stage / notice.name)
         for package_source, package_stage in zip(package_sources, package_stages):
             _copy_source(package_source, package_stage)
+            if notice_sources:
+                package_stage.joinpath("references").mkdir(exist_ok=True)
+            for notice in notice_sources:
+                shutil.copyfile(notice, package_stage / "references" / notice.name)
         findings = scan_roots((runtime_stage, *package_stages))
         if findings:
             raise ValueError("staged installation contains forbidden residuals")
@@ -490,7 +530,7 @@ def install(
             shutil.copytree(venv, venv_stage, symlinks=True, ignore=_IGNORE)
         interpreter = venv_stage / "bin" / "python"
         staged_version = _runtime_python_version(interpreter) if venv_stage.exists() else None
-        if staged_version is None or staged_version < (3, 11):
+        if staged_version not in {(3, 11), (3, 12)}:
             _clean_owned(venv_stage)
             _invoke(
                 executor,
@@ -584,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--runtime-only", action="store_true", help="Install only the shared runtime and dependency environment")
     modes.add_argument("--codex-only", action="store_true", help="Install the shared runtime, dependency environment, and Codex skill only")
-    parser.add_argument("--python", type=Path, help="Python 3.11+ interpreter used to create the runtime environment")
+    parser.add_argument("--python", type=Path, help="Python 3.11 or 3.12 interpreter used to create the runtime environment")
     parser.add_argument("--version", action="version", version=f"Media@Missher {_read_product_version(project)}")
     args = parser.parse_args(argv)
     result = install(

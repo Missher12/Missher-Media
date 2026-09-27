@@ -139,11 +139,40 @@ def test_creator_dispatches_sequentially_and_preserves_platform_options(tmp_path
     assert "unknown" not in report_text
 
 
-def test_runtime_cli_carries_bilibili_assist_modes_into_request(tmp_path: Path) -> None:
+def test_runtime_cli_carries_bilibili_assist_modes_into_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Screenshot mode still carries; the deprecated browser-assist bridge is refused."""
+
     from runtime.media_missher_runtime.cli import main
 
     dispatcher = FakeDispatcher()
     code = main(
+        [
+            "creator",
+            "--platforms",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--count",
+            "1",
+            "--browser-assist",
+            "off",
+            "--screenshot-mode",
+            "opened",
+            "--allow-navigation",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        dispatcher=dispatcher,
+    )
+
+    assert code == 0
+    assert len(dispatcher.requests) == 1
+    assert dispatcher.requests[0].browser_assist == "off"
+    assert dispatcher.requests[0].screenshot_mode == "opened"
+
+    refused = main(
         [
             "creator",
             "--platforms",
@@ -158,27 +187,25 @@ def test_runtime_cli_carries_bilibili_assist_modes_into_request(tmp_path: Path) 
             "opened",
             "--allow-navigation",
             "--output-dir",
-            str(tmp_path),
+            str(tmp_path / "refused"),
         ],
-        dispatcher=dispatcher,
+        dispatcher=FakeDispatcher(),
     )
 
-    assert code == 0
-    assert len(dispatcher.requests) == 1
-    assert dispatcher.requests[0].browser_assist == "browserskill"
-    assert dispatcher.requests[0].screenshot_mode == "opened"
+    assert refused == 78
+    assert capsys.readouterr().err == (
+        "media-missher-diagnostic platform=bilibili "
+        "kind=precondition code=browser-assist-replaced\n"
+    )
+    assert not list((tmp_path / "refused").glob("run-*"))
 
 
-def test_runtime_model_rejects_xhs_browser_assist() -> None:
+def test_runtime_model_retires_auxiliary_bridge_for_all_platforms():
     from runtime.media_missher_runtime.models import CollectionRequest
-
-    with pytest.raises(ValueError, match="xhs-browser-assist-unsupported"):
-        CollectionRequest(
-            platform="xhs",
-            count=1,
-            uid="creator",
-            browser_assist="browserskill",
-        )
+    with pytest.raises(ValueError, match="backend-retired-browserskill"):
+        CollectionRequest(platform="xhs",count=1,uid="creator",browser_assist="browserskill")
+    with pytest.raises(ValueError, match="unsupported backend"):
+        CollectionRequest(platform="xhs",count=1,uid="creator",backend="computer_use")
 
 
 def test_runtime_cli_rejects_xhs_browser_assist_before_dispatcher(
@@ -211,7 +238,7 @@ def test_runtime_cli_rejects_xhs_browser_assist_before_dispatcher(
     assert not list(tmp_path.iterdir())
     assert capsys.readouterr().err == (
         "media-missher-diagnostic platform=xhs "
-        "kind=precondition code=xhs-browser-assist-unsupported\n"
+        "kind=precondition code=browser-assist-replaced\n"
     )
 
 
@@ -374,8 +401,8 @@ def test_requested_screenshot_obligation_requires_an_explicit_terminal_status(
             "bilibili",
             "--keyword",
             "topic",
-            "--browser-assist",
-            "browserskill",
+            "--screenshot-mode",
+            "opened",
             "--allow-navigation",
         ),
         (
@@ -483,7 +510,7 @@ def test_runtime_creator_screenshot_all_rejects_any_zero_effective_count(
     (
         ("--platforms", "xhs", "--xhs-uid", "creator", "--screenshot-mode", "all"),
         ("--platforms", "douyin", "--douyin-uid", "creator", "--screenshot-mode", "opened", "--allow-navigation"),
-        ("--platforms", "weibo", "--weibo-uid", "creator", "--browser-assist", "browserskill", "--allow-navigation"),
+        ("--platforms", "weibo", "--weibo-uid", "creator", "--screenshot-mode", "opened", "--allow-navigation"),
     ),
 )
 def test_runtime_cli_rejects_unsafe_assist_combinations(
@@ -924,72 +951,6 @@ def test_platform_preflight_failure_emits_only_a_safe_line_before_inner_output(
     assert "private-xhs" not in captured.err
 
 
-@pytest.mark.parametrize(
-    "safe_code",
-    (
-        "bsk-missing",
-        "bsk-unhealthy",
-        "bsk-incompatible",
-        "bsk-busy",
-        "bsk-transport",
-        "bsk-timeout",
-        "bsk-target-ambiguous",
-        "bsk-session-start",
-        "bsk-tab-list",
-        "bsk-tab-borrow",
-        "bsk-snapshot",
-        "bsk-click",
-        "bsk-tab-return",
-        "bsk-session-stop",
-    ),
-)
-def test_browserskill_preflight_uses_only_enumerated_safe_code_before_output(
-    safe_code: str,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    from runtime.media_missher_runtime.browser_skill import BrowserSkillError
-    from runtime.media_missher_runtime.cli import PlatformPreflightError, main
-
-    class BrowserSkillPreflightFailure(FakeDispatcher):
-        async def preflight(self, requests: object) -> None:
-            try:
-                raise RuntimeError(
-                    "private subprocess output with cookies and account identifiers"
-                )
-            except RuntimeError as raw_error:
-                raise PlatformPreflightError(
-                    "bilibili", BrowserSkillError(safe_code)
-                ) from raw_error
-
-    output = tmp_path / "runs"
-    dispatcher = BrowserSkillPreflightFailure()
-    code = main(
-        [
-            "creator",
-            "--platforms",
-            "bilibili",
-            "--bilibili-uid",
-            "private-xhs",
-            "--browser-assist",
-            "browserskill",
-            "--allow-navigation",
-            "--output-dir",
-            str(output),
-        ],
-        dispatcher=dispatcher,
-    )
-
-    captured = capsys.readouterr()
-    assert code == 78
-    assert captured.out == ""
-    assert captured.err == (
-        "media-missher-diagnostic platform=bilibili "
-        f"kind=precondition code={safe_code}\n"
-    )
-    assert not list(output.glob("run-*"))
-    assert "private" not in captured.err
-    assert "cookies" not in captured.err
 
 
 def test_risk_stop_wins_over_prior_screenshot_shortfall_and_aborts_later_platform(
@@ -1181,14 +1142,16 @@ def test_single_platform_shim_legacy_search_shape_accepts_max_uid_and_xhs_commen
         [
             "--search", "synthetic topic", "--max", "2", "--uid", "optional-user",
             "--comments", "3", "--format", "json", "--output", str(tmp_path),
+            "--allow-navigation", "--screenshot-mode", "all",
         ],
         fixed_platform="xhs",
         dispatcher=dispatcher,
     )
 
-    assert code == 0
+    assert code == 1  # Synthetic records have no required screenshot evidence.
     request = dispatcher.requests[0]
     assert request.platform == "xhs" and request.keyword == "synthetic topic" and request.count == 2
+    assert request.comment_limit == 3
 
 
 @pytest.mark.parametrize(
@@ -1297,7 +1260,7 @@ def test_runtime_dispatcher_runs_assist_preflight_before_platform_pages() -> Non
 
     _run(dispatcher.preflight(requests))
 
-    assert events == ["assist", "xhs"]
+    assert events == ["xhs"]
 
 
 def test_run_store_is_bound_before_collection(

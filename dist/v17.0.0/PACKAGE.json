@@ -1,0 +1,16 @@
+{
+  "version": "17.0.0",
+  "private": true,
+  "sourceTreeSha256": "b0a7f61e4c4493dc064d13153eeb19771a630b466182a5ff5b916be87b613e01",
+  "sourceFileCount": 282,
+  "agentPackage": "missher-media-missher-17.0.0.tgz",
+  "harnessPackage": "dsh-media-missher-17.0.0.tgz",
+  "sourcePackage": "Media-Missher-Source-v17.0.0.zip",
+  "setupFile": "Media-Missher-Agent-Setup-v17.0.0.zip",
+  "packageFile": "missher-media-missher-17.0.0.tgz",
+  "packageSha256": "cf0f06ff9c4b0519faad28dc66895b156ca990046dfc8dda1fefc952f9dc7064",
+  "setupSha256": "b3fe38806de744dc32a5e60ace667cf2045aa8df08b9d44d8668c824b41c35f2",
+  "runtimeVersion": "17.0.0",
+  "completePackage": "Media-Missher-v17.0.0.zip",
+  "realPlatformAcceptance": false
+}

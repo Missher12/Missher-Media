@@ -1,0 +1,13 @@
+{
+  "evidence": [],
+  "preflight": {
+    "code": "runtime-version-mismatch",
+    "runtime_version": {
+      "current": "unavailable",
+      "matches": false,
+      "required": "17.0.0"
+    }
+  },
+  "run_dir": null,
+  "status": "preflight-failed"
+}

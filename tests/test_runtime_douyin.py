@@ -723,7 +723,7 @@ def test_search_unwraps_aweme_info_mix_and_direct_items() -> None:
     assert "authentication_token" not in rendered
 
 
-def test_search_ignores_malformed_items_and_stops_on_duplicate_only_or_timeout() -> None:
+def test_search_ignores_malformed_items_and_crosses_advancing_duplicate_page() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
     malformed = Response(
@@ -748,8 +748,8 @@ def test_search_ignores_malformed_items_and_stops_on_duplicate_only_or_timeout()
     )
     duplicate = _search(_aweme("one"), has_more=True, cursor=2)
     page = CapturePage(responses=[malformed, duplicate, _search(_aweme("never"), has_more=False)])
-    assert [record["native_id"] for record in _run(search(CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"), ProductionBrowser(page)))] == ["one"]
-    assert len(page.responses) == 1
+    assert [record["native_id"] for record in _run(search(CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"), ProductionBrowser(page)))] == ["one", "never"]
+    assert len(page.responses) == 0
 
 
 def test_scroll_response_timeout_is_bounded_and_nonrisk_failures_are_controlled() -> None:

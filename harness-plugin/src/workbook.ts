@@ -10,10 +10,14 @@ import ExcelJS, { type Worksheet } from 'exceljs'
 import type { CollectArgs, Platform } from './config.js'
 import { PLATFORMS } from './config.js'
 import type { RunEvidence } from './runtime.js'
+import type { ProgressEvent } from './process.js'
+import { formatPhaseTimings, parsePhaseTimings } from './progress.js'
 
 export interface WorkbookOptions {
+  phaseTimings?: ProgressEvent[]
   fileName?: string
   generatedAt?: Date
+  priorCounts?: Partial<Record<Platform, number>>
 }
 
 const SHEET_NAMES: Record<Platform, string> = {
@@ -21,9 +25,17 @@ const SHEET_NAMES: Record<Platform, string> = {
   xhs: 'Xiaohongshu',
   douyin: 'Douyin',
   weibo: 'Weibo',
+  x: 'X',
 }
 
-const IDENTIFIER_KEY = /(?:^|_)(?:id|uid)$|^(?:bvid|aweme_id|note_id|mblog_id|dynamic_id|native_id)$/iu
+/** Non-post record kinds get their own worksheets so kinds are never mixed. */
+const KIND_SHEET_NAMES: Record<string, string> = {
+  posts: 'All Platforms',
+  topic_participants: 'Topic Participants',
+  user_profiles: 'User Profiles',
+}
+
+const IDENTIFIER_KEY = /(?:^|_)(?:id|ids|uid|uids)$|^(?:bvid|aweme_id|note_id|mblog_id|dynamic_id|native_id|tweet_id|author_id|conversation_id)$/iu
 const FORMULA_PREFIX = /^[=+\-@]/u
 
 function safeString(value: string): string {
@@ -53,6 +65,14 @@ function columnsFor(records: readonly Record<string, unknown>[], includePlatform
     }
   }
   return columns.length === 0 ? ['platform'] : columns
+}
+
+/** Mirror the controller's record-kind classification for worksheet routing. */
+function recordKindOf(record: Record<string, unknown>): string {
+  const type = record.type
+  if (type === 'user_profile' || type === 'profile') return 'user_profiles'
+  if (type === 'topic_participant' || type === 'topic_participant_relation') return 'topic_participants'
+  return 'posts'
 }
 
 function styleHeader(sheet: Worksheet): void {
@@ -113,6 +133,7 @@ export async function writeWorkbook(
     throw new Error('workbook_run_directory_invalid')
   }
   if (process.platform !== 'win32') await chmod(runDirectory, 0o700)
+  const timings = options.phaseTimings === undefined ? undefined : parsePhaseTimings(options.phaseTimings)
   const generatedAt = options.generatedAt ?? new Date()
   if (!Number.isFinite(generatedAt.getTime())) throw new Error('workbook_time_invalid')
   const fileName = safeFileName(options.fileName, generatedAt)
@@ -129,6 +150,7 @@ export async function writeWorkbook(
   const summary = workbook.addWorksheet('Summary')
   summary.columns = [
     { header: 'platform', key: 'platform' },
+    { header: 'backend', key: 'backend' },
     { header: 'requested', key: 'requested' },
     { header: 'collected', key: 'collected' },
     { header: 'status', key: 'status' },
@@ -136,18 +158,37 @@ export async function writeWorkbook(
     { header: 'diagnostic_code', key: 'diagnostic_code' },
     { header: 'run_status', key: 'run_status' },
     { header: 'generated_at', key: 'generated_at' },
+    ...(timings === undefined ? [] : [
+      { header: 'platform_collection_ms', key: 'platform_collection_ms' },
+      { header: 'controller_runtime_timings', key: 'controller_runtime_timings' },
+    ]),
+    ...(options.priorCounts === undefined ? [] : [
+      { header: 'historical_accepted', key: 'historical_accepted' },
+      { header: 'new_batch_target', key: 'new_batch_target' },
+      { header: 'parent_run', key: 'parent_run' },
+    ]),
   ]
   const selected = new Set(request.platforms)
   for (const platform of PLATFORMS) {
     summary.addRow({
       platform,
-      requested: selected.has(platform) ? request.count : 0,
+      backend: evidence.backend ?? 'cdp',
+      requested: selected.has(platform) ? (request.countMode === 'best_effort' ? 0 : request.count) : 0,
       collected: evidence.records[platform].length,
       status: evidence.platformStatuses[platform],
       diagnostic_kind: evidence.diagnostics[platform].kind,
       diagnostic_code: evidence.diagnostics[platform].code,
       run_status: evidence.runStatus,
       generated_at: generatedAt.toISOString(),
+      ...(timings === undefined ? {} : {
+        platform_collection_ms: timings.find(event => event.phase === 'platform-collection' && event.platform === platform)?.duration_ms ?? null,
+        controller_runtime_timings: formatPhaseTimings(timings),
+      }),
+      ...(options.priorCounts === undefined ? {} : {
+        historical_accepted: options.priorCounts[platform] ?? 0,
+        new_batch_target: selected.has(platform) ? Math.max(0, request.count - (options.priorCounts[platform] ?? 0)) : 0,
+        parent_run: request.resumeRun ?? '',
+      }),
     })
   }
   styleHeader(summary)
@@ -159,6 +200,13 @@ export async function writeWorkbook(
   addRecordSheet(workbook, 'All Platforms', combined, true)
   for (const platform of PLATFORMS) {
     addRecordSheet(workbook, SHEET_NAMES[platform], evidence.records[platform], false)
+  }
+  // Topic participation rows and user homepage rows are different entities from
+  // posts, so they are projected onto their own worksheets.
+  for (const kind of ['topic_participants', 'user_profiles'] as const) {
+    const rows = combined.filter(record => recordKindOf(record) === kind)
+    if (rows.length === 0) continue
+    addRecordSheet(workbook, KIND_SHEET_NAMES[kind]!, rows, true)
   }
 
   try {

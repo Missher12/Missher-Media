@@ -23,7 +23,7 @@ import {
 const temporaryRoots: string[] = []
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'media-runtime-test-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'media-runtime-test-')))
   temporaryRoots.push(root)
   const dshHome = join(root, 'dsh')
   const profilePath = join(root, 'private', 'profile.json')
@@ -35,16 +35,16 @@ async function fixture() {
   await mkdir(join(payloadRoot, 'tools'), { recursive: true })
   await mkdir(join(payloadRoot, 'media-missher', 'scripts'), { recursive: true })
   await mkdir(join(profilePath, '..'), { recursive: true })
-  await writeFile(profilePath, '{"platform_uids":{}}\n', { mode: 0o600 })
+  await writeFile(profilePath, '{"platform_uids":{"bilibili":"12345","xhs":"abcdef0123456789abcdef01","douyin":"MS4wLjAB_fixture","weibo":"12345"}}\n', { mode: 0o600 })
   await chmod(profilePath, 0o600)
-  await writeFile(join(payloadRoot, 'VERSION'), '15.2.1\n')
+  await writeFile(join(payloadRoot, 'VERSION'), '17.0.0\n')
   await writeFile(join(payloadRoot, 'tools', 'install_media_missher.py'), '# installer\n')
   await writeFile(join(payloadRoot, 'media-missher', 'scripts', 'run_collection.py'), '# controller\n')
   const config = normalizePluginConfig({ profilePath, runtimeHome, outputRoot }, dshHome, root)
   return { root, config, payloadRoot, runtimeHome, outputRoot, profilePath }
 }
 
-async function markRuntimeReady(runtimeHome: string, version = '15.2.1') {
+async function markRuntimeReady(runtimeHome: string, version = '17.0.0') {
   const python = join(runtimeHome, 'venv', 'bin', 'python')
   await writeFile(join(runtimeHome, 'current', 'VERSION'), `${version}\n`)
   await writeFile(python, '#!/bin/sh\n', { mode: 0o700 })
@@ -90,14 +90,14 @@ afterEach(async () => {
 })
 
 describe('runtime lifecycle', () => {
-  it('reuses an exact executable 15.2.1 runtime without installation', async () => {
+  it.each(['darwin', 'linux'] as const)('reuses an exact executable 17.0.0 runtime on %s without installation', async platform => {
     const setup = await fixture()
     const python = await markRuntimeReady(setup.runtimeHome)
     const runner = vi.fn(() => Promise.reject(new Error('must_not_install')))
 
     const layout = await ensureRuntime(setup.config, {
       payloadRoot: setup.payloadRoot,
-      platform: 'darwin',
+      platform,
       processRunner: runner,
     })
 
@@ -109,7 +109,7 @@ describe('runtime lifecycle', () => {
     const setup = await fixture()
     const target = join(setup.runtimeHome, 'venv', 'bin', 'python3.11')
     const python = join(setup.runtimeHome, 'venv', 'bin', 'python')
-    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '15.2.1\n')
+    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '17.0.0\n')
     await writeFile(target, '#!/bin/sh\n', { mode: 0o700 })
     await chmod(target, 0o700)
     await symlink('python3.11', python)
@@ -303,4 +303,24 @@ describe('fresh run evidence', () => {
       .rejects.toThrow('manifest_diagnostic_invalid')
   })
 
+})
+
+it('loads versioned topic users and posts as distinct evidence entities', async () => {
+  const setup = await fixture()
+  const runDirectory = join(setup.outputRoot, 'run-topic')
+  await mkdir(runDirectory, { recursive: true, mode: 0o700 })
+  const rows = [
+    { platform: 'weibo', type: 'post', mblog_id: '123', link: 'https://weibo.com/10/123' },
+    { platform: 'weibo', type: 'topic_participant', uid: '10', topic: 'travel', link: 'https://weibo.com/u/10' },
+    { platform: 'weibo', type: 'user_profile', uid: '10', link: 'https://weibo.com/u/10' },
+  ]
+  const manifestPath = join(runDirectory, 'manifest.json')
+  const dataPath = join(runDirectory, 'weibo.json')
+  await writeFile(dataPath, JSON.stringify(rows), { mode: 0o600 })
+  await writeFile(manifestPath, JSON.stringify({ schema_version: 2, backend: 'cdp', record_kinds: { posts: 1, topic_participants: 1, user_profiles: 1 }, status: 'complete', counts: { weibo: 3 }, paths: { weibo: 'weibo.json' }, platforms: { weibo: 'complete' }, diagnostics: { weibo: { kind: 'ok', code: 'ok' } } }), { mode: 0o600 })
+  const summary = parseControllerSummary(JSON.stringify({ status: 'success', run_dir: runDirectory, evidence: [manifestPath, dataPath] }))
+  const loaded = await loadRunEvidence(summary, setup.config)
+  expect(loaded.records.weibo).toEqual(rows)
+  expect(loaded.backend).toBe('cdp')
+  expect(loaded.recordKinds).toEqual({ posts: 1, topic_participants: 1, user_profiles: 1 })
 })

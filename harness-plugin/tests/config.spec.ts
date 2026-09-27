@@ -15,8 +15,12 @@ describe('Media plugin configuration', () => {
       platforms: ['bilibili', 'xhs', 'douyin', 'weibo'],
       platformText: 'bilibili,xhs,douyin,weibo',
       count: 10,
+      countMode: 'fixed',
+      backend: 'cdp',
+      targets: [],
       xhsComments: 0,
       allowNavigation: false,
+      runDeadlineSeconds: 900,
     })
     expect(config).toMatchObject({
       profilePath: '/Users/test/.config/media-missher/profile.json',
@@ -24,7 +28,11 @@ describe('Media plugin configuration', () => {
       outputRoot: '/Users/test/.dsh/media-missher/runs',
       platformTimeoutSeconds: 300,
       executionTimeoutSeconds: 1260,
-      maxCount: 50,
+      // A larger bounded maximum keeps "collect as much as possible" usable
+      // while still refusing an unbounded count.
+      maxCount: 500,
+      defaultBackend: 'cdp',
+      defaultCountMode: 'fixed',
     })
   })
 
@@ -39,7 +47,7 @@ describe('Media plugin configuration', () => {
     expect(() => normalizeCollectArgs({ platforms }, config)).toThrow(code)
   })
 
-  it.each([0, 51, 1.5, Number.NaN])('rejects invalid count %s', (count) => {
+  it.each([0, 501, 1.5, Number.NaN])('rejects invalid count %s', (count) => {
     const config = normalizePluginConfig({}, dshHome, userHome)
     expect(() => normalizeCollectArgs({ count }, config)).toThrow('count_invalid')
   })

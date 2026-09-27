@@ -1,10 +1,10 @@
 {
   "name": "dsh-media-missher",
-  "version": "0.1.1",
+  "version": "17.0.0",
   "description": "Private Media@Missher collection Bundle for DeepSeek Harness",
   "private": true,
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "os": [
     "darwin"
   ],
@@ -26,7 +26,12 @@
     "payload",
     "cordis.patch.yml",
     "README.md",
-    "AGENT.md"
+    "DATA_CAPABILITIES.md",
+    "QUICKSTART.md",
+    "AGENT_INSTALL.md",
+    "AGENT.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
@@ -38,14 +43,15 @@
     "stage:payload": "node scripts/stage-payload.mjs",
     "test": "vitest run",
     "prepack": "pnpm run build && pnpm run stage:payload",
-    "pack:bundle": "pnpm pack --pack-destination dist",
-    "pack:setup": "node scripts/build-setup.mjs",
+    "pack:bundle": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\" && pnpm pack --pack-destination dist",
     "verify:package": "node scripts/verify-package.mjs",
-    "verify:setup": "node scripts/verify-setup.mjs",
-    "smoke:native": "node scripts/native-smoke.mjs"
+    "smoke:native": "node scripts/native-smoke.mjs",
+    "smoke:browser": "node scripts/browser-native-smoke.mjs",
+    "setup:device": "node scripts/setup-device.mjs"
   },
   "dependencies": {
-    "exceljs": "4.4.0"
+    "exceljs": "4.4.0",
+    "saxes": "5.0.1"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
@@ -54,5 +60,6 @@
     "vitest": "4.1.8",
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-tools": "0.1.1-rc.2"
-  }
+  },
+  "author": "Missher"
 }

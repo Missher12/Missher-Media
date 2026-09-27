@@ -13,7 +13,7 @@
     "types": [
       "node"
     ],
-    "rootDir": "src",
+    "rootDir": "..",
     "outDir": "lib"
   },
   "include": [

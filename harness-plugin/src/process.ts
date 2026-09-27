@@ -6,6 +6,7 @@ export interface ProcessOptions {
   signal?: AbortSignal
   timeoutMs?: number
   maxOutputBytes?: number
+  onProgress?: (event: ProgressEvent) => void | Promise<void>
 }
 
 export interface ProcessResult {
@@ -15,7 +16,82 @@ export interface ProcessResult {
   stderr: string
 }
 
+export const PROGRESS_PHASES = ['controller-preflight', 'engine', 'browser-preflight', 'platform-collection', 'validation', 'output', 'run'] as const
+export interface ProgressEvent {
+  schema: 1
+  phase: typeof PROGRESS_PHASES[number]
+  state: 'started' | 'updated' | 'completed' | 'failed' | 'cancelled'
+  elapsed_ms: number
+  duration_ms?: number
+  platform?: 'bilibili' | 'xhs' | 'douyin' | 'weibo' | 'x'
+  completed?: number
+  requested?: number
+}
+
+/** The only progress data allowed to leave a subprocess. Never project extra fields. */
+export function parseProgressEvent(value: unknown): ProgressEvent | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const event = value as Record<string, unknown>
+  const keys = ['schema', 'phase', 'state', 'elapsed_ms']
+  if (event.phase === 'platform-collection') keys.push('platform', 'completed', 'requested')
+  if (['completed', 'failed', 'cancelled'].includes(event.state as string)) keys.push('duration_ms')
+  if (Object.keys(event).sort().join(',') !== keys.sort().join(',') || event.schema !== 1
+    || !PROGRESS_PHASES.includes(event.phase as ProgressEvent['phase'])
+    || !['started', 'updated', 'completed', 'failed', 'cancelled'].includes(event.state as string)) return undefined
+  for (const key of ['elapsed_ms', 'duration_ms', 'completed', 'requested']) {
+    if (event[key] !== undefined && (!Number.isSafeInteger(event[key]) || (event[key] as number) < 0
+      || (event[key] as number) > (['completed', 'requested'].includes(key) ? 10000 : 604800000))) return undefined
+  }
+  if (event.duration_ms !== undefined && (event.duration_ms as number) > (event.elapsed_ms as number)) return undefined
+  if (event.phase === 'platform-collection' && !['bilibili', 'xhs', 'douyin', 'weibo', 'x'].includes(event.platform as string)) return undefined
+  return { ...event } as unknown as ProgressEvent
+}
+
+/** Chunk-safe optional stderr parser, capped independently of total subprocess output. */
+export function createProgressParser(receive: NonNullable<ProcessOptions['onProgress']>): (chunk: Buffer) => void {
+  const prefix = 'media-missher-progress '
+  let pending = Buffer.alloc(0)
+  let discarding = false
+  let delivered = 0
+  let lastElapsed = -1
+  let lastUpdate = -Infinity
+  return (chunk: Buffer): void => {
+    let start = 0
+    while (start < chunk.length) {
+      const newline = chunk.indexOf(10, start)
+      const end = newline === -1 ? chunk.length : newline
+      const part = chunk.subarray(start, end)
+      if (!discarding) {
+        if (pending.length + part.length > 512) { pending = Buffer.alloc(0); discarding = true }
+        else pending = Buffer.concat([pending, part])
+      }
+      start = end + 1
+      if (newline === -1) return
+      if (!discarding && delivered < 128) {
+        const line = pending.toString('utf8')
+        if (line.startsWith(prefix)) {
+          try {
+            const event = parseProgressEvent(JSON.parse(line.slice(prefix.length)))
+            const now = performance.now()
+            if (event !== undefined && event.elapsed_ms >= lastElapsed && (event.state !== 'updated' || now - lastUpdate >= 250)) {
+              delivered += 1
+              lastElapsed = event.elapsed_ms
+              if (event.state === 'updated') lastUpdate = now
+              try { Promise.resolve(receive(event)).catch(() => {}) } catch { /* Optional observers cannot fail the run. */ }
+            }
+          } catch { /* Invalid lines remain ordinary bounded stderr. */ }
+        }
+      }
+      pending = Buffer.alloc(0)
+      discarding = false
+    }
+  }
+}
+
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
+// Python first drains its separately owned runtime group (TERM, then KILL,
+// bounded process/pipe waits). The outer deadline must outlive that cleanup.
+const TERMINATION_GRACE_MS = 8000
 
 function terminateProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return
@@ -58,13 +134,16 @@ export function runProcess(
     let stdoutBytes = 0
     let stderrBytes = 0
     let failure: Error | undefined
+    const progress = options.onProgress === undefined ? undefined : createProgressParser(event => {
+      if (failure === undefined && options.signal?.aborted !== true) return options.onProgress?.(event)
+    })
     let forceStop: ReturnType<typeof setTimeout> | undefined
 
     const stop = (error: Error): void => {
       if (failure !== undefined) return
       failure = error
       terminateProcessGroup(child, 'SIGTERM')
-      forceStop = setTimeout(() => terminateProcessGroup(child, 'SIGKILL'), 1000)
+      forceStop = setTimeout(() => terminateProcessGroup(child, 'SIGKILL'), TERMINATION_GRACE_MS)
     }
     const collect = (target: Buffer[], stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
       if (failure !== undefined) return
@@ -75,6 +154,7 @@ export function runProcess(
         return
       }
       target.push(Buffer.from(chunk))
+      if (stream === 'stderr') progress?.(chunk)
     }
     child.stdout?.on('data', collect(stdout, 'stdout'))
     child.stderr?.on('data', collect(stderr, 'stderr'))

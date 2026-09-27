@@ -344,6 +344,7 @@ class AssistedCoordinator:
     result_page: CapturePage | None = None
     clicks: list[str] = field(default_factory=list)
     retry_policies: list[bool] = field(default_factory=list)
+    guards: list[object] = field(default_factory=list)
     released: list[CapturePage] = field(default_factory=list)
     responses_to_emit: list[ObservedResponse] = field(default_factory=list)
     click_error: BaseException | None = None
@@ -355,12 +356,14 @@ class AssistedCoordinator:
         *,
         platform: str,
         native_id: str,
-        retry_stale_selector: bool = True,
+        retry_stale_selector: bool = False,
+        guard: object = None,
     ) -> CapturePage:
         assert platform == "bilibili"
         assert element.dynamic_id == native_id or element.href is not None
         self.clicks.append(native_id)
         self.retry_policies.append(retry_stale_selector)
+        self.guards.append(guard)
         context = getattr(page, "context", None)
         for response in self.responses_to_emit:
             context.emit_response(response)
@@ -981,7 +984,7 @@ def test_creator_restores_feed_between_video_and_dynamic_records() -> None:
             count=2,
             uid="synthetic-user",
             complete=True,
-            browser_assist="browserskill",
+            browser_assist="off",
         ),
         ProductionBrowser(page, detail_open=coordinator),
     ))
@@ -1020,7 +1023,7 @@ def test_creator_restores_feed_between_two_same_page_dynamics() -> None:
             platform="bilibili",
             count=2,
             uid="synthetic-user",
-            browser_assist="browserskill",
+            browser_assist="off", complete=True,
         ),
         ProductionBrowser(page, detail_open=coordinator),
     ))
@@ -1052,7 +1055,7 @@ def test_creator_dynamic_target_wait_timeout_fails_without_clicking() -> None:
                 platform="bilibili",
                 count=1,
                 uid="synthetic-user",
-                browser_assist="browserskill",
+                browser_assist="off", complete=True,
             ),
             ProductionBrowser(page, detail_open=coordinator),
         ))
@@ -1082,7 +1085,7 @@ def test_creator_dynamic_target_wait_rechecks_risk_before_finding_target() -> No
                 platform="bilibili",
                 count=1,
                 uid="synthetic-user",
-                browser_assist="browserskill",
+                browser_assist="off", complete=True,
             ),
             ProductionBrowser(page, detail_open=coordinator),
         ))
@@ -1114,7 +1117,7 @@ def test_popup_dynamic_is_released_immediately_after_record() -> None:
             platform="bilibili",
             count=1,
             uid="synthetic-user",
-            browser_assist="browserskill",
+            browser_assist="off", complete=True,
         ),
         ProductionBrowser(page, detail_open=coordinator),
     ))[0]
@@ -1356,13 +1359,16 @@ def test_assist_opens_unknown_dynamic_and_merges_only_same_id_numeric_metrics() 
             platform="bilibili",
             count=1,
             uid="synthetic-user",
-            browser_assist="browserskill",
+            browser_assist="off", complete=True,
         ),
         browser,
     ))[0]
 
     assert coordinator.clicks == ["123456"]
-    assert coordinator.retry_policies == [True]
+    # R0: BrowserSkill must no longer opt into the stale-selector retry; the
+    # risk check travels as a guard that runs before every click dispatch.
+    assert coordinator.retry_policies == [False]
+    assert len(coordinator.guards) == 1 and callable(coordinator.guards[0])
     assert record["detail_attempted"] is True
     assert record["detail_completed"] is True
     assert record["liked"] == 3
@@ -1392,14 +1398,14 @@ def test_assist_does_not_open_dynamic_when_all_engagement_values_are_known_zero(
             platform="bilibili",
             count=1,
             uid="synthetic-user",
-            browser_assist="browserskill",
+            browser_assist="off", complete=True,
         ),
         ProductionBrowser(page, detail_open=coordinator),
     ))[0]
 
     assert coordinator.clicks == []
     assert record["detail_attempted"] is False
-    assert record["complete"] is False
+    assert record["complete"] is True
 
 
 def test_dynamic_open_remains_incomplete_when_detail_metrics_are_unknown() -> None:
@@ -1422,7 +1428,7 @@ def test_dynamic_open_remains_incomplete_when_detail_metrics_are_unknown() -> No
             platform="bilibili",
             count=1,
             uid="synthetic-user",
-            browser_assist="browserskill",
+            browser_assist="off", complete=True,
         ),
         ProductionBrowser(page, detail_open=AssistedCoordinator()),
     ))[0]
@@ -1455,7 +1461,7 @@ def test_dynamic_screenshot_modes_capture_only_an_opened_exact_dynamic(mode: str
             platform="bilibili",
             count=1,
             uid="synthetic-user",
-            browser_assist="browserskill" if mode == "opened" else "off",
+            browser_assist="off", complete=True,
             screenshot_mode=mode,
         ),
         ProductionBrowser(

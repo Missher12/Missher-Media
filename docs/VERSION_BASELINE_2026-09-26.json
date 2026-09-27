@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-26T06:10:16.371096+00:00",
+  "scope": "version-baseline-project-entry-and-documentation-only",
+  "canonicalDevelopmentDirectory": "/Users/missher/Documents/Projects/02-Media@Missher/开发版/Media@Missher",
+  "sourceBranch": "codex/media-browser-agent-desktop-20260920",
+  "sourceBaseCommit": "f87dd8858a0b888f03a7885a1641823af13457bd",
+  "workingTreeContainsUncommittedImplementation": true,
+  "versions": {
+    "runtime": "15.6.0",
+    "agentCli": "0.1.0",
+    "dshBundle": "0.6.0"
+  },
+  "aliases": {
+    "/Users/missher/Desktop/Media@Missher": "/Users/missher/Documents/Projects/02-Media@Missher/开发版/Media@Missher",
+    "/Users/missher/Documents/Media@Missher": "/Users/missher/Documents/Projects/02-Media@Missher/历史基线/Media@Missher"
+  },
+  "artifacts": [
+    {
+      "path": "harness-plugin/dist/dsh-media-missher-0.6.0.tgz",
+      "bytes": 342956,
+      "sha256": "7d64d547c0ec4e6484a2511dac87019ee3b6c06e61c267f428ed8c2b864a3a17",
+      "matches20260923Record": true,
+      "immutableBuildDate": "2026-09-23"
+    },
+    {
+      "path": "agent-plugin/dist/missher-media-missher-0.1.0.tgz",
+      "bytes": 275706,
+      "sha256": "8278be06a05270e8fbc03694d8fb60444282ebcc19d5e4c4e7095ef7edda96de",
+      "matches20260923Record": true,
+      "immutableBuildDate": "2026-09-23"
+    },
+    {
+      "path": "agent-plugin/dist/Media-Missher-Agent-Setup-v0.1.0.zip",
+      "bytes": 293546,
+      "sha256": "f3b6ea344f7cead7b9e39ae1fd5fe93c010ec9979c28b19cec39f290e73dc0d0",
+      "matches20260923Record": true,
+      "immutableBuildDate": "2026-09-23"
+    }
+  ],
+  "archiveSourceChecks": [
+    {
+      "archive": "harness-plugin/dist/dsh-media-missher-0.6.0.tgz",
+      "comparedWithPackageStagingFiles": 59,
+      "expectedDocumentationDifferences": [
+        "README.md"
+      ],
+      "unexpectedDifferences": []
+    },
+    {
+      "archive": "agent-plugin/dist/missher-media-missher-0.1.0.tgz",
+      "comparedWithPackageStagingFiles": 63,
+      "expectedDocumentationDifferences": [],
+      "unexpectedDifferences": []
+    }
+  ],
+  "documentationChangesNotRepacked": true,
+  "installedSourceMatches": [
+    {
+      "source": "runtime",
+      "installedPath": "/Users/missher/.local/share/media-missher/current",
+      "matchingFiles": 39,
+      "differences": []
+    },
+    {
+      "source": "media-missher",
+      "installedPath": "/Users/missher/.codex/skills/media-missher",
+      "matchingFiles": 14,
+      "differences": []
+    }
+  ],
+  "installedReleaseMarkers": {
+    "/Users/missher/.local/share/media-missher/current": "20260923T074242322465Z-736a0c4a",
+    "/Users/missher/.local/share/media-missher/venv": "20260923T074242322465Z-736a0c4a",
+    "/Users/missher/.codex/skills/media-missher": "20260923T074242322465Z-736a0c4a"
+  },
+  "compiledEntrySha256": "bd1fd2e6fea34997c492e8326ee804e765b36b3793ca253349d4f01aa7c566c7",
+  "compatibilityCandidate": {
+    "directory": "/Users/missher/Documents/Projects/02-Media@Missher/历史基线/Media@Missher/.worktrees/media-official-compat-20260912",
+    "runtimeVersion": "15.6.0",
+    "bundleVersion": "0.6.1",
+    "head": "feea7040f60252680024a4f79c4089f00931f5a4",
+    "adapterCommit": "a2d49d820a8751482bab520eb8c097efae1c49c2",
+    "sourceImportCommit": "28364839d72d495f3df8a2199456ff4ca151584f",
+    "mergedIntoDevelopment": false,
+    "role": "preserve-for-selective-host-compatibility-integration",
+    "artifacts": [
+      {
+        "path": "harness-plugin/dist/dsh-media-missher-0.6.1.tgz",
+        "sha256": "be5adbfe37c13a628accad70e1b71aa2696bdd2f5d5e9933081c112ce8397744",
+        "bytes": 255371
+      },
+      {
+        "path": "harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.6.1.zip",
+        "sha256": "6b2ad3d244fc244be9d02c677ca9a979f5e9e9f8d4c65f87981672fec1a88c70",
+        "bytes": 277388
+      }
+    ]
+  },
+  "historicalMain": {
+    "directory": "/Users/missher/Documents/Projects/02-Media@Missher/历史基线/Media@Missher",
+    "runtimeVersion": "15.2.1",
+    "bundleVersion": "0.1.0",
+    "head": "9d70e1a3030b1534c464155df618e661b56a1f70",
+    "modifiedInThisTask": false
+  },
+  "historicalEvidenceNotForCurrentArtifacts": [
+    "agent-plugin/dist/AGENT-ENTRY-EVIDENCE.json"
+  ],
+  "documentArchive": "docs/history/2026-09-26-before-baseline-cleanup",
+  "documentOriginalSha256": {
+    "AGENTS.md": "86e365994c02b6bebbca4b7a46afbeaaafd26a55c48a394a62dcf923ae49f61a",
+    "README.md": "1095030dd9f8ff3a8de9924fd6051077f403877cc4d24e25c16600521b80d338",
+    "PROJECT_CONTEXT.md": "d7868729c1c3a7bf3902701c71bf95f770bfa18f97d5ff9e11e10ed934dbedf3",
+    "HANDOVER.md": "80e8fb03893258ef2b6af1c470b251865c60092f74128a74ef711b606d6dbab9",
+    "harness-plugin/README.md": "adff2aeb2b16e362c13d158276c1e022ab604e7125e142a360abf75754cee667",
+    "docs/history/README.md": "5ef9b043abcf09156c3c8e82f90b06c4d9b36c6487b49eda174b43e598cc402f"
+  },
+  "documentationVerification": {
+    "status": "passed",
+    "checkedAt": "2026-09-26T06:13:30.387263+00:00",
+    "currentDocumentsChecked": 9,
+    "localLinksChecked": 51,
+    "originalDocumentsPreservedByteForByte": 6,
+    "preExistingFilesChecked": 379,
+    "modifiedPreExistingFiles": [
+      "PROJECT_CONTEXT.md",
+      "README.md",
+      "AGENTS.md",
+      "HANDOVER.md",
+      "docs/history/README.md",
+      "harness-plugin/README.md"
+    ],
+    "runtimeCodeTestsBuildAndArchivesUnchanged": true,
+    "gitDiffCheck": "passed",
+    "focusedExistingDocumentationTests": {
+      "passed": 7,
+      "deselected": 17,
+      "network": "blocked-by-fixture; uv-offline",
+      "earlierRuns": [
+        {
+          "passed": 6,
+          "failed": 1,
+          "reason": "archived historical live-acceptance marker missing from current context",
+          "resolution": "restored a dated historical reference without claiming current acceptance"
+        },
+        {
+          "passed": 6,
+          "failed": 1,
+          "reason": "positive-count screenshot constraint missing from current context",
+          "resolution": "restored the verified current runtime constraint"
+        }
+      ]
+    },
+    "fullSuiteRerun": false,
+    "livePlatformOperations": 0,
+    "hostInstallations": 0
+  },
+  "notPerformed": [
+    "code-integration",
+    "version-bump",
+    "rebuild-or-repackage",
+    "host-install",
+    "browser-launch",
+    "live-platform-collection",
+    "git-commit-or-release"
+  ]
+}

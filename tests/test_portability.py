@@ -20,7 +20,7 @@ def _run(
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     environment.update(environment_overrides or {})
     return subprocess.run(
-        [sys.executable, str(script), *arguments],
+        [sys.executable, "-B", str(script), *arguments],
         check=False,
         capture_output=True,
         text=True,
@@ -32,6 +32,7 @@ def _run(
 def make_runtime_home(fake_engine_root):
     home = fake_engine_root.parent / "Runtime @ Home"
     shutil.copytree(fake_engine_root / "scripts", home / "current" / "scripts")
+    (home / "current" / "VERSION").write_text("17.0.0\n", encoding="ascii")
     interpreter = home / "venv" / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(

@@ -1,32 +1,26 @@
-# Historical archive index
+# 历史资料索引
 
-This index separates safe Media@Missher source history from local operational or third-party archives. It intentionally records no credentials, private target identifiers, collected content, or browser data.
+当前维护请从 [PROJECT_CONTEXT.md](../../PROJECT_CONTEXT.md) 和[当前版本基准](../CURRENT_BASELINE.md)进入。本目录保留历史原文与证据；其中的版本、路径、状态和授权均属于记录当时，不能直接覆盖当前用户要求。
 
-## Preserved in GitHub
+## 本轮整理前原文
 
-| Milestone | Git reference | Contents |
-| --- | --- | --- |
-| Initial independent skill work | history beginning at `b8dccda` | Codex skill, adapter, validation, and safety development |
-| Standalone runtime | history through `320cc6c` | Independently authored shared runtime and atomic installer |
-| Media@Missher V12 | `v12.0.0` / `173d636` | First tagged standalone release |
-| Media@Missher V15 | `v15.0.0` / `9910084` | BrowserSkill bridge, exact detail opening, and private screenshots |
+[2026-09-26 文档快照](2026-09-26-before-baseline-cleanup/INDEX.md)保存原 AGENTS、README、PROJECT_CONTEXT、HANDOVER、Harness README 和历史索引，逐文件附 SHA-256。历史内容没有删除；当前入口已改为独立摘要。
 
-All safe local Git branches and release tags are mirrored to the private repository. Git history is the version archive; installed `previous-*` directories are recovery copies rather than separate source releases.
+## 关键阶段记录
 
-## Local-only quarantined archives
+| 记录 | 用途和边界 |
+| --- | --- |
+| [9 月 23 日 Astra 接入与 Codex 安装](../ASTRA_MIGRATION_2026-09-23.md) | 主开发线最终归档、独立导出修复及原子安装证据；同文早期未安装状态属于前一阶段 |
+| [9 月 20 日 CDP/CU 离线候选](../CDP_CU_OFFLINE_ACCEPTANCE_2026-09-20.md) | 后端收敛、X、多目标、批次和导出；其中归档摘要早于 9 月 23 日，不代替当前基准 |
+| [9 月 8 日 Agent 入口](../AGENT_ENTRY_15.6.0.md) | 更早的同版本安装/构建快照，不能用旧摘要验证后来重建的包 |
+| [当前基准中的独立 0.6.1 分支说明](../CURRENT_BASELINE.md#两条-1560-开发线的区别) | 尚未合入主开发线的官方 DSH 兼容修复；保留源码、归档和历史证据 |
+| [更早的 Git 历史与隔离档案说明](2026-09-26-before-baseline-cleanup/docs/history/README.md) | 保留旧索引原文；远端和本地存在状态本轮未全部重新核验 |
 
-| Historical artifact | SHA-256 | Why it is not copied into Git |
-| --- | --- | --- |
-| Media@Missher V7.1 package | `0fb4cf160cc0a12bf2231e481f5a6734237acbe8dc7e1a65a2ae6a021b79361d` | Contains a bundled third-party crawler without a packaged license, historical private configuration, proxy and messaging integration, and unrelated platform modules |
-| Media@Missher V8.0 optimized package | `8c0c59f550595f14cdd75268bc77eb06bbc56595b1c71611b923bdd8b5c288c5` | Contains historical hard-coded identifiers plus cookie extraction, interaction, stealth, proxy, OpenClaw, and third-party integration paths that are outside the current safety boundary |
+旧 `DEEPSEEK_V4_PROMPT.md`、`REVIEW_HANDOFF.md`、`DSH_HOST_CONTROL_REPLAN_2026-09-20.md` 为历史材料，不是当前恢复开发、安装或真实采集的指令。
 
-The original archives remain recoverable in the owner's local OpenClaw retirement archive. Their hashes provide identity evidence without placing unsafe contents in permanent Git history.
+## 资料保留规则
 
-## Never upload
-
-- collection JSON, caches, checkpoints, screenshots, traces, or generated reports
-- browser profiles, cookies, account identifiers, private UIDs, tokens, or credentials
-- runtime state, virtual environments, deployment locks, or owner metadata
-- third-party source without compatible license and provenance review
-
-Future historical imports require a fresh secret scan, provenance review, private-repository verification, and explicit owner approval of the exact sanitized file list.
+- 当前开发版、旧发行基线、独立兼容分支、安装恢复目录各有用途，不按版本号或目录名字删除。
+- 私有配置、账号身份、采集数据、浏览器资料、缓存、风险状态与凭据不放进文档归档或发布物。
+- 旧外部代码及隔离压缩包只保存来源与许可审查线索，不因整理文档而复制、公开或重新分发。
+- 后续发布需重新核验精确文件、来源、许可、隐私和用户授权。本轮仅整理现有本地文档。

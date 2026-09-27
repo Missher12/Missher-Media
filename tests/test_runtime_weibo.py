@@ -716,3 +716,18 @@ def test_challenge_probe_uses_real_offline_dom_visibility() -> None:
             }
 
     asyncio.run(exercise())
+
+
+def test_creator_second_batch_scrolls_current_feed_instead_of_reloading():
+    from dataclasses import replace
+    from runtime.media_missher_runtime.platforms.weibo import collect_creator
+    page = Page(responses=[_creator(_post('101'), since_id='next'), _creator(_post('102'), since_id='end')])
+    browser = Browser(page)
+    browser.last_pages = 0
+    request = CollectionRequest(platform='weibo', uid='creator', count=1, page_cap=1)
+    first = _run(collect_creator(request, browser))
+    second = _run(collect_creator(replace(request, continue_page=True, exclude_ids=('MB101',)), browser))
+    assert [row['mblog_id'] for row in first + second] == ['MB101', 'MB102']
+    assert len(browser.navigations) == 1
+    assert page.scrolls == 1
+    assert browser.last_pages == 2

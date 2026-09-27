@@ -18,11 +18,18 @@ import { verifyPackage } from './verify-package.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(scriptDirectory, '..')
-const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-0.1.1.tgz')
-/** Support the old Electron layout and the current bundled Node layout without downloads. */
-export async function resolveHarnessLayout(appRoot = '/Applications/DeepSeek Harness.app', externalPnpmPaths = [
+const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-17.0.0.tgz')
+/** Resolve an installed Desktop without downloading or starting another host. */
+export async function resolveHarnessLayout(appRoot, externalPnpmPaths = [
   '/usr/local/bin/pnpm', '/opt/homebrew/bin/pnpm',
 ]) {
+  if (appRoot === undefined) {
+    for (const candidate of ['/Applications/DeepSeek Harness.app', join(homedir(), 'Applications/DeepSeek Harness.app')]) {
+      try { return await resolveHarnessLayout(candidate, externalPnpmPaths) }
+      catch (error) { if (error.message !== 'harness_layout_unsupported') throw error }
+    }
+    throw new Error('harness_layout_unsupported')
+  }
   const legacy = {
     runtime: join(appRoot, 'Contents/MacOS/DeepSeek Harness'),
     cli: join(appRoot, 'Contents/Resources/app.asar.unpacked/node_modules/@deepseek-ai/dsh/lib/bin.js'),
@@ -48,6 +55,15 @@ export async function resolveHarnessLayout(appRoot = '/Applications/DeepSeek Har
     throw new Error('harness_external_pnpm_required')
   }
   if (await exists(legacy.runtime) && await exists(legacy.cli) && await exists(legacy.pnpm)) return legacy
+  const desktop = {
+    runtime: legacy.runtime,
+    cli: join(appRoot, 'Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'),
+    pnpm: join(appRoot, 'Contents/Resources/runtime/pnpm/bin/pnpm.cjs'),
+    pnpmBin: join(appRoot, 'Contents/Resources/runtime/bin'),
+  }
+  // Node cannot stat virtual ASAR members. The selected Electron validates the
+  // exact CLI entry in regularFile before any profile or staging write.
+  if (await exists(desktop.runtime) && await exists(join(appRoot, 'Contents/Resources/app.asar')) && await exists(desktop.pnpm)) return desktop
   throw new Error('harness_layout_unsupported')
 }
 
@@ -95,8 +111,17 @@ function argumentsFrom(argv) {
   return result
 }
 
-async function regularFile(path, code) {
-  const metadata = await lstat(path)
+async function regularFile(path, code, runtime) {
+  let metadata
+  try { metadata = await lstat(path) }
+  catch (error) {
+    if (!runtime || !path.includes('/app.asar/') || !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error
+    const checked = spawnSync(runtime, ['-e', "try { const s = require('node:fs').lstatSync(process.argv[1]); process.exit(s.isFile() && !s.isSymbolicLink() ? 0 : 1) } catch { process.exit(1) }", path], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, shell: false, stdio: 'ignore', timeout: 5000,
+    })
+    if (checked.error || checked.status !== 0) throw new Error(code)
+    return
+  }
   if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(code)
 }
 
@@ -139,7 +164,7 @@ async function stageVerifiedArchive(dshHome, verified) {
   if (process.platform !== 'win32') await chmod(directory, 0o700)
   const destination = join(
     directory,
-    `dsh-media-missher-0.1.1-${verified.sha256.slice(0, 16)}.tgz`,
+    `dsh-media-missher-17.0.0-${verified.sha256.slice(0, 16)}.tgz`,
   )
   try {
     await copyFile(verified.archive, destination, fsConstants.COPYFILE_EXCL)
@@ -172,7 +197,7 @@ export async function installCurrentProfile(
   const dshHome = resolve(options.dshHome)
   await Promise.all([
     regularFile(runtime, 'harness_runtime_missing'),
-    regularFile(cli, 'harness_cli_missing'),
+    regularFile(cli, 'harness_cli_missing', runtime),
     regularFile(pnpm, 'harness_pnpm_missing'),
   ])
   const verified = await verifyPackage(options.archive)
@@ -183,6 +208,7 @@ export async function installCurrentProfile(
     PATH: harnessEnvironmentPath(runtime, layout.pnpmBin),
     DSH_HOME: dshHome,
     DSH_DESKTOP_PNPM_ENTRY: pnpm,
+    DSH_DESKTOP_NODE_EXECUTABLE: runtime,
     DSH_TELEMETRY_MODE: 'DISABLED',
     ELECTRON_RUN_AS_NODE: '1',
   }

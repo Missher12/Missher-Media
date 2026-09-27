@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -21,7 +22,7 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from urllib.parse import urlsplit, urlunsplit
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
@@ -61,7 +62,33 @@ _SAFE_PRECONDITION_CODES = frozenset(
         "bsk-click",
         "bsk-tab-return",
         "bsk-session-stop",
-        "xhs-browser-assist-unsupported",
+        "bsk-navigate",
+        "bsk-observe",
+        "bsk-get-html",
+        "bsk-extract",
+        "bsk-stale-reference",
+        "bsk-risk-signal",
+        "bsk-navigation-not-authorized",
+        "browser-assist-replaced",
+        "platform-collector-missing",
+        "topic-collector-unavailable",
+        "topic-unsupported-platform",
+        "topic-container-unsupported",
+        "topic-input-invalid",
+        "topic-kind-mismatch",
+        "target-identity-missing",
+        "target-keyword-missing",
+        "target-topic-missing",
+        "plan-request-invalid",
+        "plan-executor-missing",
+        "plan-manifest-invalid",
+        "exclude-file-plan-unsupported",
+        "xhs-cooldown",
+        "xhs-risk-latched",
+        "xhs-safety-busy",
+        "xhs-safety-state-invalid",
+        "collection-busy",
+        "shared-state-invalid",
     }
 )
 RUNTIME_ENTRYPOINTS = (
@@ -72,6 +99,7 @@ RUNTIME_ENTRYPOINTS = (
     "scrape_weibo.py",
 )
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+REQUIRED_RUNTIME_VERSION = "17.0.0"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_OWNER_MARKER = ".media-missher-owner.json"
 RUNTIME_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
@@ -128,6 +156,24 @@ _STATUS_KINDS = {
     "risk-stopped": frozenset({"risk-stop"}),
     "not-run": frozenset({"not-run"}),
 }
+
+
+def ensure_runtime_on_path() -> None:
+    """Make the shared runtime package importable from a checkout or a payload.
+
+    The installed layout keeps the runtime beside the skill, so the adjacency
+    check is the same in both places. Appending (not inserting) preserves the
+    priority of an already-installed runtime.
+    """
+
+    import sys
+
+    candidate = Path(__file__).resolve().parents[2] / "runtime"
+    if candidate.is_dir() and str(candidate) not in sys.path:
+        sys.path.append(str(candidate))
+
+
+ensure_runtime_on_path()
 
 
 class ConfigurationError(ValueError):
@@ -292,6 +338,8 @@ class CollectionRequest:
         object.__setattr__(self, "xhs_comments", comments)
         if comments and "xhs" not in requested:
             raise ConfigurationError("xhs comments require the xhs platform")
+        if comments and search and self.screenshot_mode != "all":
+            raise ConfigurationError("search comments require xhs and screenshot mode all")
 
         if isinstance(self.platform_timeout, bool):
             raise ConfigurationError("platform timeout must be a non-negative number")
@@ -309,8 +357,10 @@ class CollectionRequest:
             raise ConfigurationError("navigation authorization must be an explicit boolean")
         if self.browser_assist not in _BROWSER_ASSIST_MODES:
             raise ConfigurationError("unsupported browser assist mode")
-        if self.browser_assist == "browserskill" and "xhs" in requested:
-            raise ConfigurationError("xhs-browser-assist-unsupported")
+        # ``browser_assist="browserskill"`` is the deprecated mixed-control
+        # bridge, not a backend. It stays a well-defined legacy shape here; the
+        # collection CLI refuses a new run with ``browser-assist-replaced`` and
+        # never reinterprets it as a supported backend.
         if self.screenshot_mode not in _SCREENSHOT_MODES:
             raise ConfigurationError("unsupported screenshot mode")
         if self.screenshot_mode == "all" and zero_effective_count:
@@ -329,10 +379,11 @@ class EngineCommand:
     script: Path
     argv: tuple[str, ...]
     environment: Mapping[str, str] = field(default_factory=dict)
+    pass_fds: tuple[int, ...] = ()
 
     def with_environment(self, values: Mapping[str, str]) -> "EngineCommand":
         merged = {**self.environment, **{str(key): str(value) for key, value in values.items()}}
-        return EngineCommand(self.script, self.argv, merged)
+        return EngineCommand(self.script, self.argv, merged, self.pass_fds)
 
 
 @dataclass(frozen=True)
@@ -624,57 +675,36 @@ def _runtime_lease(layout: RuntimeLayout, *, timeout: float):
                 os.close(descriptor)
 
 
+def _load_shared_safety(layout: RuntimeLayout):
+    """Load only the verified installed core while its installation lease is held."""
+    path = layout.current / "media_missher_runtime" / "shared_safety.py"
+    _reject_symlink_components(path, "shared safety module")
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise _CollectionLeaseError("shared-state-invalid")
+    spec = importlib.util.spec_from_file_location("_media_missher_shared_safety", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @contextmanager
 def _collection_lease(layout: RuntimeLayout):
-    lock = layout.home.expanduser().absolute() / COLLECTION_LOCK
-    descriptor: int | None = None
-    acquired = False
+    entered = False
     try:
-        try:
-            _reject_symlink_components(lock, "collection lock")
-            flags = (
-                os.O_RDWR
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0)
-            )
-            try:
-                descriptor = os.open(lock, flags | os.O_CREAT | os.O_EXCL, 0o600)
-                os.fchmod(descriptor, 0o600)
-                expected = os.fstat(descriptor)
-            except FileExistsError:
-                expected = _owned_private_stat(lock, "collection lock")
-                descriptor = os.open(lock, flags)
-            opened = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or stat.S_IMODE(opened.st_mode) != 0o600
-                or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
-                or not os.path.samestat(expected, opened)
-            ):
-                raise _CollectionLeaseError("collection lock changed while being opened")
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise _CollectionLeaseError(
-                    "another Media@Missher collection is already running"
-                ) from exc
-            acquired = True
-        except _CollectionLeaseError:
+        module = _load_shared_safety(layout)
+        with module.collection_lease(layout.home) as lease:
+            entered = True
+            yield lease
+    except (OSError, _RuntimeLeaseError) as error:
+        if entered:
             raise
-        except _RuntimeLeaseError as exc:
-            raise _CollectionLeaseError(str(exc)) from exc
-        except OSError as exc:
-            raise _CollectionLeaseError(
-                f"collection lock is unavailable: {type(exc).__name__}"
-            ) from exc
-        yield
-    finally:
-        if descriptor is not None:
-            try:
-                if acquired:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
-                os.close(descriptor)
+        raise _CollectionLeaseError("shared-state-invalid") from error
+    except RuntimeError as error:
+        if type(error).__name__ == "SharedSafetyError":
+            message = "another Media@Missher collection is already running" if str(error) == "collection-busy" else "shared-state-invalid"
+            raise _CollectionLeaseError(message) from error
+        raise
 
 
 def resolve_data_root(
@@ -705,6 +735,7 @@ def build_engine_command(
     *,
     layout: RuntimeLayout,
     cdp_url: str = DEFAULT_CDP_URL,
+    exclude_file: Path | None = None,
 ) -> EngineCommand:
     staging = Path(staging_dir).expanduser().resolve()
     if request.search:
@@ -723,6 +754,7 @@ def build_engine_command(
         platform = request.platforms[0]
         search_count = request.platform_counts.get(platform, request.count)
         argv.extend(("--search", request.search, "--count", str(search_count)))
+        argv.extend(("--platform-timeout", _number_text(request.platform_timeout)))
         if platform in request.platform_uids:
             argv.extend(("--uid", request.platform_uids[platform]))
         if platform == "xhs" and request.xhs_comments:
@@ -745,6 +777,8 @@ def build_engine_command(
             argv.extend(("--xhs-comments", str(request.xhs_comments)))
         argv.append("--no-feishu")
     argv.extend(("--cdp-url", str(cdp_url)))
+    if exclude_file is not None:
+        argv.extend(("--exclude-file", str(exclude_file)))
     if request.allow_navigation:
         argv.append("--allow-navigation")
     if request.browser_assist != "off":
@@ -794,6 +828,8 @@ def execute_engine(
     *,
     timeout: float,
     run_dir: Path,
+    progress_module=None,
+    reporter=None,
 ) -> CompletedRun:
     if not math.isfinite(float(timeout)) or timeout <= 0:
         raise ConfigurationError("execution timeout must be greater than zero")
@@ -804,69 +840,148 @@ def execute_engine(
     stderr_path = evidence_dir / "stderr.log"
     environment = os.environ.copy()
     environment.update({str(key): str(value) for key, value in command.environment.items()})
+    # Ambient/override strings cannot waive the shared lock. The explicit
+    # descriptors are owned by this invocation and validated again by the core.
+    environment.pop("MEDIA_MISSHER_LEASE_FDS", None)
+    if command.pass_fds:
+        environment["MEDIA_MISSHER_LEASE_FDS"] = ",".join(str(fd) for fd in command.pass_fds)
     started = time.monotonic()
+    engine_phase = reporter.start("engine") if reporter is not None else None
     timed_out = False
     risk_detected = threading.Event()
+    interrupted_signal: int | None = None
+    previous_signal_handlers: dict[int, object] = {}
 
-    def terminate_process_group(process: subprocess.Popen, grace_seconds: float = 5.0):
+    def process_group_exists(process_group: int) -> bool:
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.killpg(process_group, 0)
         except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def wait_for_process_group(process: subprocess.Popen, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while process_group_exists(process.pid):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            process.poll()
+            time.sleep(min(0.02, remaining))
+        process.poll()
+        return True
+
+    def terminate_process_group(process: subprocess.Popen, grace_seconds: float = 1.0):
+        if process_group_exists(process.pid):
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            if not wait_for_process_group(process, grace_seconds):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                wait_for_process_group(process, grace_seconds)
+        if process.poll() is None:
             process.wait(timeout=grace_seconds)
 
-    def copy_and_monitor(stream, destination):
+    def handle_shutdown_signal(signum, _frame):
+        nonlocal interrupted_signal
+        if interrupted_signal is None:
+            interrupted_signal = signum
+
+    def install_signal_handlers() -> None:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous = signal.getsignal(signum)
+            signal.signal(signum, handle_shutdown_signal)
+            previous_signal_handlers[signum] = previous
+
+    def restore_signal_handlers() -> None:
+        for signum, previous in previous_signal_handlers.items():
+            signal.signal(signum, previous)
+
+    def copy_and_monitor(stream, destination, parse_progress=False):
         tail = ""
+        def ordinary(chunk):
+            nonlocal tail
+            destination.write(chunk)
+            destination.flush()
+            tail = (tail + chunk.decode("utf-8", errors="replace"))[-1024:]
+            if _has_risk_signal(tail):
+                risk_detected.set()
+        parser = progress_module.ProgressStream(reporter.relay, ordinary) if parse_progress and progress_module is not None and reporter is not None else None
         while True:
             chunk = stream.read(4096)
             if not chunk:
                 break
-            destination.write(chunk)
-            destination.flush()
-            tail = (tail + chunk.decode("utf-8", errors="replace"))[-1024:]
-            if _RISK_PATTERN.search(tail):
-                risk_detected.set()
+            if parser is None:
+                ordinary(chunk)
+            else:
+                parser.feed(chunk)
+        if parser is not None:
+            parser.finish()
 
     with _open_private_binary(stdout_path) as stdout, _open_private_binary(
         stderr_path
     ) as stderr:
-        process = subprocess.Popen(
-            list(command.argv),
-            cwd=command.script.parent.parent,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            start_new_session=True,
-            bufsize=0,
-        )
-        readers = (
-            threading.Thread(target=copy_and_monitor, args=(process.stdout, stdout), daemon=True),
-            threading.Thread(target=copy_and_monitor, args=(process.stderr, stderr), daemon=True),
-        )
-        for reader in readers:
-            reader.start()
-        deadline = started + timeout
-        while process.poll() is None:
-            if risk_detected.is_set():
+        process: subprocess.Popen | None = None
+        readers: tuple[threading.Thread, ...] = ()
+        try:
+            install_signal_handlers()
+            process = subprocess.Popen(
+                list(command.argv),
+                cwd=command.script.parent.parent,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                start_new_session=True,
+                pass_fds=command.pass_fds,
+                bufsize=0,
+            )
+            readers = (
+                threading.Thread(
+                    target=copy_and_monitor,
+                    args=(process.stdout, stdout),
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=copy_and_monitor,
+                    args=(process.stderr, stderr, True),
+                    daemon=True,
+                ),
+            )
+            for reader in readers:
+                reader.start()
+            deadline = started + timeout
+            while process.poll() is None:
+                if interrupted_signal is not None or risk_detected.is_set():
+                    break
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+                time.sleep(0.02)
+        finally:
+            if process is not None:
                 terminate_process_group(process)
-                break
-            if time.monotonic() >= deadline:
-                timed_out = True
-                terminate_process_group(process)
-                break
-            time.sleep(0.02)
-        if process.poll() is None:
-            process.wait(timeout=5)
-        for reader in readers:
-            reader.join(timeout=5)
+            for reader in readers:
+                reader.join(timeout=1)
+            try:
+                if reporter is not None:
+                    state = "cancelled" if interrupted_signal is not None else "failed" if process is None or process.returncode != 0 or timed_out or risk_detected.is_set() else "completed"
+                    try:
+                        reporter.finish(engine_phase, state)
+                    except Exception:
+                        pass
+            finally:
+                restore_signal_handlers()
+                if interrupted_signal is not None:
+                    signal.raise_signal(interrupted_signal)
+    assert process is not None
     return CompletedRun(
         returncode=process.returncode,
         stdout_path=stdout_path.resolve(),
@@ -1256,6 +1371,7 @@ def _platform_from_record(record: Mapping, path: Path) -> str | None:
         ("note_id", "xhs"),
         ("aweme_id", "douyin"),
         ("mblog_id", "weibo"),
+        ("tweet_id", "x"),
     )
     for key, platform in key_platforms:
         if record.get(key) is not None:
@@ -1263,11 +1379,15 @@ def _platform_from_record(record: Mapping, path: Path) -> str | None:
     return None
 
 
+#: Native identity keys per platform. ``native_id`` is the shared projection every
+#: collector writes, so it is accepted as the last resort instead of silently
+#: making a valid record look identity-less.
 _NATIVE_ID_KEYS = {
-    "bilibili": ("dynamic_id", "bvid"),
-    "xhs": ("note_id",),
-    "douyin": ("aweme_id",),
-    "weibo": ("mblog_id",),
+    "bilibili": ("dynamic_id", "bvid", "native_id"),
+    "xhs": ("note_id", "native_id"),
+    "douyin": ("aweme_id", "native_id"),
+    "weibo": ("mblog_id", "uid", "native_id"),
+    "x": ("tweet_id", "native_id"),
 }
 
 
@@ -1800,20 +1920,67 @@ _RUNTIME_PRECONDITION_PATTERN = re.compile(
 )
 
 
+def _has_risk_signal(text: str) -> bool:
+    # Local start guards are already stopped, structured preconditions. Preserve
+    # the diagnostic exit instead of racing it with another termination signal.
+    lines = [line for line in text.splitlines() if _RUNTIME_PRECONDITION_PATTERN.fullmatch(line) is None]
+    return _RISK_PATTERN.search("\n".join(lines)) is not None
+
+
 def _runtime_precondition_diagnostics(
     *, returncode: int, stderr: str
 ) -> dict[str, dict[str, str]] | None:
     if returncode != 78:
         return None
-    match = _RUNTIME_PRECONDITION_PATTERN.fullmatch(stderr)
-    if match is None:
+    lines = stderr.splitlines()
+    if not 1 <= len(lines) <= 4:
         return None
-    return {
-        match.group(1): {
-            "kind": "precondition",
-            "code": match.group(2),
-        }
-    }
+    diagnostics = {}
+    for line in lines:
+        match = _RUNTIME_PRECONDITION_PATTERN.fullmatch(line)
+        if match is None or match.group(1) in diagnostics:
+            return None
+        diagnostics[match.group(1)] = {"kind": "precondition", "code": match.group(2)}
+    return diagnostics
+
+
+def _recover_current_snapshot(run_dir: Path, started_ns: int) -> None:
+    """Materialize only this stopped engine's last atomic committed envelope."""
+    from media_missher_history import HistoryError, load_run
+    candidates = [path for path in run_dir.glob("run-*/committed.json") if path.is_file() or path.is_symlink()]
+    if not candidates:
+        return
+    if len(candidates) != 1 or candidates[0].is_symlink() or candidates[0].stat().st_mtime_ns < started_ns:
+        raise ConfigurationError("unsafe current committed snapshot")
+    try:
+        loaded = load_run(run_dir.parent, run_dir.name)
+    except HistoryError as error:
+        raise ConfigurationError("current committed snapshot is invalid") from error
+    if loaded["context"] is None or loaded["context"]["started_ns"] != started_ns:
+        raise ConfigurationError("current committed snapshot identity mismatch")
+    artifacts = loaded["committed_artifacts"]
+    inner = candidates[0].parent
+    payloads = {loaded["manifest"]["paths"][key]: value for key, value in artifacts.items()}
+    payloads["manifest.json"] = loaded["manifest"]
+    for name, value in payloads.items():
+        target = inner / name
+        if target.is_symlink():
+            raise ConfigurationError("unsafe current projection path")
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if target.exists():
+            target_stat = _owned_private_stat(target, "current projection")
+            if target_stat.st_mtime_ns >= started_ns and target.read_bytes() == payload:
+                continue
+        descriptor, temporary = tempfile.mkstemp(prefix=".restore-", dir=inner)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.lexists(temporary):
+                os.unlink(temporary)
 
 
 def _run_collection_request_unlocked(
@@ -1825,7 +1992,28 @@ def _run_collection_request_unlocked(
     preflight_runner: Callable = None,
     execution_timeout: float | None = None,
     command_environment: Mapping[str, str] | None = None,
+    context_request: CollectionRequest | None = None,
+    profile_digest: str | None = None,
+    continuation: Mapping | None = None,
+    collection_fds: tuple[int, ...] = (),
 ) -> dict:
+    from media_missher_history import HistoryError, write_context
+    from media_missher_progress import load_progress
+    try:
+        progress_module = load_progress(layout.current)
+    except (OSError, ValueError, ImportError, SyntaxError):
+        result = _preflight_failure("installed progress module unavailable or invalid", checks={"progress_module": False})
+        result["preflight"]["code"] = "progress-module-invalid"
+        return result
+    progress = progress_module.ProgressRecorder()
+    run_phase = progress.start("run")
+    preflight_phase = progress.start("controller-preflight")
+
+    def finish_summary(summary):
+        progress.finish(run_phase, "completed" if summary["status"] == "success" else "failed")
+        summary["phase_timings"] = list(progress.timings)
+        summary["phase_timings_persisted"] = progress.path is not None and not progress.storage_failed
+        return summary
     if preflight_runner is None or preflight_runner is run_preflight:
         preflight_report = _run_preflight_unlocked(
             layout,
@@ -1840,39 +2028,56 @@ def _run_collection_request_unlocked(
             cdp_url=cdp_url,
             timeout=10.0,
         )
+    progress.finish(preflight_phase, "completed" if preflight_report.get("status") == "ok" else "failed")
     if preflight_report.get("status") != "ok":
-        return {
+        return finish_summary({
             "status": "preflight-failed",
             "run_dir": None,
             "evidence": [],
             "errors": list(preflight_report.get("errors", [])),
             "preflight": preflight_report,
-        }
+        })
 
     run_dir = create_run_directory(data_root)
+    progress.bind_path(run_dir / "phase-timings.json")
     # Compare evidence mtimes to a timestamp from the same filesystem. Some
     # filesystems can report a newly-created file slightly behind the process
     # wall clock even though it was written afterwards. The run directory is
     # unique, private, and created immediately before this cutoff.
     started_ns = run_dir.stat().st_mtime_ns
     try:
+        version_path = layout.current / "VERSION"
+        version = version_path.read_text(encoding="ascii").strip() if version_path.is_file() else "unknown"
+        write_context(
+            run_dir, context_request or request, profile_digest or _profile_identity(layout, cdp_url), version,
+            parent_run_id=continuation["parent_run_id"] if continuation else None,
+        )
+        exclude_file = None
+        if continuation:
+            exclude_file = run_dir / "continuation.json"
+            with _open_private_binary(exclude_file) as handle:
+                handle.write(json.dumps({"schema": 1, "platforms": {platform: continuation["skip_ids"][platform] for platform in request.platforms}}, separators=(",", ":")).encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
         command = build_engine_command(
-            request, run_dir, layout=layout, cdp_url=cdp_url
+            request, run_dir, layout=layout, cdp_url=cdp_url, exclude_file=exclude_file
         )
         if command_environment:
             command = command.with_environment(command_environment)
+        command = replace(command, pass_fds=collection_fds)
         if execution_timeout is None:
             per_platform = request.platform_timeout if request.platform_timeout > 0 else 3600.0
             execution_timeout = per_platform * len(request.platforms) + 60.0
-        completed = execute_engine(command, timeout=execution_timeout, run_dir=run_dir)
-    except (ConfigurationError, OSError, subprocess.SubprocessError) as exc:
-        return {
+        completed = execute_engine(command, timeout=execution_timeout, run_dir=run_dir, progress_module=progress_module, reporter=progress)
+    except (ConfigurationError, HistoryError, OSError, subprocess.SubprocessError) as exc:
+        return finish_summary({
             "status": "failed",
             "run_dir": str(run_dir),
             "evidence": [],
             "errors": [str(exc)],
             "preflight": preflight_report,
-        }
+        })
+    validation_phase = progress.start("validation")
     feishu_artifacts = tuple(run_dir.glob("feishu_*"))
     stdout = completed.stdout_path.read_text(encoding="utf-8", errors="replace")
     stderr = completed.stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -1883,6 +2088,7 @@ def _run_collection_request_unlocked(
     )
     discovery_errors: list[str] = []
     try:
+        _recover_current_snapshot(run_dir, started_ns)
         evidence = discover_current_json(run_dir, started_ns=started_ns)
     except (ConfigurationError, OSError) as exc:
         evidence = ()
@@ -1896,12 +2102,13 @@ def _run_collection_request_unlocked(
     if completed.returncode != 0:
         errors.append(f"engine exited with status {completed.returncode}")
     errors.extend(validation["errors"])
+    progress.finish(validation_phase, "completed" if validation["status"] == "success" else "failed")
     if runtime_preflight_diagnostics is not None:
         errors = ["runtime platform preflight failed"]
         status = "preflight-failed"
     elif (
         completed.risk_detected
-        or _RISK_PATTERN.search(combined_log)
+        or _has_risk_signal(combined_log)
         or validation["status"] == "risk-stopped"
     ):
         status = "risk-stopped"
@@ -1912,6 +2119,24 @@ def _run_collection_request_unlocked(
     else:
         status = validation["status"]
 
+    if status == "risk-stopped" and "xhs" in request.platforms:
+        # The output monitor may have stopped the engine before it could latch
+        # risk itself. The engine is now reaped; retain both controller leases
+        # while the same installed policy records that restrictive fallback.
+        try:
+            pause = subprocess.run(
+                [str(layout.python), str(layout.current / "scripts" / "xhs_safety.py"), "--record-risk", "risk-signal"],
+                env={**os.environ, "MEDIA_MISSHER_HOME": str(layout.home), "PYTHONDONTWRITEBYTECODE": "1", "MEDIA_MISSHER_LEASE_FDS": ",".join(str(fd) for fd in collection_fds)},
+                pass_fds=collection_fds,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=5.0, check=False,
+            )
+            if pause.returncode != 0:
+                errors.append("xhs risk pause could not be persisted; local safety state requires inspection")
+        except (OSError, subprocess.SubprocessError):
+            errors.append("xhs risk pause could not be persisted; local safety state requires inspection")
+
+    output_phase = progress.start("output")
     outputs = list(validation["evidence"]) if request.output_format == "json" else []
     if (
         request.output_format != "json"
@@ -1949,10 +2174,32 @@ def _run_collection_request_unlocked(
     }
     if runtime_preflight_diagnostics is not None:
         summary["diagnostics"] = runtime_preflight_diagnostics
-    return summary
+    summary["safety_limits"] = {"xhs_batch_notes": 10, "xhs_batch_pages": 3, "xhs_batch_interval_seconds": 600} if "xhs" in request.platforms else {}
+    if continuation:
+        summary["continuation"] = {
+            "parent_run_id": continuation["parent_run_id"],
+            "prior_counts": continuation["prior_counts"],
+            "new_counts": validation["counts"],
+            "requested_counts": continuation["requested_counts"],
+        }
+    if status != "preflight-failed":
+        from media_missher_history import _write_json_exclusive
+        try:
+            _write_json_exclusive(run_dir / "run-result.json", {"schema": 1, "status": status})
+        except (HistoryError, OSError) as error:
+            errors.append(f"run finalization failed: {type(error).__name__}")
+            summary["status"] = "risk-stopped" if status == "risk-stopped" else "partial" if validation["records"] else "failed"
+    progress.finish(output_phase, "completed" if summary["status"] == "success" else "failed")
+    return finish_summary(summary)
 
 
 def _preflight_failure(error: str, *, checks: Mapping[str, bool]) -> dict:
+    code = (
+        "runtime-version-mismatch" if checks.get("runtime_version") is False
+        else "collection-busy" if checks.get("collection_lease") is False and error == "another Media@Missher collection is already running"
+        else "shared-state-invalid" if checks.get("collection_lease") is False
+        else None
+    )
     return {
         "status": "preflight-failed",
         "run_dir": None,
@@ -1962,8 +2209,15 @@ def _preflight_failure(error: str, *, checks: Mapping[str, bool]) -> dict:
             "status": "failed",
             "checks": dict(checks),
             "errors": [error],
+            **({"code": code} if code is not None else {}),
         },
     }
+
+
+def _profile_identity(layout: RuntimeLayout, cdp_url: str, profile: Mapping | None = None) -> str:
+    """Bind continuation to effective local configuration without retaining it."""
+    value = {"runtime_home": str(layout.home.expanduser().absolute()), "cdp_url": cdp_url, "profile": dict(profile or {})}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def run_collection_request(
@@ -1975,7 +2229,10 @@ def run_collection_request(
     preflight_runner: Callable = None,
     execution_timeout: float | None = None,
     command_environment: Mapping[str, str] | None = None,
+    resume_run: str | None = None,
+    profile_digest: str | None = None,
 ) -> dict:
+    from media_missher_history import HistoryError, prepare_continuation
     if not request.search:
         missing_uids = [
             platform
@@ -1987,16 +2244,45 @@ def run_collection_request(
             return _preflight_failure(error, checks={"creator_uids": False})
     try:
         with _runtime_lease(layout, timeout=10.0):
+            version_report = runtime_version_check(layout)
+            if not version_report["matches"]:
+                failure = _preflight_failure(
+                    _version_error(version_report),
+                    checks={"runtime_lease": True, "release": True, "runtime_version": False},
+                )
+                failure["preflight"]["runtime_version"] = version_report
+                return failure
             try:
-                with _collection_lease(layout):
+                with _collection_lease(layout) as collection_lease:
+                    digest = profile_digest or _profile_identity(layout, cdp_url)
+                    continuation = None
+                    active_request = request
+                    if resume_run is not None:
+                        try:
+                            continuation = prepare_continuation(data_root, resume_run, request, digest)
+                            remaining = {platform: count for platform, count in continuation["remaining_counts"].items() if count > 0}
+                            active_request = replace(
+                                request, platforms=tuple(remaining), platform_counts=remaining,
+                                platform_uids={platform: uid for platform, uid in request.platform_uids.items() if platform in remaining},
+                                complete=request.complete and bool({"bilibili", "xhs"}.intersection(remaining)),
+                                bilibili_complete=request.bilibili_complete and "bilibili" in remaining,
+                                xhs_complete=request.xhs_complete and "xhs" in remaining,
+                                xhs_comments=request.xhs_comments if "xhs" in remaining else 0,
+                            )
+                        except HistoryError as error:
+                            return _preflight_failure(str(error), checks={"continuation": False})
                     return _run_collection_request_unlocked(
-                        request,
+                        active_request,
                         layout=layout,
                         data_root=data_root,
                         cdp_url=cdp_url,
                         preflight_runner=preflight_runner,
                         execution_timeout=execution_timeout,
                         command_environment=command_environment,
+                        context_request=request,
+                        profile_digest=digest,
+                        continuation=continuation,
+                        collection_fds=collection_lease.pass_fds,
                     )
             except _CollectionLeaseError as exc:
                 return _preflight_failure(
@@ -2070,6 +2356,33 @@ def _validated_preflight_timeout(timeout: float) -> float:
     return parsed
 
 
+def runtime_version_check(layout: RuntimeLayout) -> dict:
+    """One bounded local check, shared by passive preflight and collection."""
+    result = {"current": "unavailable", "required": REQUIRED_RUNTIME_VERSION, "matches": False}
+    try:
+        path = layout.current / "VERSION"
+        _reject_symlink_components(path, "runtime version")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 32 or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+                return result
+            value = os.read(descriptor, 33)
+            # Never reflect arbitrary file contents into model-facing output.
+            if re.fullmatch(rb"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\n?", value):
+                result["current"] = value.decode("ascii").rstrip("\n")
+                result["matches"] = result["current"] == REQUIRED_RUNTIME_VERSION
+        finally:
+            os.close(descriptor)
+    except (OSError, ConfigurationError):
+        pass
+    return result
+
+
+def _version_error(report: Mapping) -> str:
+    return f"runtime {report['required']} is required; current: {report['current']}; install the matching candidate before collection"
+
+
 def _run_preflight_unlocked(
     layout: RuntimeLayout,
     *,
@@ -2081,6 +2394,14 @@ def _run_preflight_unlocked(
     timeout = _validated_preflight_timeout(timeout)
     if not isinstance(layout, RuntimeLayout):
         raise ConfigurationError("runtime layout is required")
+    version_report = runtime_version_check(layout)
+    if not version_report["matches"]:
+        return {
+            "status": "failed", "runtime_home": str(layout.home),
+            "checks": {"runtime_lease": True, "release": True, "runtime_version": False},
+            "code": "runtime-version-mismatch",
+            "runtime_version": version_report, "errors": [_version_error(version_report)],
+        }
     home = layout.home.expanduser().absolute()
     current = layout.current.expanduser().absolute()
     python = layout.python.expanduser().absolute()
@@ -2117,6 +2438,7 @@ def _run_preflight_unlocked(
     checks = {
         "runtime_lease": True,
         "release": True,
+        "runtime_version": True,
         "layout": exact_layout and safe_boundaries,
         "runtime_home": home.is_dir(),
         "current": current.is_dir(),
@@ -2168,10 +2490,10 @@ def _run_preflight_unlocked(
             checks["python_version"] = (
                 version_result.returncode == 0
                 and len(version_parts) >= 2
-                and version_parts[:2] >= (3, 11)
+                and version_parts[:2] in {(3, 11), (3, 12)}
             )
             if not checks["python_version"]:
-                errors.append("runtime Python 3.11 or newer is required")
+                errors.append("runtime Python 3.11 or 3.12 is required for the pinned dependencies")
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             errors.append(f"runtime Python version probe failed: {type(exc).__name__}: {exc}")
         try:
@@ -2244,6 +2566,7 @@ def _run_preflight_unlocked(
         "checks": checks,
         "errors": errors,
     }
+    report["runtime_version"] = version_report
     if cdp is not None:
         report["cdp"] = cdp
     return report

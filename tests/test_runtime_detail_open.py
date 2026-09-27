@@ -128,24 +128,6 @@ class Popup:
         return self.opener_page
 
 
-class Bridge:
-    def __init__(self, action: Callable[[], None]) -> None:
-        self.action = action
-        self.selectors: list[str] = []
-        self.titles: list[str] = []
-        self.retry_policies: list[bool] = []
-
-    async def click_marked_tab(
-        self,
-        page: Page,
-        *,
-        selector: str,
-        retry_stale_selector: bool = True,
-    ) -> None:
-        self.selectors.append(selector)
-        self.titles.append(await page.title())
-        self.retry_policies.append(retry_stale_selector)
-        self.action()
 
 
 @pytest.mark.asyncio
@@ -167,50 +149,8 @@ async def test_default_coordinator_marks_clicks_and_removes_marker() -> None:
     assert page.current_title == "original title"
 
 
-@pytest.mark.asyncio
-async def test_assisted_coordinator_marks_title_and_uses_only_bridge_click() -> None:
-    page = Page(
-        "https://www.xiaohongshu.com/explore",
-        detail_url="https://www.xiaohongshu.com/explore/note-123",
-    )
-    element = Element(page)
-    bridge = Bridge(page.open_detail)
-
-    result = await DetailOpenCoordinator(bridge=bridge).click_exact(
-        page, element, platform="xhs", native_id="note-123"
-    )
-
-    assert result is page
-    assert element.clicked == 0
-    assert bridge.selectors == [
-        f'[data-media-missher-target="{element.markers[0]}"]'
-    ]
-    assert len(bridge.titles) == 1 and bridge.titles[0].startswith("media-missher-")
-    assert bridge.retry_policies == [True]
-    assert page.current_title == "original title"
-    assert page.marker_removed is True
 
 
-@pytest.mark.asyncio
-async def test_coordinator_forwards_disabled_stale_selector_retry() -> None:
-    page = Page(
-        "https://www.xiaohongshu.com/explore",
-        detail_url="https://www.xiaohongshu.com/explore/note-123",
-    )
-    element = Element(page)
-    bridge = Bridge(page.open_detail)
-
-    result = await DetailOpenCoordinator(bridge=bridge).click_exact(
-        page,
-        element,
-        platform="xhs",
-        native_id="note-123",
-        retry_stale_selector=False,
-    )
-
-    assert result is page
-    assert bridge.retry_policies == [False]
-    assert element.clicked == 0
 
 
 @pytest.mark.asyncio
@@ -469,3 +409,28 @@ async def test_click_derived_wrong_popup_is_closed_on_failure() -> None:
         )
 
     assert wrong.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cdp_guard_denial_prevents_click_and_removes_marker():
+    page=Page('https://www.xiaohongshu.com/explore',detail_url='https://www.xiaohongshu.com/explore/note-123')
+    element=Element(page)
+    def deny():raise PreconditionError('risk-stop')
+    with pytest.raises(PreconditionError,match='risk-stop'):
+        await DetailOpenCoordinator().click_exact(page,element,platform='xhs',native_id='note-123',guard=deny)
+    assert element.clicked==0
+    assert page.marker_removed
+
+
+@pytest.mark.asyncio
+async def test_uncertain_cdp_click_is_not_replayed():
+    page=Page('https://www.xiaohongshu.com/explore',detail_url='https://www.xiaohongshu.com/explore/note-123')
+    element=Element(page)
+    async def uncertain():
+        element.clicked+=1
+        raise TimeoutError('delivered-but-unknown')
+    element.click=uncertain
+    with pytest.raises(TimeoutError):
+        await DetailOpenCoordinator().click_exact(page,element,platform='xhs',native_id='note-123')
+    assert element.clicked==1
+    assert page.marker_removed

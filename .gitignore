@@ -1,4 +1,5 @@
 .worktrees/
+.DS_Store
 /node_modules/
 __pycache__/
 *.py[cod]
@@ -9,7 +10,7 @@ __pycache__/
 *.trace.json
 screenshots/
 run-*/screenshots/
-harness-plugin/node_modules/
+harness-plugin/node_modules
 harness-plugin/lib/
 harness-plugin/payload/
 harness-plugin/.work/
@@ -17,8 +18,43 @@ harness-plugin/dist/*
 !harness-plugin/dist/dsh-media-missher-0.1.0.tgz
 !harness-plugin/dist/SHA256SUMS.txt
 !harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
-!harness-plugin/dist/SETUP-SHA256.txt
 
 !harness-plugin/dist/dsh-media-missher-0.1.1.tgz
-!harness-plugin/dist/Media-Missher-Harness-Setup-bundle-v0.1.1.zip
 !harness-plugin/dist/MAINTENANCE-EVIDENCE.json
+!harness-plugin/dist/dsh-media-missher-0.2.0.tgz
+!harness-plugin/dist/RELIABILITY-EVIDENCE.json
+
+# Reviewed new-device onboarding candidate (keep the previous reliability candidate).
+!harness-plugin/dist/dsh-media-missher-0.3.0.tgz
+!harness-plugin/dist/Media-Missher-Creators-Template.csv
+!harness-plugin/dist/Media-Missher-Creators-Template.xlsx
+!harness-plugin/dist/ONBOARDING-EVIDENCE.json
+
+# Explicit AI browser onboarding candidate; retain previous onboarding artifacts.
+!harness-plugin/dist/dsh-media-missher-0.4.0.tgz
+!harness-plugin/dist/AI-BROWSER-EVIDENCE.json
+
+# Generated copies of canonical repository notices.
+harness-plugin/LICENSE
+harness-plugin/THIRD_PARTY_NOTICES.md
+
+# Shared protection and progress candidate; older reviewed artifacts remain immutable.
+!harness-plugin/dist/dsh-media-missher-0.5.0.tgz
+!harness-plugin/dist/SHARED-SAFETY-EVIDENCE.json
+
+# Standalone Agent build output.
+agent-plugin/node_modules
+agent-plugin/lib/
+agent-plugin/payload/
+agent-plugin/dist/
+agent-plugin/.work/
+agent-plugin/LICENSE
+agent-plugin/THIRD_PARTY_NOTICES.md
+agent-plugin/AGENT_INSTALL.md
+agent-plugin/DATA_CAPABILITIES.md
+agent-plugin/QUICKSTART.md
+harness-plugin/DATA_CAPABILITIES.md
+harness-plugin/QUICKSTART.md
+harness-plugin/AGENT_INSTALL.md
+
+!harness-plugin/dist/dsh-media-missher-0.6.0.tgz
