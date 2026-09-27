@@ -4,7 +4,7 @@ This repository contains an independently authored runtime, two compact skill pa
 
 Historical upstream components remain governed by their own license files and restrictions. They are not dependencies of the shared runtime, and this repository does not copy, distribute, or relicense them.
 
-No repository-wide license has been selected. Do not add one, publish a combined bundle, or copy historical upstream code until the owner selects a license and a provenance review confirms that every component can be distributed under compatible terms.
+On 2026-09-07 the owner selected a proprietary notice for the original work: Copyright (c) 2026 Missher, all rights reserved. See the repository LICENSE, COPYRIGHT.md and THIRD_PARTY_NOTICES.md. Unauthorized modification, derivative versions and redistribution are prohibited within the stated scope and applicable exceptions. This does not relicense third-party components or cancel previously granted rights. Owner-authorized maintenance remains permitted.
 
 The V15 repository and any GitHub destination must remain private. A private GitHub backup or review does not authorize public distribution, release artifacts, screenshots, browser traces, profiles, cookies, runtime state, or collected data. Public GitHub publication remains blocked until the same license and provenance review is complete.
 

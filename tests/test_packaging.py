@@ -93,7 +93,7 @@ def test_openai_metadata_has_required_interface():
         "default_prompt",
     }
     assert all(interface.values())
-    assert interface["display_name"] == "Media@Missher V15.2.1"
+    assert interface["display_name"] == "Media@Missher V17.0.0"
     assert 25 <= len(interface["short_description"]) <= 64
     assert "$media-missher" in interface["default_prompt"]
 
@@ -239,7 +239,7 @@ def test_validation_documentation_defines_the_strict_five_key_diagnostic_contrac
         "prior-risk-stop",
         "module-not-found",
         "precondition-failed",
-        "xhs-browser-assist-unsupported",
+        "browser-assist-replaced",
         "bsk-missing",
         "bsk-unhealthy",
         "bsk-incompatible",
@@ -299,7 +299,7 @@ def test_documentation_carries_the_bounded_xhs_detail_action_contract():
     assert "Do not refresh or reopen" in troubleshooting
 
 
-def test_documentation_records_xhs_cdp_only_browser_ownership():
+def test_documentation_records_chrome_cdp_only():
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     commands = (SKILL / "references" / "commands.md").read_text(encoding="utf-8")
     configuration = (SKILL / "references" / "configuration.md").read_text(
@@ -310,10 +310,33 @@ def test_documentation_records_xhs_cdp_only_browser_ownership():
     )
 
     for text in (skill, commands, configuration, openclaw):
-        assert "xhs-browser-assist-unsupported" in text
-    assert "Xiaohongshu uses Playwright/CDP only" in skill
-    assert "BrowserSkill assistance is limited to Bilibili" in commands
+        assert "--backend cdp" in text
+        assert "Chrome CDP is the only active backend" in text
+        assert "cdp|computer_use" not in text
+        assert "backend-retired-browserskill" in text
+        assert "backend-retired-computer-use" in text
+        # The retired mixed-control bridge is documented as replaced, and the
+        # old pre-navigation rejection rule no longer survives as a rule.
+        assert "browser-assist-replaced" in text
+        assert "rejected before navigation with `xhs-browser-assist-unsupported`" not in text
+        # Current instructions expose Chrome only and retain migration diagnostics.
+        assert "Computer Use" in text
+        assert "bsk session start" not in text
+    assert "--backend cdp" in skill
+    assert (
+        "media-missher-diagnostic platform=<p> kind=precondition "
+        "code=browser-assist-replaced"
+    ) in skill
+    assert (
+        "media-missher-diagnostic platform=<p> kind=precondition "
+        "code=browser-assist-replaced"
+    ) in commands
     assert "--browser-assist off" in commands
+    # Retired control is not offered as an alternative collection route.
+    assert "BrowserSkill is Bilibili creator-only" not in skill
+    assert "Xiaohongshu uses Playwright/CDP only" not in skill
+    assert "Computer Use and its lifecycle command are removed" in skill
+    assert "Computer Use and its lifecycle command are removed" in commands
 
 
 def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflight():
@@ -329,7 +352,7 @@ def test_documentation_distinguishes_live_cdp_probe_from_controller_page_preflig
 def test_project_context_records_clean_boundaries_and_release_state():
     text = (REPO / "PROJECT_CONTEXT.md").read_text(encoding="utf-8")
 
-    assert (REPO / "VERSION").read_text(encoding="ascii") == "15.2.1\n"
+    assert (REPO / "VERSION").read_text(encoding="ascii") == "17.0.0\n"
 
     for phrase in (
         "Source boundary",
@@ -351,13 +374,13 @@ def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
         encoding="utf-8"
     )
 
-    assert "# Media@Missher V15.2.1" in codex_skill
-    assert "# Media@Missher V15.2.1" in openclaw_skill
+    assert "# Media@Missher V17.0.0" in codex_skill
+    assert "# Media@Missher V17.0.0" in openclaw_skill
     for phrase in (
         "--browser-assist",
         "--screenshot-mode",
-        "BrowserSkill 0.1.10",
-        "extension 0.1.6",
+        "backend-retired-computer-use",
+        "backend-retired-browserskill",
         "Playwright/CDP",
         "article",
         "full_page_fallback",
@@ -369,8 +392,26 @@ def test_v15_docs_cover_assist_screenshot_and_unverified_live_boundary():
     ):
         assert phrase in corpus, f"V15 documentation is missing {phrase!r}"
     assert "defaults to `off`" in corpus
-    assert "bundled skill sync" in corpus
     assert "positive count" in corpus
+    # Historical diagnostics remain, but active guides cannot start BSK.
+    assert "browser-assist-replaced" in corpus
+    assert "Computer Use and BrowserSkill are retired" in corpus
+    installable = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            SKILL / "SKILL.md",
+            SKILL / "references" / "configuration.md",
+            SKILL / "references" / "commands.md",
+            SKILL / "references" / "troubleshooting.md",
+            SKILL / "references" / "validation.md",
+        )
+    )
+    assert "BrowserSkill 0.1.10" not in installable
+    assert "extension 0.1.6" not in installable
+    assert "bsk session start" not in installable
+    assert "bsk doctor" not in installable
+    # The retired rejection rule is gone; only its removal is documented.
+    assert "rejected before navigation with `xhs-browser-assist-unsupported`" not in installable
 
 
 def test_gitignore_keeps_private_v15_artifacts_out_of_source_control():

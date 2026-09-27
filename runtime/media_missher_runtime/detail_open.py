@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .browser import PreconditionError
-from .browser_skill import BrowserSkillBridge
 
 
 ENGAGEMENT_FIELDS = ("liked", "comments", "collected", "shares")
@@ -133,7 +132,6 @@ async def resolve_exact_detail_page(
 
 @dataclass(slots=True)
 class DetailOpenCoordinator:
-    bridge: BrowserSkillBridge | None = None
     register_temporary_page: Callable[[Any], Any] | None = None
     release_temporary_page: Callable[[Any], Any] | None = None
     _owned_pages: list[Any] = field(default_factory=list, init=False, repr=False)
@@ -167,14 +165,16 @@ class DetailOpenCoordinator:
         *,
         platform: str,
         native_id: str,
-        retry_stale_selector: bool = True,
+        retry_stale_selector: bool = False,
+        guard: Callable[[], None] | None = None,
     ) -> Any:
         if not isinstance(retry_stale_selector, bool):
+            raise PreconditionError("invalid detail click policy")
+        if guard is not None and not callable(guard):
             raise PreconditionError("invalid detail click policy")
         token = secrets.token_hex(16)
         selector = f'[data-media-missher-target="{token}"]'
         locator = page.locator(selector)
-        original_title: str | None = None
         primary_error: BaseException | None = None
         claimed_this_click: list[Any] = []
 
@@ -192,19 +192,9 @@ class DetailOpenCoordinator:
                 raise PreconditionError("exact detail target is ambiguous")
             context = getattr(page, "context", None)
             previous_pages = tuple(getattr(context, "pages", ()))
-            if self.bridge is None:
-                await element.click()
-            else:
-                original_title = await page.title()
-                await page.evaluate(
-                    "value => { document.title = value; }",
-                    f"media-missher-{secrets.token_hex(16)}",
-                )
-                await self.bridge.click_marked_tab(
-                    page,
-                    selector=selector,
-                    retry_stale_selector=retry_stale_selector,
-                )
+            if guard is not None:
+                guard()
+            await element.click()
             detail_page = await resolve_exact_detail_page(
                 page,
                 platform=platform,
@@ -229,14 +219,6 @@ class DetailOpenCoordinator:
                 )
             except BaseException as error:
                 cleanup_error = error
-            if original_title is not None and not _page_is_closed(page):
-                try:
-                    await page.evaluate(
-                        "value => { document.title = value; }", original_title
-                    )
-                except BaseException as error:
-                    if cleanup_error is None:
-                        cleanup_error = error
             if primary_error is None and cleanup_error is not None:
                 raise cleanup_error
 

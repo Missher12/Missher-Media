@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-PLATFORMS = frozenset({"bilibili", "xhs", "douyin", "weibo"})
+#: Platforms the private run manifest accepts. The manifest schema itself is
+#: unchanged; only the accepted platform names grow.
+PLATFORMS = frozenset({"bilibili", "xhs", "douyin", "weibo", "x"})
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_PRIVATE_BYTES = 50 * 1024 * 1024
 _PNG_BASENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,191}\.png")
@@ -38,7 +40,31 @@ DIAGNOSTIC_CODES = {
             "bsk-click",
             "bsk-tab-return",
             "bsk-session-stop",
-            "xhs-browser-assist-unsupported",
+            "bsk-navigate",
+            "bsk-observe",
+            "bsk-get-html",
+            "bsk-extract",
+            "bsk-stale-reference",
+            "bsk-risk-signal",
+            "bsk-navigation-not-authorized",
+            "browser-assist-replaced",
+            "platform-collector-missing",
+            "topic-collector-unavailable",
+            "topic-unsupported-platform",
+            "topic-container-unsupported",
+            "topic-input-invalid",
+            "topic-kind-mismatch",
+            "target-identity-missing",
+            "target-keyword-missing",
+            "target-topic-missing",
+            "plan-request-invalid",
+            "plan-executor-missing",
+            "plan-manifest-invalid",
+            "exclude-file-plan-unsupported",
+            "xhs-cooldown",
+            "xhs-risk-latched",
+            "xhs-safety-busy",
+            "xhs-safety-state-invalid",
         }
     ),
     "source-response": frozenset({"source-response-failed"}),
@@ -220,7 +246,15 @@ class RunStore:
         **extra: object,
     ) -> Path:
         if extra:
-            raise ValueError("manifest supports only the strict runtime schema")
+            if set(extra) != {"schema_version", "backend", "record_kinds"} or extra["schema_version"] != 3:
+                raise ValueError("manifest supports only the strict runtime schema")
+            if extra["backend"] != "cdp":
+                raise ValueError("manifest backend is invalid")
+            kinds = extra["record_kinds"]
+            if not isinstance(kinds, dict) or set(kinds) - {"posts", "user_profiles", "topic_participants"} or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in kinds.values()
+            ):
+                raise ValueError("manifest record kinds are invalid")
         selected = set(platforms)
         if (
             not selected
@@ -252,7 +286,7 @@ class RunStore:
             raise ValueError("manifest is missing a completed platform artifact")
         for platform in selected:
             _validate_diagnostic(platforms[platform], diagnostics[platform])
-        if status not in {"complete", "failed", "risk-stopped"}:
+        if status not in ({"complete", "failed", "risk-stopped", "partial"} if extra else {"complete", "failed", "risk-stopped"}):
             raise ValueError("manifest has an invalid overall status")
         expected_status = (
             "risk-stopped"
@@ -261,11 +295,14 @@ class RunStore:
             if all(value == "complete" for value in platforms.values())
             else "failed"
         )
+        if extra and expected_status == "failed" and any(counts.values()):
+            expected_status = "partial"
         if status != expected_status:
             raise ValueError("manifest overall status is inconsistent")
         return self._write_json_atomic(
             "manifest.json",
             {
+                **extra,
                 "counts": dict(counts),
                 "paths": dict(paths),
                 "platforms": dict(platforms),
@@ -275,3 +312,17 @@ class RunStore:
                 },
             },
         )
+
+    def commit_snapshot(self) -> Path:
+        """One atomic envelope is the recovery authority for accepted prefixes.
+
+        Legacy JSON files remain readable by existing clients. A crash between
+        their individual replacements cannot invalidate the preceding envelope.
+        """
+        with (self.path / "manifest.json").open(encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        artifacts = {}
+        for key, name in manifest["paths"].items():
+            with (self.path / name).open(encoding="utf-8") as handle:
+                artifacts[key] = json.load(handle)
+        return self._write_json_atomic("committed.json", {"schema": 1, "manifest": manifest, "artifacts": artifacts})

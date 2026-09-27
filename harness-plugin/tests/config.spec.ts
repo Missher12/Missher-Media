@@ -15,8 +15,12 @@ describe('Media plugin configuration', () => {
       platforms: ['bilibili', 'xhs', 'douyin', 'weibo'],
       platformText: 'bilibili,xhs,douyin,weibo',
       count: 10,
+      countMode: 'fixed',
+      backend: 'cdp',
+      targets: [],
       xhsComments: 0,
-      allowNavigation: true,
+      allowNavigation: false,
+      runDeadlineSeconds: 900,
     })
     expect(config).toMatchObject({
       profilePath: '/Users/test/.config/media-missher/profile.json',
@@ -24,7 +28,11 @@ describe('Media plugin configuration', () => {
       outputRoot: '/Users/test/.dsh/media-missher/runs',
       platformTimeoutSeconds: 300,
       executionTimeoutSeconds: 1260,
-      maxCount: 50,
+      // A larger bounded maximum keeps "collect as much as possible" usable
+      // while still refusing an unbounded count.
+      maxCount: 500,
+      defaultBackend: 'cdp',
+      defaultCountMode: 'fixed',
     })
   })
 
@@ -32,12 +40,14 @@ describe('Media plugin configuration', () => {
     ['bilibili,bilibili', 'platforms_duplicate'],
     ['bilibili,unknown', 'platforms_invalid'],
     ['', 'platforms_empty'],
+    ['bilibili,', 'platforms_invalid'],
+    [',weibo', 'platforms_invalid'],
   ])('rejects invalid platform selection %s', (platforms, code) => {
     const config = normalizePluginConfig({}, dshHome, userHome)
     expect(() => normalizeCollectArgs({ platforms }, config)).toThrow(code)
   })
 
-  it.each([0, 51, 1.5, Number.NaN])('rejects invalid count %s', (count) => {
+  it.each([0, 501, 1.5, Number.NaN])('rejects invalid count %s', (count) => {
     const config = normalizePluginConfig({}, dshHome, userHome)
     expect(() => normalizeCollectArgs({ count }, config)).toThrow('count_invalid')
   })
@@ -66,4 +76,20 @@ describe('Media plugin configuration', () => {
   ])('rejects unsafe plugin config %#', (input, code) => {
     expect(() => normalizePluginConfig(input, dshHome, userHome)).toThrow(code)
   })
+  it('rejects wrong platform types with a fixed diagnostic', () => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs({ platforms: 42 as never }, config)).toThrow('platforms_invalid')
+  })
+
+  it('rejects comments requested without Xiaohongshu', () => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs({ platforms: 'weibo', xhs_comments: 1 }, config))
+      .toThrow('xhs_comments_platform_invalid')
+  })
+
+  it.each([null, [], { count: null }, { cookie: 'synthetic' }])('rejects malformed or undeclared arguments %#', (input) => {
+    const config = normalizePluginConfig({}, dshHome, userHome)
+    expect(() => normalizeCollectArgs(input, config)).toThrow('arguments_invalid')
+  })
+
 })

@@ -38,4 +38,7 @@ def test_entrypoints_are_portable_and_dependency_is_exactly_pinned() -> None:
         assert "Path(__file__).resolve()" in text
         assert stat.S_IMODE(path.stat().st_mode) & 0o111
 
-    assert (ROOT / "runtime" / "requirements.lock").read_text(encoding="utf-8").splitlines() == ["playwright==1.45.0"]
+    # Every runtime dependency is pinned to an exact version; a floating or
+    # unpinned requirement would make the installed runtime unreproducible.
+    requirements = (ROOT / "runtime" / "requirements.lock").read_text(encoding="utf-8").splitlines()
+    assert requirements == ["playwright==1.45.0", "openpyxl==3.1.5"]

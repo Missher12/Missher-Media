@@ -1,0 +1,94 @@
+{
+  "synthetic": true,
+  "purpose": "数据格式演示，非真实采集",
+  "records": [
+    {
+      "platform": "xhs",
+      "type": "normal",
+      "native_id": "demo-xhs-001",
+      "title": "周末城市散步路线（示例）",
+      "desc": "这里是虚构的笔记正文。",
+      "author": "示例博主",
+      "date": "2026-09-27T10:00:00+08:00",
+      "link": "https://example.invalid/xhs/001",
+      "liked": 1280,
+      "collected": 356,
+      "comments": 42,
+      "shares": null,
+      "images": [
+        "https://example.invalid/media/demo-image.jpg"
+      ],
+      "tags": [
+        "城市散步"
+      ],
+      "comments_data": [
+        {
+          "author": "示例读者",
+          "text": "演示评论，不是真实采集。",
+          "date": "2026-09-27",
+          "liked": 3
+        }
+      ]
+    },
+    {
+      "platform": "bilibili",
+      "type": "video",
+      "native_id": "demo-bili-001",
+      "title": "桌面整理方法（示例）",
+      "desc": "虚构的视频简介。",
+      "author": "示例 UP 主",
+      "date": "2026-09-27T10:00:00+08:00",
+      "link": "https://example.invalid/bilibili/001",
+      "liked": 820,
+      "collected": 205,
+      "comments": 30,
+      "shares": 16
+    },
+    {
+      "platform": "douyin",
+      "type": "video",
+      "native_id": "demo-douyin-001",
+      "title": "一分钟收纳（示例）",
+      "author": "示例博主",
+      "date": "2026-09-27T10:00:00+08:00",
+      "link": "https://example.invalid/douyin/001",
+      "liked": 560,
+      "collected": 88,
+      "comments": 17,
+      "shares": 9,
+      "plays": 12000,
+      "duration_ms": 60000
+    },
+    {
+      "platform": "weibo",
+      "type": "post",
+      "native_id": "demo-weibo-001",
+      "title": "今天的阅读笔记（示例）",
+      "author": "示例用户",
+      "date": "2026-09-27T10:00:00+08:00",
+      "link": "https://example.invalid/weibo/001",
+      "liked": 130,
+      "collected": null,
+      "comments": 12,
+      "shares": 5,
+      "pics": []
+    },
+    {
+      "platform": "x",
+      "type": "post",
+      "native_id": "demo-x-001",
+      "title": "A local demo post",
+      "text": "This is synthetic sample data, not a collected post.",
+      "author": "demo_author",
+      "date": "2026-09-27T02:00:00Z",
+      "link": "https://example.invalid/x/001",
+      "liked": 95,
+      "comments": 8,
+      "shares": 4,
+      "bookmarks": 7,
+      "quotes": 2,
+      "views": 2000,
+      "relation": "original"
+    }
+  ]
+}

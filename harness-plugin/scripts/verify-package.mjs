@@ -8,9 +8,10 @@ import {
   readdir,
   readFile,
   rm,
+  writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -38,6 +39,12 @@ function allowedFile(path) {
     'package/package.json',
     'package/cordis.patch.yml',
     'package/README.md',
+    'package/DATA_CAPABILITIES.md',
+    'package/QUICKSTART.md',
+    'package/AGENT_INSTALL.md',
+    'package/AGENT.md',
+    'package/LICENSE',
+    'package/THIRD_PARTY_NOTICES.md',
   ].includes(path)
     || /^package\/lib\/.+\.(?:js|d\.ts)$/u.test(path)
     || path === 'package/payload/VERSION'
@@ -71,6 +78,9 @@ export async function verifyPackage(requestedArchive) {
       'package/package.json',
       'package/cordis.patch.yml',
       'package/README.md',
+      'package/AGENT.md',
+      'package/LICENSE',
+      'package/THIRD_PARTY_NOTICES.md',
       'package/lib/index.js',
       'package/payload/VERSION',
       'package/payload/.media-missher-source-tree',
@@ -84,16 +94,23 @@ export async function verifyPackage(requestedArchive) {
     const manifest = JSON.parse(await readFile(join(extractedRoot, 'package.json'), 'utf8'))
     if (
       manifest.name !== 'dsh-media-missher'
-      || manifest.version !== '0.1.0'
+      || manifest.version !== '17.0.0'
       || manifest.private !== true
+      || manifest.author !== 'Missher'
+      || manifest.license !== 'SEE LICENSE IN LICENSE'
       || JSON.stringify(manifest.os) !== '["darwin"]'
       || manifest.dsh?.bundle?.patch !== './cordis.patch.yml'
     ) throw new Error('package_identity_invalid')
+    for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+      const source = await readFile(join(repositoryRoot, name))
+      if (!(await readFile(join(extractedRoot, name))).equals(source)) throw new Error('package_notice_mismatch')
+      if (!(await readFile(join(extractedRoot, 'payload', 'runtime', name))).equals(source)) throw new Error('package_runtime_notice_mismatch')
+    }
     const patch = await readFile(join(extractedRoot, 'cordis.patch.yml'), 'utf8')
     if (!patch.includes('id: media-missher') || !patch.includes('name: dsh-media-missher')) {
       throw new Error('package_patch_invalid')
     }
-    if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '15.2.1\n') {
+    if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '17.0.0\n') {
       throw new Error('package_payload_version_invalid')
     }
     if (
@@ -122,9 +139,53 @@ export async function verifyPackage(requestedArchive) {
   }
 }
 
+/** The retained packaging flow owns this manifest; nothing else may create it. */
+export function checksumPath(requestedArchive) {
+  return join(dirname(resolve(requestedArchive)), 'SHA256SUMS.txt')
+}
+
+async function readChecksumManifest(requestedArchive) {
+  try {
+    return await readFile(checksumPath(requestedArchive), 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Record the digest of the exact bytes that were just verified. */
+export async function writeChecksumFile(requestedArchive, sha256) {
+  const destination = checksumPath(requestedArchive)
+  await writeFile(destination, `${sha256}  ${basename(resolve(requestedArchive))}\n`)
+  return destination
+}
+
+/**
+ * Reject a stale or tampered manifest. Returns null when no manifest exists,
+ * which is the clean build case: `pack:bundle` has not been recorded yet.
+ */
+export async function verifyChecksumFile(requestedArchive, sha256) {
+  const manifest = await readChecksumManifest(requestedArchive)
+  if (manifest === null) return null
+  const expected = `${sha256}  ${basename(resolve(requestedArchive))}`
+  if (!manifest.split(/\r?\n/u).includes(expected)) throw new Error('package_checksum_mismatch')
+  return checksumPath(requestedArchive)
+}
+
 if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const requestedArchive = process.argv.slice(2).find(argument => argument !== '--')
-  if (requestedArchive === undefined) throw new Error('usage: verify-package.mjs <archive.tgz>')
+  const args = process.argv.slice(2).filter(argument => argument !== '--')
+  const writeChecksum = args.includes('--write-checksum')
+  const requestedArchive = args.find(argument => !argument.startsWith('--'))
+  if (requestedArchive === undefined) {
+    throw new Error('usage: verify-package.mjs [--write-checksum] <archive.tgz>')
+  }
   const result = await verifyPackage(requestedArchive)
-  process.stdout.write(`${JSON.stringify(result)}\n`)
+  let checksum = null
+  if (writeChecksum) {
+    checksum = await writeChecksumFile(result.archive, result.sha256)
+    await verifyChecksumFile(result.archive, result.sha256)
+  } else {
+    checksum = await verifyChecksumFile(result.archive, result.sha256)
+  }
+  process.stdout.write(`${JSON.stringify({ ...result, checksum })}\n`)
 }

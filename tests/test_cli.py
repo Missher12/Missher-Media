@@ -183,15 +183,21 @@ def test_adapter_request_retains_bilibili_browser_assist():
 
 
 @pytest.mark.parametrize("platforms", (("xhs",), ("bilibili", "xhs")))
-def test_adapter_request_rejects_xhs_browser_assist(platforms):
-    with pytest.raises(ConfigurationError, match="xhs-browser-assist-unsupported"):
-        CollectionRequest(
-            platforms=platforms,
-            count=1,
-            platform_uids={platform: "creator" for platform in platforms},
-            browser_assist="browserskill",
-            allow_navigation=True,
-        )
+def test_adapter_request_retains_the_deprecated_bridge_shape(platforms, monkeypatch):
+    """The legacy bridge stays a well-defined request shape in the adapter.
+
+    Existing bridge coverage keeps its meaning; the collection CLI is what
+    refuses a new run with ``browser-assist-replaced``.
+    """
+
+    request = CollectionRequest(
+        platforms=platforms,
+        count=1,
+        platform_uids={platform: "creator" for platform in platforms},
+        browser_assist="browserskill",
+        allow_navigation=True,
+    )
+    assert request.browser_assist == "browserskill"
 
 
 @pytest.mark.parametrize(
@@ -309,12 +315,12 @@ def test_collection_cli_exposes_compatibility_options():
         "--complete",
         "--xhs-comments",
         "--allow-navigation",
-        "--browser-assist",
         "--screenshot-mode",
         "--no-feishu",
         "--json-summary",
     ):
         assert option in completed.stdout
+    assert "--browser-assist" not in completed.stdout
     assert "--engine-root" not in completed.stdout
 
 
@@ -429,6 +435,37 @@ def test_creator_cli_uid_overrides_private_profile(tmp_path, monkeypatch):
     assert captured["request"].platform_uids == {"bilibili": "cli-value"}
 
 
+@pytest.mark.parametrize("active,expected", [(None, ("xhs", "weibo")), (["xhs"], ("xhs",))])
+def test_creator_cli_uses_configured_or_active_subset(tmp_path, monkeypatch, active, expected):
+    profile = tmp_path / "profile.json"
+    value = {"platform_uids": {"xhs": "xhs-fixture", "weibo": "weibo-fixture"}}
+    if active is not None:
+        value["active_platforms"] = active
+    profile.write_text(json.dumps(value), encoding="utf-8")
+    profile.chmod(0o600)
+    captured = {}
+
+    def capture(request, **_kwargs):
+        captured["request"] = request
+        return _successful_summary()
+
+    monkeypatch.setattr(run_collection, "run_collection_request", capture)
+    assert run_collection.main(["--profile", str(profile)]) == 0
+    assert captured["request"].platforms == expected
+
+
+@pytest.mark.parametrize("active", [[], ["unknown"], ["xhs", "xhs"], "xhs", [None]])
+def test_creator_cli_rejects_invalid_active_selection_before_output(tmp_path, monkeypatch, active, capsys):
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"platform_uids": {platform: "fixture" for platform in run_collection.PLATFORMS}, "active_platforms": active}), encoding="utf-8")
+    profile.chmod(0o600)
+    output = tmp_path / "runs"
+    monkeypatch.setattr(run_collection, "run_collection_request", lambda *a, **kw: pytest.fail("collection must not start"))
+    assert run_collection.main(["--profile", str(profile), "--data-root", str(output), "--json-summary"]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "preflight-failed"
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     ("navigation_flag", "expected"),
     (([], False), (["--allow-navigation"], True)),
@@ -456,7 +493,24 @@ def test_collection_cli_requires_explicit_navigation_authorization(
     assert captured["request"].allow_navigation is expected
 
 
-def test_collection_cli_carries_assist_modes(monkeypatch):
+def test_collection_cli_refuses_the_retired_browser_assist_bridge():
+    """The retired bridge is refused by name, with no reinterpreted flag."""
+
+    result = run_collection.main(
+        [
+            "--platform",
+            "bilibili",
+            "--bilibili-uid",
+            "creator",
+            "--browser-assist",
+            "browserskill",
+            "--allow-navigation",
+        ]
+    )
+    assert result == 1
+
+
+def test_collection_cli_never_drops_computer_use_into_legacy_cdp(monkeypatch, capsys):
     captured = {}
 
     def capture(request, **_kwargs):
@@ -471,12 +525,30 @@ def test_collection_cli_carries_assist_modes(monkeypatch):
             "bilibili",
             "--bilibili-uid",
             "creator",
-            "--browser-assist",
-            "browserskill",
+            "--backend",
+            "computer_use",
+            "--count-mode",
+            "best_effort",
+            "--run-deadline",
+            "1800",
             "--screenshot-mode",
             "opened",
             "--allow-navigation",
         ]
-    ) == 0
-    assert captured["request"].browser_assist == "browserskill"
-    assert captured["request"].screenshot_mode == "opened"
+    ) == 1
+    assert captured == {}
+    assert "backend-retired-computer-use" in capsys.readouterr().out
+
+
+def test_collection_cli_forwards_nondefault_envelope_to_plan(monkeypatch):
+    captured = {}
+    def capture(args, **kwargs):
+        captured.update(args=vars(args), **kwargs)
+        return 0
+    monkeypatch.setattr(run_collection, '_forward_plan', capture)
+    monkeypatch.setattr(run_collection, 'run_collection_request', lambda *_a, **_k: pytest.fail('legacy fixed-count path'))
+    assert run_collection.main(['--platform','weibo','--weibo-uid','123','--backend','cdp','--count-mode','best_effort','--run-deadline','1800']) == 0
+    assert captured['backend'] == 'cdp'
+    assert captured['args']['count_mode'] == 'best_effort'
+    assert captured['args']['run_deadline'] == 1800
+    assert captured['args']['weibo_uid'] == '123'

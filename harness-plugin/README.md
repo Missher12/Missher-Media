@@ -1,43 +1,42 @@
-# dsh-media-missher
+# dsh-media-missher 17.0.0
 
-`dsh-media-missher` 是 Media@Missher V15.2.1 的私有 macOS DeepSeek Harness Bundle。它向 Agent 注册一个工具：`media_missher_collect`。
+Media@Missher 的私有 macOS DeepSeek Harness Bundle，内置运行时 17.0.0，仅 Chrome CDP。源码、CLI、Bundle 本次统一版本。© 2026 Missher，原创软件采用专有许可，不公开发布 npm。
 
-## 用户安装
+可采集字段见随包 [DATA_CAPABILITIES.md](DATA_CAPABILITIES.md)，通用 Agent 流程见 [QUICKSTART.md](QUICKSTART.md)。
 
-推荐把根目录 README 的一键命令交给 Harness Agent：它会用已登录的 `gh` 从私有 `v15.2.1` Release 下载 `Install-Media-Missher-from-GitHub.command`，校验自包含 Setup ZIP 后安装。已经下载完整仓库时，也可以直接双击根目录的 `Install Media@Missher Harness Plugin.command`。内层安装器使用 DeepSeek Harness.app 自带运行时，无需另装 Node.js 或 pnpm。
+| 工具 | 用途 |
+| --- | --- |
+| `media_missher_setup` | 名单模板、导入预览与选择；明确请求的浏览器打开和连接检查 |
+| `media_missher_collect` | 按顺序采集、保存私有证据，仅 cdp |
+| `media_missher_runs` | 本地历史、进度、比较和选择导出 |
 
-默认无参数调用会顺序抓取 `bilibili,xhs,douyin,weibo`，每个平台 10 条，并在本次私有运行目录中创建 Excel 工作簿。工作簿包含汇总表、全平台合并表和四个平台独立表。控制器以 `validation.diagnostics` 声明精确 manifest；即使一个平台出现非风险失败，Bundle 仍会验证并投影其余平台记录，在汇总表保留短缺诊断。
+默认每目标 10 条，同平台可有多个目标。采集不自动创建 Excel，workbookPath 可以为空。小红书每批最多 10 条/3 页，两批开始间隔至少 600 秒，风险暂停持久保存。不自动重试、续采或切换账号。
 
-## Bundle 结构
+## 安装
 
-- `cordis.patch.yml`：Harness profile 的 Cordis 配置片段
-- `lib/index.js`：Agent 工具与运行时适配器
-- `payload/`：严格白名单暂存的 Media@Missher 15.2.1 运行时
-- `scripts/install-current-profile.mjs`：验包、备份、安装和有效配置确认
-- `scripts/native-smoke.mjs`：隔离原生安装生命周期验证
-- `scripts/build-setup.mjs`：按固定白名单生成可复现的私有 Setup ZIP
-- `scripts/verify-setup.mjs`：校验 ZIP 路径、文件集合、来源字节与内层 Bundle
+完整交付包保留 `harness-plugin/scripts/` 布局，含安装器和验包器。在完整包根目录运行：
 
-Bundle 只允许 macOS。工具参数中不接受任何 UID 或凭据；这些值只从 mode-`0600` 的私有 `profile.json` 读取。模型侧结果仅包含固定状态、计数和本地证据路径。
+```sh
+node harness-plugin/scripts/verify-package.mjs harness-plugin/dist/dsh-media-missher-17.0.0.tgz
+node harness-plugin/scripts/install-current-profile.mjs --help
+```
 
-## 开发命令
+核对实际已安装的 macOS Harness、profile 和支持的命令参数后，按 `AGENT.md` 继续。安装器识别已有 Harness 布局，新布局需要已安装的 pnpm，不下载另一套宿主。单独取得 tgz 时，使用本版仓库或完整包附带的安装器。
 
-```bash
+安装后分别检查工具注册、离线调用和经授权的采集；配置成功不代表原生调用或登录就绪。空设备先导入、预览和选择目标，再按用户要求打开专用 Chrome 并手动登录。
+
+## 兼容与验证
+
+独立 0.6.1 分支的 ctx.subprocess、环境过滤、取消及卸载生命周期修复尚未自动合入。本包不宣称兼容所有 Harness 版本，实际结果见完整包 `VALIDATION.json`。
+
+## 开发
+
+```sh
 pnpm install --frozen-lockfile
 pnpm test
 pnpm exec tsc --noEmit
-pnpm run build
 pnpm run pack:bundle
-pnpm run verify:package -- dist/dsh-media-missher-0.1.0.tgz
-pnpm run pack:setup
-pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-v15.2.1.zip
-pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
+pnpm run verify:package -- --write-checksum dist/dsh-media-missher-17.0.0.tgz
 ```
 
-打包会先重建 TypeScript 入口，再从仓库中的精确白名单暂存 V15.2.1 payload。验包器拒绝绝对路径泄露、符号链接、私有 profile、Cookie、凭据、截图、日志、运行目录和非白名单文件。
-
-## 手动 CLI 回退
-
-普通用户不需要此步骤。维护者可以用 Harness CLI 的 `plugin --profile web add <archive>` 与 `remove dsh-media-missher` 做诊断；必须设置 `DSH_DESKTOP_PNPM_ENTRY` 指向 Harness.app 内置 pnpm。一键安装器会把验过的归档固定到 `~/.dsh/artifacts/media-missher/` 的 SHA 命名文件，避免同版本缓存和仓库移动影响，安装前的 profile 备份位于 `~/.dsh/backups/media-missher-plugin-*/package.json`。
-
-本包为 `UNLICENSED` 私有 Bundle，只能发布到已获授权的同仓库私有 Release，不得公开发布到 npm 或公共 Release。
+全项目交付由根目录 `tools/build_distribution.mjs` 构建。smoke:native 使用隔离 DSH_HOME 做安装、合成调用及卸载；smoke:browser 使用临时 Chrome 和本地页。二者均不等于真实平台采集。

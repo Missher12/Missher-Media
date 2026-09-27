@@ -1,4 +1,4 @@
 interface:
-  display_name: "Media@Missher V15.2.1"
-  short_description: "Safely collect and verify four-platform media data"
-  default_prompt: "Use $media-missher to collect and validate 10 recent posts from the configured creator."
+  display_name: "Media@Missher V17.0.0"
+  short_description: "Collect, validate, and export private media records"
+  default_prompt: "Use $media-missher for my selected targets and return verified private results, exporting only the records and fields I request."

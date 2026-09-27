@@ -22,11 +22,11 @@ def test_collection_request_accepts_safe_assist_and_screenshot_modes() -> None:
         platform="bilibili",
         count=1,
         uid="creator",
-        browser_assist="browserskill",
+        browser_assist="off",
         screenshot_mode="opened",
     )
 
-    assert request.browser_assist == "browserskill"
+    assert request.browser_assist == "off"
     assert request.screenshot_mode == "opened"
 
 
@@ -44,7 +44,7 @@ def test_collection_request_accepts_xhs_screenshot_with_assist_off() -> None:
     assert request.screenshot_mode == "opened"
 
 
-def test_opened_screenshot_mode_keeps_unbounded_count_available() -> None:
+def test_opened_screenshot_mode_keeps_xhs_count_zero_within_batch_budget() -> None:
     from runtime.media_missher_runtime.models import CollectionRequest
 
     request = CollectionRequest(
@@ -54,7 +54,7 @@ def test_opened_screenshot_mode_keeps_unbounded_count_available() -> None:
         screenshot_mode="opened",
     )
 
-    assert request.target_count is None
+    assert request.target_count == 10
 
 
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ def test_collection_request_rejects_unbounded_or_unsupported_advanced_modes(
 ) -> None:
     from runtime.media_missher_runtime.models import CollectionRequest
 
-    with pytest.raises(ValueError, match="not supported|positive"):
+    with pytest.raises(ValueError, match="not supported|positive|backend-retired-browserskill"):
         CollectionRequest(**values)  # type: ignore[arg-type]
 
 
@@ -90,7 +90,7 @@ def test_collection_request_rejects_unknown_modes(field: str, value: str) -> Non
 def test_collection_request_accepts_only_supported_platforms(platform: str) -> None:
     from runtime.media_missher_runtime.models import CollectionRequest
 
-    assert CollectionRequest(platform=platform, count=0, keyword="term").target_count is None
+    assert CollectionRequest(platform=platform, count=0, keyword="term").target_count == (10 if platform == "xhs" else None)
 
 
 @pytest.mark.parametrize(

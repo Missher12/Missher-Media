@@ -1,1 +1,1 @@
-fc8ab1412d2ae3484dbe24c28c36390137da6b411c815d5b3562e8f819e4fa65  dsh-media-missher-0.1.0.tgz
+7d64d547c0ec4e6484a2511dac87019ee3b6c06e61c267f428ed8c2b864a3a17  dsh-media-missher-0.6.0.tgz

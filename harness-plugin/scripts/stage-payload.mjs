@@ -58,7 +58,16 @@ for (const name of ['install_media_missher.py', 'scan_active_residuals.py']) {
   await copyTree(resolve(repositoryRoot, 'tools', name), resolve(output, 'tools', name))
 }
 
-if (await readFile(resolve(output, 'VERSION'), 'utf8') !== '15.2.1\n') {
+// Canonical notices travel with both the Bundle and the separately installed core.
+for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  await copyTree(resolve(repositoryRoot, name), resolve(pluginRoot, name))
+  await copyTree(resolve(repositoryRoot, name), resolve(output, 'runtime', name))
+}
+for (const name of ['DATA_CAPABILITIES.md', 'QUICKSTART.md', 'AGENT_INSTALL.md']) {
+  await copyFile(resolve(repositoryRoot, name), resolve(pluginRoot, name))
+}
+
+if (await readFile(resolve(output, 'VERSION'), 'utf8') !== '17.0.0\n') {
   await rm(output, { recursive: true, force: true })
   throw new Error('payload_version_mismatch')
 }

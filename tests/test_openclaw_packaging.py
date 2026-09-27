@@ -41,8 +41,16 @@ def test_openclaw_skill_retains_the_bounded_xhs_action_contract() -> None:
     assert "at most one Xiaohongshu detail open" in text
     assert "at most three comment-container scrolls" in text
     assert "Do not retry a `risk-stopped` result" in text
-    assert "Xiaohongshu uses Playwright/CDP only" in text
-    assert "xhs-browser-assist-unsupported" in text
+    # Chrome CDP is the only active backend; old requests are refused.
+    assert "--backend cdp" in text
+    assert "Chrome CDP is the only active backend" in text
+    assert "backend-retired-browserskill" in text
+    assert "backend-retired-computer-use" in text
+    assert "browser-assist-replaced" in text
+    assert "rejected before navigation with `xhs-browser-assist-unsupported`" not in text
+    assert "Xiaohongshu uses Playwright/CDP only" not in text
+    # Only cdp can observe a response body, so the XHS detail contract needs it.
+    assert "Rendered-page observations never imply response bodies" in text
 
 
 def test_openclaw_package_has_no_platform_code_assets_or_personal_paths() -> None:

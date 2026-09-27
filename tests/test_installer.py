@@ -74,6 +74,11 @@ def test_install_stages_runtime_and_both_compact_skills_with_private_state(tmp_p
     assert result.codex_current.joinpath("SKILL.md").is_file()
     assert result.openclaw_current.joinpath("SKILL.md").is_file()
     assert result.openclaw_current.joinpath("scripts", "run_collection.py").is_file()
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        expected = PROJECT_ROOT.joinpath(name).read_bytes()
+        assert result.current.joinpath(name).read_bytes() == expected
+        for package in (result.codex_current, result.openclaw_current):
+            assert package.joinpath("references", name).read_bytes() == expected
     assert stat.S_IMODE(result.state.stat().st_mode) == 0o700
     assert not list(tmp_path.rglob("*.staging-*"))
 
@@ -97,9 +102,9 @@ def test_install_records_v15_product_version_and_one_unique_release(tmp_path: Pa
     assert len(release_ids) == 1
     release = next(iter(release_ids))
     assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", release)
-    assert result.version == "15.2.1"
+    assert result.version == "17.0.0"
     assert result.release == release
-    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "15.2.1\n"
+    assert result.current.joinpath("VERSION").read_text(encoding="ascii") == "17.0.0\n"
     assert all(stat.S_IMODE(component.joinpath(marker_name).stat().st_mode) == 0o600 for component in components)
 
 
@@ -386,8 +391,8 @@ def test_install_reuses_existing_venv_without_recreating_it(tmp_path: Path) -> N
     assert not any(command[1:3] == ("-m", "venv") for command, _ in executor.calls)
 
 
-@pytest.mark.parametrize("old_version", ("3.9", "3.10"))
-def test_upgrade_rebuilds_only_the_staged_venv_when_existing_python_is_too_old(
+@pytest.mark.parametrize("old_version", ("3.9", "3.10", "3.13", "3.14"))
+def test_upgrade_rebuilds_only_the_staged_venv_when_existing_python_is_unsupported(
     tmp_path: Path,
     old_version: str,
 ) -> None:
@@ -623,7 +628,7 @@ def test_installer_cli_reports_media_missher_v15_product_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "Media@Missher 15.2.1"
+    assert completed.stdout.strip() == "Media@Missher 17.0.0"
 
 
 def test_installer_excludes_private_browser_runtime_and_screenshot_artifacts(
@@ -720,7 +725,7 @@ def test_system_python_bootstrap_discovers_a_python311_runtime() -> None:
     if local_python.is_file():
         assert selected == local_python
     version = subprocess.run(
-        [str(selected), "-c", "import sys; print(sys.version_info[:2] >= (3, 11))"],
+        [str(selected), "-c", "import sys; print(sys.version_info[:2] in {(3, 11), (3, 12)})"],
         check=False,
         capture_output=True,
         text=True,
@@ -766,6 +771,58 @@ def test_system_python_driven_install_uses_the_discovered_python311(tmp_path: Pa
 
     assert completed.returncode == 0, completed.stderr
     assert Path(completed.stdout.strip()) == local_python
+
+
+def test_python314_bootstrap_selects_available_compatible_python(tmp_path, monkeypatch):
+    from tools import install_media_missher as installer
+    bootstrap, compatible = tmp_path / "python314", tmp_path / "python312"
+    monkeypatch.setattr(installer.sys, "executable", str(bootstrap))
+    monkeypatch.setattr(installer.shutil, "which", lambda name: str(compatible) if name == "python3.12" else None)
+    monkeypatch.setattr(installer, "_runtime_python_version", lambda path: {bootstrap: (3, 14), compatible: (3, 12)}.get(path))
+    assert installer.select_runtime_python(None) == compatible
+
+
+def test_explicit_unsupported_new_python_stops_before_install(tmp_path, monkeypatch):
+    from tools import install_media_missher as installer
+    monkeypatch.setattr(installer, "_runtime_python_version", lambda _path: (3, 14))
+    with pytest.raises(ValueError, match="3.11 or 3.12"):
+        installer.select_runtime_python(tmp_path / "python314")
+
+
+def test_upgrade_can_reuse_the_only_existing_compatible_python(tmp_path, monkeypatch):
+    from tools import install_media_missher as installer
+
+    first = _install(tmp_path)
+    interpreter_bytes = (first.venv / "bin" / "python").read_bytes()
+    bootstrap = tmp_path / "python314"
+    real_probe = installer._runtime_python_version
+    monkeypatch.setattr(installer.sys, "executable", str(bootstrap))
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(installer, "_runtime_python_version", lambda path: (3, 14) if path == bootstrap else real_probe(path))
+    executor = FakeExecutor()
+
+    upgraded = _install(tmp_path, executor=executor)
+
+    assert (upgraded.venv / "bin" / "python").read_bytes() == interpreter_bytes
+    assert not any(command[1:3] == ("-m", "venv") for command, _ in executor.calls)
+
+
+@pytest.mark.parametrize("invalid", ("owner-marker", "writable-venv", "linked-bin"))
+def test_existing_python_fallback_rejects_an_unsafe_installation(tmp_path, invalid):
+    from tools import install_media_missher as installer
+
+    first = _install(tmp_path)
+    home = first.current.parent
+    if invalid == "owner-marker":
+        (home / ".media-missher-owner.json").write_text("{}\n")
+    elif invalid == "writable-venv":
+        first.venv.chmod(0o777)
+    else:
+        original = first.venv / "bin"
+        original.rename(first.venv / "relocated-bin")
+        original.symlink_to(first.venv / "relocated-bin", target_is_directory=True)
+
+    assert installer._existing_runtime_python(home) is None
 
 
 def test_explicit_old_python_fails_before_creating_the_runtime_home(tmp_path: Path) -> None:

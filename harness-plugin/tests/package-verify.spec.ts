@@ -1,15 +1,17 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { verifyPackage } from '../scripts/verify-package.mjs'
 
 const execute = promisify(execFile)
+const pluginRoot = resolve(import.meta.dirname, '..')
+const verifyScript = resolve(pluginRoot, 'scripts', 'verify-package.mjs')
 const temporaryRoots: string[] = []
 
-async function fakeArchive(extraFile?: string): Promise<string> {
+async function fakeArchive(extraFile?: string, changedNotice = false): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'media-package-test-'))
   temporaryRoots.push(root)
   const packageRoot = join(root, 'package')
@@ -17,21 +19,31 @@ async function fakeArchive(extraFile?: string): Promise<string> {
   await mkdir(join(packageRoot, 'payload'), { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     name: 'dsh-media-missher',
-    version: '0.1.0',
+    version: '17.0.0',
     private: true,
+    author: 'Missher',
+    license: 'SEE LICENSE IN LICENSE',
     os: ['darwin'],
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }))
+  await mkdir(join(packageRoot, 'payload/runtime'), { recursive: true })
+  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+    const bytes = await readFile(resolve(import.meta.dirname, '../..', name))
+    await writeFile(join(packageRoot, name), bytes)
+    await writeFile(join(packageRoot, 'payload/runtime', name), bytes)
+  }
   await writeFile(join(packageRoot, 'cordis.patch.yml'), '- insert:\n    - id: media-missher\n      name: dsh-media-missher\n')
   await writeFile(join(packageRoot, 'README.md'), '# private\n')
+  await writeFile(join(packageRoot, 'AGENT.md'), '# private onboarding\n')
   await writeFile(join(packageRoot, 'lib', 'index.js'), 'export const name = "media-missher"\n')
-  await writeFile(join(packageRoot, 'payload', 'VERSION'), '15.2.1\n')
+  await writeFile(join(packageRoot, 'payload', 'VERSION'), '17.0.0\n')
   await writeFile(
     join(packageRoot, 'payload', '.media-missher-source-tree'),
     'media-missher-source-v1\n',
   )
   if (extraFile !== undefined) await writeFile(join(packageRoot, extraFile), 'forbidden\n')
-  const archive = join(root, 'dsh-media-missher-0.1.0.tgz')
+  if (changedNotice) await writeFile(join(packageRoot, 'LICENSE'), 'changed owner or permission\n')
+  const archive = join(root, 'dsh-media-missher-17.0.0.tgz')
   await execute('/usr/bin/tar', ['-czf', archive, '-C', root, 'package'])
   return archive
 }
@@ -51,6 +63,31 @@ describe('canonical package verification', () => {
   it('rejects a file outside the package allowlist', async () => {
     await expect(verifyPackage(await fakeArchive('profile.json'))).rejects.toThrow(
       'package_file_unexpected',
+    )
+  })
+
+  it('rejects a changed or replaced ownership notice', async () => {
+    await expect(verifyPackage(await fakeArchive(undefined, true))).rejects.toThrow('package_notice_mismatch')
+  })
+
+  it('generates and re-validates its own checksum manifest beside the archive', async () => {
+    const archive = await fakeArchive()
+    const manifest = join(resolve(archive, '..'), 'SHA256SUMS.txt')
+
+    const generated = JSON.parse((await execute(process.execPath, [
+      verifyScript, '--write-checksum', archive,
+    ])).stdout)
+    expect(generated.checksum).toBe(manifest)
+    expect(await readFile(manifest, 'utf8')).toBe(
+      `${generated.sha256}  ${basename(archive)}\n`,
+    )
+
+    const validated = JSON.parse((await execute(process.execPath, [verifyScript, archive])).stdout)
+    expect(validated.checksum).toBe(manifest)
+
+    await writeFile(manifest, `${'0'.repeat(64)}  ${basename(archive)}\n`)
+    await expect(execute(process.execPath, [verifyScript, archive])).rejects.toThrow(
+      'package_checksum_mismatch',
     )
   })
 })

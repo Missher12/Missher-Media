@@ -1,80 +1,56 @@
-# Media@Missher
+# Media@Missher 17.0.0
 
-Media@Missher 是 Missher 私用的四平台内容采集工具。当前产品版本是 **15.2.1**，Agent Bundle 版本是 **0.1.0**。它把已经验证过的 Bilibili、小红书、抖音和微博运行时封装成了原生 DeepSeek Harness Bundle：安装后，Agent 可以直接发起抓取，默认一次顺序抓取四个平台各 10 条，并返回可检查的 Excel 表格。
+为 Agent 提供媒体采集、私有证据保存和选择导出。**仅使用 Chrome CDP**，支持 Bilibili、小红书、抖音、微博和 X。通用 CLI、共享 Skill、DSH Bundle 共用同一采集核心。
 
-## 从私有 GitHub 一键安装到 DeepSeek Harness
+运行时、Agent CLI 和 DSH Bundle 统一为 **17.0.0**。源码和分发保持私有；© 2026 Missher，原创软件采用[专有许可](LICENSE)，第三方依赖遵循[各自许可](THIRD_PARTY_NOTICES.md)。
 
-适用环境：macOS，已安装 `/Applications/DeepSeek Harness.app` 和 GitHub CLI（`gh`），`gh` 已登录并能读取私有仓库 `Missher12/media-missher`，且 Media@Missher 的私有浏览器 profile 已配置完成。命令不接收、显示或保存 GitHub token。
+## 从这里开始
 
-把下面整行交给 DeepSeek Harness Agent 执行，或粘贴到终端：
+| 目的 | 入口 |
+| --- | --- |
+| 看能抓什么、字段有哪些条件限制 | [数据能力与字段说明](DATA_CAPABILITIES.md) |
+| 安装、导入博主、准备 Chrome、采集和导出 | [中文快速开始](QUICKSTART.md) |
+| 让 Codex、Hermes 等 Agent 接入 | [Agent 安装指南](AGENT_INSTALL.md) |
+| 给 DeepSeek Harness 接入 | [DSH Bundle 说明](harness-plugin/README.md)、[Agent 操作说明](harness-plugin/AGENT.md) |
+| 看结果形态 | [JSON 示例](examples/posts.sample.json)、[CSV 示例](examples/posts.sample.csv)；全部为虚构数据 |
+| 查看本版交付及验证边界 | [17.0.0 交付记录](docs/releases/v17.0.0.md) |
+| 继续维护 | [项目摘要](PROJECT_CONTEXT.md)、[交接记录](HANDOVER.md) |
 
-```bash
-MEDIA_BOOTSTRAP_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/media-missher-github.XXXXXX")" && gh release download v15.2.1 --repo Missher12/media-missher --pattern 'Install-Media-Missher-from-GitHub.command' --dir "$MEDIA_BOOTSTRAP_DIR" && /bin/chmod 700 "$MEDIA_BOOTSTRAP_DIR/Install-Media-Missher-from-GitHub.command" && /usr/bin/open "$MEDIA_BOOTSTRAP_DIR/Install-Media-Missher-from-GitHub.command"
+## 能力概览
+
+作品字段包括标题/正文、作者、时间、原文链接、平台原生 ID 和可取得的互动数；各平台另有图片、视频链接或其他字段。小红书可按需请求评论明细和截图。微博普通话题分开保存帖子、观察到的发帖者关系与公开主页资料。详情见字段说明，不把缺失值写成零。
+
+支持显式多目标，按顺序执行并精确绑定目标。先保存私有结果和运行清单；随后选择目标、记录类别、字段和格式，离线导出 Excel、CSV、JSON、JSONL 或 SQLite。
+
+保持单一浏览器所有者；遇到风险、挑战、登录墙或身份歧义立即停止。小红书每批最多 10 条/3 页、两批开始间隔至少 600 秒。Computer Use 与 BrowserSkill 已退役，旧请求明确拒绝，历史结果仍可读取和导出。
+
+## 交付文件
+
+产物位于 [`dist/v17.0.0/`](dist/v17.0.0/)，统一校验文件为 `SHA256SUMS.txt`：
+
+- `Media-Missher-v17.0.0.zip`：完整交付包，含安装入口、DSH Bundle、源码、字段文档、示例和验证记录。
+- `Media-Missher-Agent-Setup-v17.0.0.zip`：通用 Agent 安装包。
+- `missher-media-missher-17.0.0.tgz`：通用 CLI 包。
+- `dsh-media-missher-17.0.0.tgz`：macOS DSH Bundle。
+- `Media-Missher-Source-v17.0.0.zip`：源码与测试，解压后可重新构建。
+
+首次安装依赖需要可用的包源；本包不是全部依赖离线镜像。打包和上传 Git 不会修改本机已安装的 Skill、运行时或 Harness profile。
+
+## 环境与验证
+
+通用 CLI 要求 Node.js >=22.19、npm；采集运行时支持 Python 3.11/3.12。macOS/Linux 使用同一包，Windows 通过 WSL2/WSLg。浏览器、Agent 命令和私有文件须处于匹配环境。DSH Bundle 当前限定 macOS。模型和推理级别沿用宿主设置，本项目不包含模型 API 客户端。
+
+准确验证结果见交付包 `VALIDATION.json`。离线测试、本地 Chrome CDP、隔离安装、真实宿主注册及真实平台采集分别记录。本次交付没有执行真实平台采集；合成数据和安装成功不代表实采验收。历史 DSH 0.6.1 兼容分支仍保留，未自动合入本版。
+
+## 开发和打包
+
+```sh
+pnpm --dir harness-plugin install --frozen-lockfile
+npm install --prefix agent-plugin --ignore-scripts --no-audit --no-fund --no-package-lock
+node tools/build_distribution.mjs
+node tools/verify_distribution.mjs dist/v17.0.0
 ```
 
-这条命令从私有 GitHub Release 拉取一个很小的引导器，并在独立的 Terminal 进程中继续安装，所以 Harness 可以正常退出和重启。引导器再下载完整 Setup ZIP 与独立 SHA-256 文件，校验后才启动内层安装器。安装完成后点击弹窗里的“重启 Harness”；安装器只请求 Harness 正常退出，不会强制结束进程。
+完整测试命令位于 `.github/workflows/ci.yml`。`runtime/` 为 Python 核心，`media-missher/` 为共享 Skill 与入口，`agent-plugin/` 为通用 CLI，`harness-plugin/` 为 DSH 适配。交付排除浏览器目录、凭据、真实采集结果、依赖缓存和本机证据目录。
 
-如果已经下载或克隆完整仓库，也可以直接双击根目录的 **`Install Media@Missher Harness Plugin.command`**，不经过 GitHub Release。
-
-安装器直接使用 Harness.app 自带的 Electron、CLI 和 pnpm，不要求用户安装 Node.js、pnpm，也不要求打开终端。它会先校验内置 Bundle，把精确字节复制到按 SHA 命名的私有 `~/.dsh/artifacts/media-missher/` 路径，再备份当前 `web` profile 的 `package.json`；最后同时确认已安装入口字节和有效 Cordis 配置，仓库之后移动或删除也不会破坏依赖来源。
-
-如果 macOS 第一次拦截未签名的私有脚本，请在 Finder 中右键该文件并选择“打开”。这不是公开签名发行版；不要关闭系统安全机制。
-
-## 怎么用
-
-在 Harness 对 Agent 说：
-
-> 用 Media@Missher 抓一下，给我表格。
-
-Agent 不传参数时会调用 `media_missher_collect`，等价于：
-
-- 平台：Bilibili、小红书、抖音、微博
-- 数量：每个平台 10 条，共最多 40 条
-- 执行：逐平台顺序运行，不并发占用浏览器
-- 输出：一个 `.xlsx` 工作簿
-- 工作表：`Summary`、`All Platforms` 和四个平台独立表
-- 小红书评论：默认不额外抓取
-- 页面导航：本次明确调用即授权在既有 Media 浏览器中进行精确目标导航
-
-如果某个平台出现非风险短缺或超时，工具仍会把其余已验证记录写入同样的六表工作簿，并在 `Summary` 中明确标出该平台的请求数、实得数和固定诊断码，不会把已抓到的数据隐藏成 0 条。
-
-也可以明确指定平台和数量，例如“只抓 B 站和抖音，各 5 条”。Agent 结果只返回状态、数量和本地文件路径；原始记录只保存在私有运行目录和工作簿中。
-
-## 数据和安全边界
-
-- 只连接已经存在且已登录的 Media Chrome/CDP 浏览器，不新开或重配浏览器。
-- UID、Cookie、凭据、页面正文和原始记录不会进入 Harness 工具参数或结果正文。
-- 运行目录权限为 `0700`，工作簿和 profile 权限为 `0600`。
-- 平台风险、挑战页、HTTP 403/429、上下文歧义会立即安全停止；不会盲目重试。
-- 不启用飞书、不生成公开上传、不包含运行数据、截图、Cookie 或凭据。
-
-## 安装包与开发验证
-
-唯一可安装 Bundle 和自包含安装包是：
-
-```text
-harness-plugin/dist/dsh-media-missher-0.1.0.tgz
-harness-plugin/dist/Media-Missher-Harness-Setup-v15.2.1.zip
-```
-
-开发者在 `harness-plugin/` 下可运行：
-
-```bash
-pnpm install --frozen-lockfile
-pnpm test
-pnpm exec tsc --noEmit
-pnpm run build
-pnpm run pack:bundle
-pnpm run verify:package -- dist/dsh-media-missher-0.1.0.tgz
-pnpm run pack:setup
-pnpm run verify:setup -- dist/Media-Missher-Harness-Setup-v15.2.1.zip
-pnpm run smoke:native -- --archive dist/dsh-media-missher-0.1.0.tgz
-```
-
-`smoke:native` 使用临时 `DSH_HOME` 验证真实 Harness CLI 安装、默认工具执行、六表工作簿复开、卸载以及相邻状态保留，不修改正式 profile。
-
-运行时架构、故障边界和历史验收记录见 [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)，Harness Bundle 的设计与实现计划见 `docs/superpowers/`。
-
-## 私有分发边界
-
-本仓库仅供 Missher 私用和备份。`v15.2.1` 安装资产只放在同一个私有 GitHub Release 中，用于已获授权的 Harness 拉取安装。仓库没有选定可公开分发的整体许可证；在完成来源与许可证复核之前，请保持仓库、Release 和 Bundle 私有，不发布到 npm 或公开 GitHub Release。
+旧 15.6.0 候选的版本、安装和归档摘要见[历史基准](docs/CURRENT_BASELINE.md)。根目录旧 GitHub bootstrap 只对应 v15.2.1，不用于本版安装。

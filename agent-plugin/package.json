@@ -1,0 +1,19 @@
+{
+  "name": "@missher/media-missher",
+  "version": "17.0.0",
+  "description": "Media@Missher CLI and shared Skill for shell-capable Agents",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Missher",
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "os": ["darwin", "linux"],
+  "bin": { "media-missher": "bin/media-missher.mjs" },
+  "files": ["bin", "src", "lib/index.js", "payload", "skill", "README.md", "AGENT_INSTALL.md", "DATA_CAPABILITIES.md", "QUICKSTART.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "pack:agent": "node scripts/build.mjs && npm pack --ignore-scripts --pack-destination dist"
+  },
+  "dependencies": { "exceljs": "4.4.0", "saxes": "5.0.1" }
+}

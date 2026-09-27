@@ -35,11 +35,14 @@ describe('embedded Media runtime payload', () => {
     await execute(process.execPath, [stageScript, '--output', payload])
 
     const files = await filesBelow(payload)
-    expect(await readFile(join(payload, 'VERSION'), 'utf8')).toBe('15.2.1\n')
+    expect(await readFile(join(payload, 'VERSION'), 'utf8')).toBe('17.0.0\n')
     expect(await readFile(join(payload, '.media-missher-source-tree'), 'utf8')).toBe(
       'media-missher-source-v1\n',
     )
     expect(files).toContain('runtime/requirements.lock')
+    for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+      expect(await readFile(join(payload, 'runtime', name))).toEqual(await readFile(resolve(pluginRoot, '..', name)))
+    }
     expect(files).toContain('runtime/scripts/scrape_all.py')
     expect(files).toContain('runtime/media_missher_runtime/platforms/bilibili.py')
     expect(files).toContain('media-missher/scripts/run_collection.py')

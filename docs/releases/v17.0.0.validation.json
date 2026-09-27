@@ -1,0 +1,139 @@
+{
+  "version": "17.0.0",
+  "status": "passed-with-limitations",
+  "testedAt": "2026-09-27T06:09:40.712459+00:00",
+  "platform": "macOS x64",
+  "tests": {
+    "python": {
+      "passed": 1289,
+      "failed": 0,
+      "networkDisabled": true,
+      "expectedSocketWarning": 1
+    },
+    "harness": {
+      "files": 17,
+      "passed": 291,
+      "failed": 0
+    },
+    "agent": {
+      "passed": 55,
+      "failed": 0
+    },
+    "totalPassed": 1635
+  },
+  "typecheck": "passed",
+  "build": "passed",
+  "componentSha256": {
+    "dsh-media-missher-17.0.0.tgz": "09c0862c5bf56d18681f80b4a34e0b59f5319ef78b095e5276f481f06ad02568",
+    "missher-media-missher-17.0.0.tgz": "cf0f06ff9c4b0519faad28dc66895b156ca990046dfc8dda1fefc952f9dc7064",
+    "Media-Missher-Agent-Setup-v17.0.0.zip": "b3fe38806de744dc32a5e60ace667cf2045aa8df08b9d44d8668c824b41c35f2"
+  },
+  "agentIsolatedInstallation": {
+    "status": "passed",
+    "platform": "darwin",
+    "arch": "x64",
+    "node": "25.6.0",
+    "checks": [
+      "actual Setup shell installer, registry dependencies, immutable package bytes and activation",
+      "installed executable launcher and exact component versions",
+      "installed CDP-only declaration and removed commands refuse before setup",
+      "blank doctor and blank collection keep runtime, target profile and runs absent",
+      "Codex Skill installed with absolute command fallback and idempotent reinstall",
+      "real Excel template, synthetic CSV import/preview/activation; no runtime/browser/shared state",
+      "edited existing Skill preserved on conflict"
+    ],
+    "realPlatformRequests": 0,
+    "browserLaunches": 0,
+    "syntheticCreators": 1,
+    "harnessInvoked": false,
+    "isolatedHarnessProfileCreated": false,
+    "hostSkillActivationVerified": false,
+    "temporaryHomeRemoved": true
+  },
+  "harnessIsolatedInstallation": {
+    "ok": true,
+    "profile": "media-smoke",
+    "sha256": "09c0862c5bf56d18681f80b4a34e0b59f5319ef78b095e5276f481f06ad02568",
+    "totalCollected": 40,
+    "collectionAutoExported": false,
+    "explicitExportRunId": "run-smoke-before",
+    "explicitExportFormat": "csv",
+    "explicitExportRecords": 1,
+    "adjacentStatePreserved": true,
+    "sameVersionRefreshVerified": true,
+    "offlineRunsActions": [
+      "list",
+      "export",
+      "compare",
+      "xhs-status",
+      "progress"
+    ],
+    "installedProgressSnapshotVerified": true,
+    "progressEvidence": "synthetic phase events through installed tool, private snapshot and final summary",
+    "offlineSetupActions": [
+      "status",
+      "template",
+      "import",
+      "activate"
+    ],
+    "installedImportFormats": [
+      "csv",
+      "xlsx"
+    ],
+    "emptyDeviceRuntimeCalls": 0,
+    "setupRuntimeOrRunDirectories": 0,
+    "activeSelectionOverridesLegacyDefaults": true,
+    "setupProfileBackupVerified": true,
+    "browserLaunches": 0,
+    "aiBrowserActions": [
+      "browser-open",
+      "browser-check"
+    ],
+    "aiBrowserLaunchRequests": 1,
+    "aiBrowserLaunchMode": "injected process fixture; no real browser",
+    "aiBrowserGuideVerified": true,
+    "loginStatusNeverInferred": true,
+    "livePlatformRequests": 0,
+    "sharedSafetyScopeIsolated": true,
+    "installedGuidanceHookVerified": true,
+    "guidanceHookEvidence": "installed entry with injected native-section service fixture; not an LLM behavior test",
+    "hostPackage": "@deepseek-ai/dsh",
+    "hostVersion": "0.1.7-rc.2",
+    "electron": "44.0.0",
+    "node": "24.18.1",
+    "installLoadSyntheticCallUninstall": "passed",
+    "temporaryProfileRemoved": true
+  },
+  "realChromeCdpLocalFixture": {
+    "sourceRuntimeLoaded": true,
+    "realPlaywrightCdpConnected": true,
+    "localDomRead": true,
+    "missingPlatformRefused": true,
+    "unauthorizedNavigationRefused": true,
+    "screenshotPngVerified": true,
+    "screenshotSha256Verified": true,
+    "screenshotMode0600": true,
+    "visibleChallengeStoppedCapture": true,
+    "screenshotBytes": 6001,
+    "platformNavigations": 0,
+    "syntheticFixture": true,
+    "disconnectPreservedBrowserAndPages": true,
+    "temporaryProfileRemoved": true,
+    "ownedChromeStopped": true,
+    "status": "passed"
+  },
+  "protection": {
+    "oldInstallationAndArtifactsUnchanged": true,
+    "filesChecked": 67
+  },
+  "realPlatformAcceptance": false,
+  "realUserProfileInstallation": false,
+  "actualAgentSessionSkillDiscovery": false,
+  "linuxWslAcceptance": "not verified locally; CI separately tests Linux CLI installation",
+  "limitations": [
+    "真实平台采集与账号登录未在本轮执行。",
+    "DSH 合成调用不代表真实 LLM 工具行为验收。",
+    "Windows/WSL 图形浏览器尚未实测。",
+    "首次依赖安装仍需要访问包源。"
+  ]
+}

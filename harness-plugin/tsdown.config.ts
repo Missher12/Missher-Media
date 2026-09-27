@@ -9,4 +9,5 @@ export default defineConfig({
   fixedExtension: false,
   dts: true,
   clean: true,
+  banner: '/* Copyright (c) 2026 Missher. All rights reserved. See LICENSE. Third-party licenses remain in effect. */',
 })

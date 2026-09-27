@@ -25,6 +25,7 @@ from ..detail_open import matches_exact_detail_page, missing_engagement_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
 from ..screenshots import ScreenshotError
+from ..xhs_policy import PAGE_INTERVAL_MS
 from ._xhs_detail_enrichment import XhsCommentRisk, load_bounded_comments
 
 try:
@@ -122,7 +123,10 @@ class XhsCollector:
 
         async def navigate() -> None:
             nonlocal navigation_succeeded
-            await self._navigate_and_check(page, target)
+            if self.request.continue_page and page.url == target:
+                await _scroll_and_check(page)
+            else:
+                await self._navigate_and_check(page, target)
             navigation_succeeded = True
 
         try:
@@ -140,7 +144,7 @@ class XhsCollector:
             if getattr(page, "url", "") != target:
                 raise CaptureTimeout("creator-capture-timeout") from error
             records = _creator_dom_records(
-                _as_sequence(observation.get("cards")), self.request.target_count
+                _as_sequence(observation.get("cards")), self.request.target_count, self.request.exclude_ids
             )
             if not records:
                 raise CaptureTimeout("creator-capture-timeout") from error
@@ -165,22 +169,25 @@ class XhsCollector:
             raise ValueError("complete search is not supported")
         page = self.browser.require_page("xhs")
         target = _search_url(self.request.keyword)
-        if getattr(self.browser, "allow_navigation", False):
+        if getattr(self.browser, "allow_navigation", False) and not self.request.continue_page:
             await self._navigate_and_check(page, target)
         else:
             _require_open_target(page, target, "matching Xiaohongshu search page")
         await _wait_for_search_settled(page)
         records: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str] = set(self.request.exclude_ids)
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             await _raise_for_challenge(page)
             observation = await _read_search_cards(page)
             _raise_for_observation(observation)
             added = _append_search(records, seen, _as_sequence(observation.get("cards")), self.request.keyword, self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or page_number + 1 >= self.request.page_cap:
+            if (added == 0 and not self.request.exclude_ids) or page_number + 1 >= self.request.page_cap:
                 break
+            await _wait_before_next_page(page)
             await _scroll_and_check(page)
             try:
                 await _wait_for_card_change(page, sorted(seen))
@@ -200,9 +207,11 @@ class XhsCollector:
 
     async def _collect_creator_pages(self, page: Any, response: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str] = set(self.request.exclude_ids)
         prior_cursor: object = _MISSING
         for page_number in range(self.request.page_cap):
+            if hasattr(self.browser, "last_pages"):
+                self.browser.last_pages += 1
             await _raise_for_challenge(page)
             payload = await _response_payload(response)
             notes, has_more, cursor = _creator_page(payload)
@@ -214,6 +223,7 @@ class XhsCollector:
             if _empty_cursor(cursor) or (prior_cursor is not _MISSING and cursor == prior_cursor):
                 break
             prior_cursor = cursor
+            await _wait_before_next_page(page)
             try:
                 response = await _capture_while(
                     page,
@@ -720,9 +730,9 @@ def _append_creator(records: list[dict[str, Any]], seen: set[str], items: Sequen
     return added
 
 
-def _creator_dom_records(items: Sequence[Any], target: int | None) -> list[dict[str, Any]]:
+def _creator_dom_records(items: Sequence[Any], target: int | None, exclude_ids: Sequence[str] = ()) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[str] = set(exclude_ids)
     observed_at = _observed_at()
     for item in items:
         if not isinstance(item, Mapping):
@@ -1620,6 +1630,12 @@ async def _wait_after_detail_open(page: Any) -> None:
         _DETAIL_OPEN_SETTLE_MAX_MS - _DETAIL_OPEN_SETTLE_MIN_MS + 1
     )
     await page.wait_for_timeout(settle_milliseconds)
+    await _raise_for_challenge(page)
+
+
+async def _wait_before_next_page(page: Any) -> None:
+    await _raise_for_challenge(page)
+    await page.wait_for_timeout(PAGE_INTERVAL_MS)
     await _raise_for_challenge(page)
 
 

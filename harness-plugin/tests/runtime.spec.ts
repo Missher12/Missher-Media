@@ -3,6 +3,8 @@ import {
   mkdir,
   mkdtemp,
   realpath,
+  readFile,
+  utimes,
   rm,
   symlink,
   writeFile,
@@ -21,7 +23,7 @@ import {
 const temporaryRoots: string[] = []
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'media-runtime-test-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'media-runtime-test-')))
   temporaryRoots.push(root)
   const dshHome = join(root, 'dsh')
   const profilePath = join(root, 'private', 'profile.json')
@@ -33,16 +35,16 @@ async function fixture() {
   await mkdir(join(payloadRoot, 'tools'), { recursive: true })
   await mkdir(join(payloadRoot, 'media-missher', 'scripts'), { recursive: true })
   await mkdir(join(profilePath, '..'), { recursive: true })
-  await writeFile(profilePath, '{"platform_uids":{}}\n', { mode: 0o600 })
+  await writeFile(profilePath, '{"platform_uids":{"bilibili":"12345","xhs":"abcdef0123456789abcdef01","douyin":"MS4wLjAB_fixture","weibo":"12345"}}\n', { mode: 0o600 })
   await chmod(profilePath, 0o600)
-  await writeFile(join(payloadRoot, 'VERSION'), '15.2.1\n')
+  await writeFile(join(payloadRoot, 'VERSION'), '17.0.0\n')
   await writeFile(join(payloadRoot, 'tools', 'install_media_missher.py'), '# installer\n')
   await writeFile(join(payloadRoot, 'media-missher', 'scripts', 'run_collection.py'), '# controller\n')
   const config = normalizePluginConfig({ profilePath, runtimeHome, outputRoot }, dshHome, root)
   return { root, config, payloadRoot, runtimeHome, outputRoot, profilePath }
 }
 
-async function markRuntimeReady(runtimeHome: string, version = '15.2.1') {
+async function markRuntimeReady(runtimeHome: string, version = '17.0.0') {
   const python = join(runtimeHome, 'venv', 'bin', 'python')
   await writeFile(join(runtimeHome, 'current', 'VERSION'), `${version}\n`)
   await writeFile(python, '#!/bin/sh\n', { mode: 0o700 })
@@ -62,7 +64,7 @@ async function evidenceFixture(outputRoot: string) {
   for (const platform of ['bilibili', 'xhs', 'douyin', 'weibo']) {
     const name = `${platform}.json`
     const path = join(engineDirectory, name)
-    await writeFile(path, `${JSON.stringify([{ platform, native_id: `${platform}-1`, title: platform }])}\n`)
+    await writeFile(path, `${JSON.stringify([{ platform, [{ bilibili: 'dynamic_id', xhs: 'note_id', douyin: 'aweme_id', weibo: 'mblog_id' }[platform]!]: `${platform}-1`, link: 'https://example.invalid/content', title: platform }])}\n`)
     paths[platform] = name
     counts[platform] = 1
     platforms[platform] = 'complete'
@@ -88,14 +90,14 @@ afterEach(async () => {
 })
 
 describe('runtime lifecycle', () => {
-  it('reuses an exact executable 15.2.1 runtime without installation', async () => {
+  it.each(['darwin', 'linux'] as const)('reuses an exact executable 17.0.0 runtime on %s without installation', async platform => {
     const setup = await fixture()
     const python = await markRuntimeReady(setup.runtimeHome)
     const runner = vi.fn(() => Promise.reject(new Error('must_not_install')))
 
     const layout = await ensureRuntime(setup.config, {
       payloadRoot: setup.payloadRoot,
-      platform: 'darwin',
+      platform,
       processRunner: runner,
     })
 
@@ -107,7 +109,7 @@ describe('runtime lifecycle', () => {
     const setup = await fixture()
     const target = join(setup.runtimeHome, 'venv', 'bin', 'python3.11')
     const python = join(setup.runtimeHome, 'venv', 'bin', 'python')
-    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '15.2.1\n')
+    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '17.0.0\n')
     await writeFile(target, '#!/bin/sh\n', { mode: 0o700 })
     await chmod(target, 0o700)
     await symlink('python3.11', python)
@@ -181,7 +183,6 @@ describe('controller invocation', () => {
       '--xhs-comments', '0',
       '--platform-timeout', '300',
       '--execution-timeout', '1260',
-      '--allow-navigation',
       '--no-feishu',
       '--json-summary',
     ])
@@ -224,7 +225,7 @@ describe('fresh run evidence', () => {
 
     expect(result.manifestPath).toBe(await realpath(evidence.manifestPath))
     expect(result.totalCollected).toBe(4)
-    expect(result.records.bilibili[0]).toMatchObject({ native_id: 'bilibili-1' })
+    expect(result.records.bilibili[0]).toMatchObject({ dynamic_id: 'bilibili-1' })
     expect(result.diagnostics.weibo).toEqual({ kind: 'ok', code: 'ok' })
   })
 
@@ -264,4 +265,62 @@ describe('fresh run evidence', () => {
       manifestPath: evidence.manifestPath,
     }, setup.config)).rejects.toThrow('manifest_count_mismatch')
   })
+  it('exports first-seen native IDs only even when the source manifest counts duplicate rows', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    const path = join(evidence.engineDirectory, 'bilibili.json')
+    const records = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(path, JSON.stringify([...records, { ...records[0], title: 'duplicate' }]))
+    const manifest = JSON.parse(await readFile(evidence.manifestPath, 'utf8'))
+    manifest.counts.bilibili = 2
+    await writeFile(evidence.manifestPath, JSON.stringify(manifest))
+    const result = await loadRunEvidence({ status: 'success', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config)
+    expect(result.records.bilibili).toHaveLength(1)
+    expect(result.records.bilibili[0]!.title).toBe('bilibili')
+    expect(result.totalCollected).toBe(4)
+  })
+
+  it('rejects stale evidence before export using this invocation start time', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    await chmod(evidence.runDirectory, 0o700)
+    for (const path of evidence.evidence) await chmod(path, 0o600)
+    await utimes(evidence.manifestPath, new Date(0), new Date(0))
+    await expect(loadRunEvidence({ status: 'success', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config,
+      { startedAtMs: Date.now() - 1000 })).rejects.toThrow('evidence_stale')
+  })
+
+  it('rejects free-form private diagnostic text before projection', async () => {
+    const setup = await fixture()
+    const evidence = await evidenceFixture(setup.outputRoot)
+    const manifest = JSON.parse(await readFile(evidence.manifestPath, 'utf8'))
+    manifest.diagnostics.bilibili = { kind: 'internal', code: 'private fixture text' }
+    await writeFile(evidence.manifestPath, JSON.stringify(manifest))
+    await expect(loadRunEvidence({ status: 'failed', runDirectory: evidence.runDirectory,
+      evidence: evidence.evidence, manifestPath: evidence.manifestPath }, setup.config))
+      .rejects.toThrow('manifest_diagnostic_invalid')
+  })
+
+})
+
+it('loads versioned topic users and posts as distinct evidence entities', async () => {
+  const setup = await fixture()
+  const runDirectory = join(setup.outputRoot, 'run-topic')
+  await mkdir(runDirectory, { recursive: true, mode: 0o700 })
+  const rows = [
+    { platform: 'weibo', type: 'post', mblog_id: '123', link: 'https://weibo.com/10/123' },
+    { platform: 'weibo', type: 'topic_participant', uid: '10', topic: 'travel', link: 'https://weibo.com/u/10' },
+    { platform: 'weibo', type: 'user_profile', uid: '10', link: 'https://weibo.com/u/10' },
+  ]
+  const manifestPath = join(runDirectory, 'manifest.json')
+  const dataPath = join(runDirectory, 'weibo.json')
+  await writeFile(dataPath, JSON.stringify(rows), { mode: 0o600 })
+  await writeFile(manifestPath, JSON.stringify({ schema_version: 2, backend: 'cdp', record_kinds: { posts: 1, topic_participants: 1, user_profiles: 1 }, status: 'complete', counts: { weibo: 3 }, paths: { weibo: 'weibo.json' }, platforms: { weibo: 'complete' }, diagnostics: { weibo: { kind: 'ok', code: 'ok' } } }), { mode: 0o600 })
+  const summary = parseControllerSummary(JSON.stringify({ status: 'success', run_dir: runDirectory, evidence: [manifestPath, dataPath] }))
+  const loaded = await loadRunEvidence(summary, setup.config)
+  expect(loaded.records.weibo).toEqual(rows)
+  expect(loaded.backend).toBe('cdp')
+  expect(loaded.recordKinds).toEqual({ posts: 1, topic_participants: 1, user_profiles: 1 })
 })
