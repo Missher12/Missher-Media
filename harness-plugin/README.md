@@ -14,6 +14,10 @@ Media@Missher 的私有 macOS DeepSeek Harness Bundle，内置运行时 17.0.0�
 
 ## 安装
 
+在 DSH「添加插件」中，本地安装请选择 `dsh-media-missher-17.0.0.tgz`。通用 Agent 的 `missher-media-missher-17.0.0.tgz` 和完整 ZIP 不是 DSH 组合包。
+
+Git 安装要求仓库根入口修复已发布：根 `package.json` 声明 `dsh.bundle`，`git-bundle/` 直接携带已校验的 V17 Bundle 文件，不运行安装构建脚本。旧提交直接按 Git 地址安装会报「这个包没有声明组合包」；修复发布前使用 DSH tgz。入口状态与验证见仓库的 `docs/GIT_INSTALL_2026-09-28.md`。
+
 完整交付包保留 `harness-plugin/scripts/` 布局，含安装器和验包器。在完整包根目录运行：
 
 ```sh

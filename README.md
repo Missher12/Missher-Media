@@ -36,6 +36,8 @@
 
 首次安装依赖需要可用的包源；本包不是全部依赖离线镜像。打包和上传 Git 不会修改本机已安装的 Skill、运行时或 Harness profile。
 
+DSH 按 Git 地址安装需要根目录的组合包入口；旧 V17 提交没有该入口，会报「这个包没有声明组合包」。本地修复使用仓库内已校验的冻结 DSH 包，发布状态与验证见 [Git 安装修复记录](docs/GIT_INSTALL_2026-09-28.md)。修复发布前，在「添加插件」中选择 `dsh-media-missher-17.0.0.tgz`。
+
 ## 环境与验证
 
 通用 CLI 要求 Node.js >=22.19、npm；采集运行时支持 Python 3.11/3.12。macOS/Linux 使用同一包，Windows 通过 WSL2/WSLg。浏览器、Agent 命令和私有文件须处于匹配环境。DSH Bundle 当前限定 macOS。模型和推理级别沿用宿主设置，本项目不包含模型 API 客户端。

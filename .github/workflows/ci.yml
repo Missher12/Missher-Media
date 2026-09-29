@@ -58,6 +58,8 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: "11.1.3"
+      - name: Pack the DSH Git entry from a clean fixture
+        run: node --test ../tools/tests/git-bundle.test.mjs
       - run: pnpm install --frozen-lockfile
       - name: Build CLI entrypoints before integration tests
         run: pnpm run build
