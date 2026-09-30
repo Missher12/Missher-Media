@@ -32,7 +32,7 @@ if (!assembleOnly) {
   run('node', ['agent-plugin/scripts/build-setup.mjs', '--output', distribution])
   run('npm', ['pack', '--ignore-scripts', '--pack-destination', distribution], join(root, 'harness-plugin'))
 }
-await verifyPackage(join(distribution, `dsh-media-missher-${version}.tgz`))
+await verifyPackage(join(distribution, `missher-dsh-media-missher-${version}.tgz`))
 inspectArchive(await readFile(join(distribution, `missher-media-missher-${version}.tgz`)))
 run('python3', ['-B', 'tools/distribution_archive.py', '--root', root, ...(validation ? ['--validation', validation] : [])])
 run('node', ['tools/verify_distribution.mjs', distribution])

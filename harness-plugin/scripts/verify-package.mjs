@@ -93,8 +93,8 @@ export async function verifyPackage(requestedArchive) {
 
     const manifest = JSON.parse(await readFile(join(extractedRoot, 'package.json'), 'utf8'))
     if (
-      manifest.name !== 'dsh-media-missher'
-      || manifest.version !== '17.0.0'
+      manifest.name !== '@missher/dsh-media-missher'
+      || manifest.version !== '17.0.1'
       || manifest.private !== true
       || manifest.author !== 'Missher'
       || manifest.license !== 'SEE LICENSE IN LICENSE'
@@ -107,7 +107,7 @@ export async function verifyPackage(requestedArchive) {
       if (!(await readFile(join(extractedRoot, 'payload', 'runtime', name))).equals(source)) throw new Error('package_runtime_notice_mismatch')
     }
     const patch = await readFile(join(extractedRoot, 'cordis.patch.yml'), 'utf8')
-    if (!patch.includes('id: media-missher') || !patch.includes('name: dsh-media-missher')) {
+    if (!patch.includes('id: media-missher') || !patch.includes('name: "@missher/dsh-media-missher"')) {
       throw new Error('package_patch_invalid')
     }
     if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '17.0.0\n') {

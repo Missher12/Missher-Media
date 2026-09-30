@@ -7,12 +7,12 @@
 | 使用方式 | 对应文件 |
 | --- | --- |
 | Codex、Hermes 等支持本地命令的 Agent | `Media-Missher-Agent-Setup-v17.0.0.zip`，解压后按其中 `AGENT_INSTALL.md` 安装 |
-| DeepSeek Harness（macOS） | `dsh-media-missher-17.0.0.tgz`；完整包附带 `harness-plugin/scripts/install-current-profile.mjs` 和验包器，按 `harness-plugin/README.md` 操作 |
+| DeepSeek Harness（macOS） | `missher-dsh-media-missher-17.0.0.tgz`；完整包附带 `harness-plugin/scripts/install-current-profile.mjs` 和验包器，按 `harness-plugin/README.md` 操作 |
 | 审查源码、自行构建 | `Media-Missher-Source-v17.0.0.zip` 或私有 Git 仓库，执行 `node tools/build_distribution.mjs` |
 
 ### DSH「添加插件」
 
-本地文件选择 `dsh-media-missher-17.0.0.tgz`。`missher-media-missher-17.0.0.tgz` 是通用 Agent CLI，完整 ZIP 是交付集合，都不能作为 DSH 组合包安装。
+本地文件选择 `missher-dsh-media-missher-17.0.0.tgz`。`missher-media-missher-17.0.0.tgz` 是通用 Agent CLI，完整 ZIP 是交付集合，都不能作为 DSH 组合包安装。
 
 Git 地址需要指向含根目录 `package.json` 和 `git-bundle/` 的修复提交。旧 V17 提交只有 `harness-plugin/` 子目录声明组合包，直接填仓库地址会报「这个包没有声明组合包」。根入口直接携带已校验的冻结 DSH 包，不运行安装构建脚本；所安装的采集运行时与对应 tgz 一致。修复发布前请使用上面的 DSH tgz；修复发布后可在已具备私有仓库访问权限的 DSH 中填写 `https://github.com/Missher12/media-missher.git#main`。
 

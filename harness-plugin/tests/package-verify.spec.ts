@@ -18,8 +18,8 @@ async function fakeArchive(extraFile?: string, changedNotice = false): Promise<s
   await mkdir(join(packageRoot, 'lib'), { recursive: true })
   await mkdir(join(packageRoot, 'payload'), { recursive: true })
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-    name: 'dsh-media-missher',
-    version: '17.0.0',
+    name: '@missher/dsh-media-missher',
+    version: '17.0.1',
     private: true,
     author: 'Missher',
     license: 'SEE LICENSE IN LICENSE',
@@ -32,7 +32,7 @@ async function fakeArchive(extraFile?: string, changedNotice = false): Promise<s
     await writeFile(join(packageRoot, name), bytes)
     await writeFile(join(packageRoot, 'payload/runtime', name), bytes)
   }
-  await writeFile(join(packageRoot, 'cordis.patch.yml'), '- insert:\n    - id: media-missher\n      name: dsh-media-missher\n')
+  await writeFile(join(packageRoot, 'cordis.patch.yml'), '- insert:\n    - id: media-missher\n      name: "@missher/dsh-media-missher"\n')
   await writeFile(join(packageRoot, 'README.md'), '# private\n')
   await writeFile(join(packageRoot, 'AGENT.md'), '# private onboarding\n')
   await writeFile(join(packageRoot, 'lib', 'index.js'), 'export const name = "media-missher"\n')
@@ -43,7 +43,7 @@ async function fakeArchive(extraFile?: string, changedNotice = false): Promise<s
   )
   if (extraFile !== undefined) await writeFile(join(packageRoot, extraFile), 'forbidden\n')
   if (changedNotice) await writeFile(join(packageRoot, 'LICENSE'), 'changed owner or permission\n')
-  const archive = join(root, 'dsh-media-missher-17.0.0.tgz')
+  const archive = join(root, 'missher-dsh-media-missher-17.0.1.tgz')
   await execute('/usr/bin/tar', ['-czf', archive, '-C', root, 'package'])
   return archive
 }

@@ -1,6 +1,6 @@
 {
-  "name": "dsh-media-missher",
-  "version": "17.0.0",
+  "name": "@missher/dsh-media-missher",
+  "version": "17.0.1",
   "description": "Private Media@Missher collection Bundle for DeepSeek Harness",
   "private": true,
   "type": "module",
@@ -58,8 +58,8 @@
     "tsdown": "0.22.2",
     "typescript": "6.0.3",
     "vitest": "4.1.8",
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-tools": "0.1.1-rc.2"
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
   },
   "author": "Missher"
 }

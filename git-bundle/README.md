@@ -1,6 +1,8 @@
-# dsh-media-missher 17.0.0
+# dsh-media-missher 17.0.1
 
-Media@Missher 的私有 macOS DeepSeek Harness Bundle，内置运行时 17.0.0，仅 Chrome CDP。源码、CLI、Bundle 本次统一版本。© 2026 Missher，原创软件采用专有许可，不公开发布 npm。
+自家插件不再限制 DSH 宿主版本号；运行时按实际接口能力工作。开发依赖版本用于复现构建，不是安装门槛。本轮验证基线为 0.2.0-rc.1 与 0.2.0-rc.2，其他版本尚未验证。
+
+Media@Missher 的私有 macOS DeepSeek Harness Bundle，内置运行时 17.0.0，仅 Chrome CDP。Bundle 17.0.1 更新 DSH 0.2.0-rc.1 / 0.2.0-rc.2 适配；CLI 与采集运行时仍为 17.0.0。© 2026 Missher，原创软件采用专有许可，不公开发布 npm。
 
 可采集字段见随包 [DATA_CAPABILITIES.md](DATA_CAPABILITIES.md)，通用 Agent 流程见 [QUICKSTART.md](QUICKSTART.md)。
 
@@ -14,10 +16,14 @@ Media@Missher 的私有 macOS DeepSeek Harness Bundle，内置运行时 17.0.0�
 
 ## 安装
 
+在 DSH「添加插件」中，本地安装请选择 `missher-dsh-media-missher-17.0.1.tgz`。通用 Agent 的 `missher-media-missher-17.0.0.tgz` 和完整 ZIP 不是 DSH 组合包。
+
+Git 安装要求仓库根入口修复已发布：根 `package.json` 声明 `dsh.bundle`，`git-bundle/` 直接携带已校验的 V17 Bundle 文件，不运行安装构建脚本。旧提交直接按 Git 地址安装会报「这个包没有声明组合包」；修复发布前使用 DSH tgz。入口状态与验证见仓库的 `docs/GIT_INSTALL_2026-09-28.md`。
+
 完整交付包保留 `harness-plugin/scripts/` 布局，含安装器和验包器。在完整包根目录运行：
 
 ```sh
-node harness-plugin/scripts/verify-package.mjs harness-plugin/dist/dsh-media-missher-17.0.0.tgz
+node harness-plugin/scripts/verify-package.mjs harness-plugin/dist/missher-dsh-media-missher-17.0.1.tgz
 node harness-plugin/scripts/install-current-profile.mjs --help
 ```
 
@@ -36,7 +42,7 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm exec tsc --noEmit
 pnpm run pack:bundle
-pnpm run verify:package -- --write-checksum dist/dsh-media-missher-17.0.0.tgz
+pnpm run verify:package -- --write-checksum dist/missher-dsh-media-missher-17.0.1.tgz
 ```
 
 全项目交付由根目录 `tools/build_distribution.mjs` 构建。smoke:native 使用隔离 DSH_HOME 做安装、合成调用及卸载；smoke:browser 使用临时 Chrome 和本地页。二者均不等于真实平台采集。

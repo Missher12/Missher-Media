@@ -1,26 +1,43 @@
 {
-  "name": "dsh-media-missher",
-  "version": "17.0.0",
+  "name": "@missher/dsh-media-missher",
+  "version": "17.0.1",
   "description": "Private Media@Missher release entry for DeepSeek Harness Git installation",
   "private": true,
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Missher",
-  "os": ["darwin"],
-  "engines": { "node": ">=22.19.0" },
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "main": "git-bundle/lib/index.js",
   "types": "git-bundle/lib/index.d.ts",
   "exports": {
-    ".": { "types": "./git-bundle/lib/index.d.ts", "import": "./git-bundle/lib/index.js" },
+    ".": {
+      "types": "./git-bundle/lib/index.d.ts",
+      "import": "./git-bundle/lib/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "git-bundle", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"
+    "git-bundle",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
-  "dsh": { "bundle": { "patch": "./git-bundle/cordis.patch.yml" } },
+  "dsh": {
+    "bundle": {
+      "patch": "./git-bundle/cordis.patch.yml"
+    }
+  },
   "scripts": {
     "sync:dsh-git": "node tools/sync-dsh-git.mjs",
     "test:git-bundle": "node --test tools/tests/git-bundle.test.mjs"
   },
-  "dependencies": { "exceljs": "4.4.0", "saxes": "5.0.1" }
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "saxes": "5.0.1"
+  }
 }

@@ -1,7 +1,7 @@
 # Private, independently removable Media@Missher Bundle.
 - insert:
     - id: media-missher
-      name: dsh-media-missher
+      name: "@missher/dsh-media-missher"
       config:
         defaultPlatforms: bilibili,xhs,douyin,weibo
         defaultCount: 10

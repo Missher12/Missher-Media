@@ -1,5 +1,7 @@
 # Media@Missher 当前项目摘要
 
+2026-09-29 追加 UI-REFINE：当前 DSH 包名统一为 `@missher/dsh-media-missher`，配置和存储标识保留。此处为源码候选；本轮安装与验收以协调目录 `coordination/2026-09-29/ui-refinements/` 的回执为准，下面的版本与透明空格等描述保留为历史。
+
 更新：2026-09-27。当前交付以 [17.0.0 记录](docs/releases/v17.0.0.md) 为准；[docs/CURRENT_BASELINE.md](docs/CURRENT_BASELINE.md) 保留此前冻结基准；后续工作见 [HANDOVER.md](HANDOVER.md)。原有按日期叠加的完整记录已[原样归档](docs/history/2026-09-26-before-baseline-cleanup/PROJECT_CONTEXT.md)。
 
 ## 当前基准

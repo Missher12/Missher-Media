@@ -12,11 +12,12 @@ import { verifyChecksumFile, verifyPackage } from '../harness-plugin/scripts/ver
 // never run a lifecycle script or build the development tree.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const version = (await readFile(join(root, 'VERSION'), 'utf8')).trim()
-if (!/^\d+\.\d+\.\d+$/u.test(version) || manifest.version !== version) {
+const runtimeVersion = (await readFile(join(root, 'VERSION'), 'utf8')).trim()
+const version = manifest.version
+if (!/^\d+\.\d+\.\d+$/u.test(version) || !/^\d+\.\d+\.\d+$/u.test(runtimeVersion)) {
   throw new Error('git_bundle_version_mismatch')
 }
-const archive = join(root, 'dist', `v${version}`, `dsh-media-missher-${version}.tgz`)
+const archive = process.argv[2] ? resolve(process.argv[2]) : join(root, 'dist', `v${version}`, `missher-dsh-media-missher-${version}.tgz`)
 const verified = await verifyPackage(archive)
 if (await verifyChecksumFile(archive, verified.sha256) === null) {
   throw new Error('git_bundle_checksum_missing')
@@ -26,6 +27,9 @@ const temporary = await mkdtemp(join(tmpdir(), 'media-git-bundle-'))
 try {
   await promisify(execFile)('/usr/bin/tar', ['-xzf', archive, '-C', temporary])
   const source = join(temporary, 'package')
+  if ((await readFile(join(source, 'payload', 'VERSION'), 'utf8')).trim() !== runtimeVersion) {
+    throw new Error('git_bundle_version_mismatch')
+  }
   const released = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
   // Refuse metadata drift before touching generated files. A version bump must
   // ship the matching release, dependency set, and checksum together.

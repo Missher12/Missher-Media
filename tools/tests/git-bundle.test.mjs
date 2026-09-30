@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Missher. All rights reserved. See LICENSE.
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,7 +12,7 @@ import { verifyPackage } from '../../harness-plugin/scripts/verify-package.mjs'
 
 const execute = promisify(execFile)
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const release = 'dist/v17.0.0/dsh-media-missher-17.0.0.tgz'
+const release = 'dist/v17.0.1/missher-dsh-media-missher-17.0.1.tgz'
 
 async function fixture(t) {
   const temporary = await mkdtemp(join(tmpdir(), 'media-git-entry-test-'))
@@ -21,11 +22,21 @@ async function fixture(t) {
     'package.json', 'VERSION', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
     'DATA_CAPABILITIES.md', 'QUICKSTART.md', 'AGENT_INSTALL.md', '.gitignore',
     'tools/sync-dsh-git.mjs', 'harness-plugin/scripts/verify-package.mjs', 'git-bundle',
-    release, 'dist/v17.0.0/SHA256SUMS.txt',
   ]) {
     await mkdir(dirname(join(root, name)), { recursive: true })
     await cp(join(repository, name), join(root, name), { recursive: true })
   }
+  // Build a synthetic release from the prepared Git payload. Frozen historical
+  // archives keep their old package identity and are never rewritten by tests.
+  const stage = join(temporary, 'release-stage')
+  await mkdir(stage)
+  await cp(join(root, 'git-bundle'), join(stage, 'package'), { recursive: true })
+  await mkdir(dirname(join(root, release)), { recursive: true })
+  await execute('/usr/bin/tar', ['-czf', join(root, release), '-C', stage, 'package'], {
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+  })
+  const sha = createHash('sha256').update(await readFile(join(root, release))).digest('hex')
+  await writeFile(join(root, 'dist/v17.0.1/SHA256SUMS.txt'), `${sha}  missher-dsh-media-missher-17.0.1.tgz\n`)
   return { root, temporary }
 }
 
@@ -46,7 +57,7 @@ test('a clean Git root packs a complete release with lifecycle scripts disabled'
   await execute('npm', ['pack', '--pack-destination', temporary, '--ignore-scripts'], {
     cwd: root, timeout: 120000, maxBuffer: 4 * 1024 * 1024,
   })
-  const archive = join(temporary, 'dsh-media-missher-17.0.0.tgz')
+  const archive = join(temporary, 'missher-dsh-media-missher-17.0.1.tgz')
   await verifyPackage(join(root, release))
   const unpacked = join(temporary, 'unpacked')
   await mkdir(unpacked)
@@ -58,7 +69,7 @@ test('a clean Git root packs a complete release with lifecycle scripts disabled'
   assert.deepEqual(await contents(join(unpacked, 'package/git-bundle')), releasedFiles)
   const manifest = JSON.parse(await readFile(join(unpacked, 'package/package.json'), 'utf8'))
   assert.equal(manifest.dsh.bundle.patch, './git-bundle/cordis.patch.yml')
-  assert.equal(manifest.name, 'dsh-media-missher')
+  assert.equal(manifest.name, '@missher/dsh-media-missher')
   for (const hook of ['prepare', 'prepack', 'prepublish', 'preinstall', 'install', 'postinstall']) {
     assert.equal(manifest.scripts?.[hook], undefined, `Git installs must not require ${hook}`)
   }
@@ -75,8 +86,8 @@ for (const [name, edit, expected] of [
     delete manifest.dsh
     await writeFile(path, JSON.stringify(manifest))
   }, /git_bundle_entry_mismatch/u],
-  ['release checksum mismatch', root => writeFile(join(root, 'dist/v17.0.0/SHA256SUMS.txt'), '0'.repeat(64) + '  dsh-media-missher-17.0.0.tgz\n'), /package_checksum_mismatch/u],
-  ['missing release checksum', root => rm(join(root, 'dist/v17.0.0/SHA256SUMS.txt')), /git_bundle_checksum_missing/u],
+  ['release checksum mismatch', root => writeFile(join(root, 'dist/v17.0.1/SHA256SUMS.txt'), '0'.repeat(64) + '  missher-dsh-media-missher-17.0.1.tgz\n'), /package_checksum_mismatch/u],
+  ['missing release checksum', root => rm(join(root, 'dist/v17.0.1/SHA256SUMS.txt')), /git_bundle_checksum_missing/u],
   ['unreleased runtime version', root => writeFile(join(root, 'VERSION'), '17.0.1\n'), /git_bundle_version_mismatch/u],
 ]) {
   test(`${name} refuses release sync before changing the existing bundle`, async t => {

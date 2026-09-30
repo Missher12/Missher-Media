@@ -63,7 +63,7 @@ def build(root: Path, validation_path: Path | None) -> dict:
     names = {
         "agent": f"missher-media-missher-{version}.tgz",
         "agent_setup": f"Media-Missher-Agent-Setup-v{version}.zip",
-        "harness": f"dsh-media-missher-{version}.tgz",
+        "harness": f"missher-dsh-media-missher-{version}.tgz",
         "source": f"Media-Missher-Source-v{version}.zip",
         "complete": f"Media-Missher-v{version}.zip",
     }

@@ -1026,7 +1026,7 @@ function parseControllerSummary(stdout) {
 	}
 	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("controller_summary_invalid");
 	const record = value;
-	const statuses = /* @__PURE__ */ new Set([
+	const statuses = new Set([
 		"success",
 		"partial",
 		"failed",
@@ -1927,7 +1927,7 @@ const MAX_XML_TEXT = 64 * 1024;
 const MAX_WORKSHEET_COLUMNS = 64;
 const MAX_SHARED_STRINGS = 4096;
 const MAX_STYLE_RECORDS = 1024;
-const STYLE_COLLECTIONS = /* @__PURE__ */ new Set([
+const STYLE_COLLECTIONS = new Set([
 	"numFmts",
 	"fonts",
 	"fills",
@@ -1939,7 +1939,7 @@ const STYLE_COLLECTIONS = /* @__PURE__ */ new Set([
 	"tableStyles",
 	"indexedColors"
 ]);
-const STYLE_RECORDS = /* @__PURE__ */ new Set([
+const STYLE_RECORDS = new Set([
 	"numFmt",
 	"font",
 	"fill",
@@ -1960,7 +1960,7 @@ const CHINESE_HEADERS = [
 	"博主名称",
 	"主页链接"
 ];
-const PLATFORM_NAMES = /* @__PURE__ */ new Map([
+const PLATFORM_NAMES = new Map([
 	["bilibili", "bilibili"],
 	["b站", "bilibili"],
 	["哔哩哔哩", "bilibili"],
@@ -2118,7 +2118,7 @@ function creatorsFromRows(rows) {
 	if (creators.length === 0) fail("empty");
 	return creators;
 }
-const XLSX_CORE_PARTS = /* @__PURE__ */ new Map([
+const XLSX_CORE_PARTS = new Map([
 	["[Content_Types].xml", "xml"],
 	["_rels/.rels", "xml"],
 	["xl/workbook.xml", "workbook"],
@@ -2128,7 +2128,7 @@ const XLSX_CORE_PARTS = /* @__PURE__ */ new Map([
 	["docProps/app.xml", "xml"],
 	["docProps/core.xml", "xml"]
 ]);
-const XLSX_DIRECTORIES = /* @__PURE__ */ new Set([
+const XLSX_DIRECTORIES = new Set([
 	"_rels/",
 	"xl/",
 	"xl/_rels/",

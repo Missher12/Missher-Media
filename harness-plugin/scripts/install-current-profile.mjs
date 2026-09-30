@@ -18,7 +18,7 @@ import { verifyPackage } from './verify-package.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(scriptDirectory, '..')
-const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-17.0.0.tgz')
+const defaultArchive = join(pluginRoot, 'dist', 'missher-dsh-media-missher-17.0.0.tgz')
 /** Resolve an installed Desktop without downloading or starting another host. */
 export async function resolveHarnessLayout(appRoot, externalPnpmPaths = [
   '/usr/local/bin/pnpm', '/opt/homebrew/bin/pnpm',
@@ -164,7 +164,7 @@ async function stageVerifiedArchive(dshHome, verified) {
   if (process.platform !== 'win32') await chmod(directory, 0o700)
   const destination = join(
     directory,
-    `dsh-media-missher-17.0.0-${verified.sha256.slice(0, 16)}.tgz`,
+    `missher-dsh-media-missher-17.0.0-${verified.sha256.slice(0, 16)}.tgz`,
   )
   try {
     await copyFile(verified.archive, destination, fsConstants.COPYFILE_EXCL)
@@ -224,7 +224,7 @@ export async function installCurrentProfile(
     'profiles',
     options.profile,
     'node_modules',
-    'dsh-media-missher',
+    '@missher/dsh-media-missher',
     'lib',
     'index.js',
   )
@@ -244,7 +244,7 @@ export async function installCurrentProfile(
     environment,
     'harness_profile_verify_failed',
   )
-  if (!configuration.includes('id: media-missher') || !configuration.includes('name: dsh-media-missher')) {
+  if (!configuration.includes('id: media-missher') || !configuration.includes('name: "@missher/dsh-media-missher"')) {
     throw new Error('harness_plugin_not_active')
   }
   const result = {

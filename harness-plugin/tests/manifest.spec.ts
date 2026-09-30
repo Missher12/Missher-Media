@@ -11,8 +11,8 @@ describe('Harness Bundle manifest', () => {
     const buildConfig = await readFile(resolve(root, 'tsdown.config.ts'), 'utf8')
 
     expect(manifest).toMatchObject({
-      name: 'dsh-media-missher',
-      version: '17.0.0',
+      name: '@missher/dsh-media-missher',
+      version: '17.0.1',
       type: 'module',
       license: 'SEE LICENSE IN LICENSE',
       author: 'Missher',
@@ -22,9 +22,9 @@ describe('Harness Bundle manifest', () => {
     })
     expect(manifest.files).toContain('AGENT.md')
     expect(manifest.dependencies['@deepseek-ai/dsh-tools']).toBeUndefined()
-    expect(manifest.devDependencies['@deepseek-ai/dsh-tools']).toBe('0.1.1-rc.2')
+    expect(manifest.devDependencies['@deepseek-ai/dsh-tools']).toBe('0.2.0-rc.2')
     expect(patch).toContain('id: media-missher')
-    expect(patch).toContain('name: dsh-media-missher')
+    expect(patch).toContain('name: "@missher/dsh-media-missher"')
     expect(patch).toContain('defaultPlatforms: bilibili,xhs,douyin,weibo')
     expect(patch).toContain('defaultCount: 10')
     expect(patch).toContain('defaultAllowNavigation: false')

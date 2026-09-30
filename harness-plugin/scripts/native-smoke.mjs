@@ -20,7 +20,7 @@ import { installCurrentProfile, resolveHarnessLayout, harnessEnvironmentPath } f
 import { verifyPackage } from './verify-package.mjs'
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const defaultArchive = join(pluginRoot, 'dist', 'dsh-media-missher-17.0.0.tgz')
+const defaultArchive = join(pluginRoot, 'dist', 'missher-dsh-media-missher-17.0.0.tgz')
 const platforms = ['bilibili', 'xhs', 'douyin', 'weibo']
 
 function help() {
@@ -151,11 +151,11 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
       environment,
       'native_smoke_dump_failed',
     )
-    if (!configuration.includes('id: media-missher') || !configuration.includes('name: dsh-media-missher')) {
+    if (!configuration.includes('id: media-missher') || !configuration.includes('name: "@missher/dsh-media-missher"')) {
       throw new Error('native_smoke_plugin_inactive')
     }
 
-    const installedModulePath = join(profileRoot, 'node_modules', 'dsh-media-missher', 'lib', 'index.js')
+    const installedModulePath = join(profileRoot, 'node_modules', '@missher/dsh-media-missher', 'lib', 'index.js')
     const installedModule = await import(pathToFileURL(installedModulePath).href)
     const runDirectory = join(dshHome, 'media-missher', 'runs', 'fixture')
     const evidence = fixtureEvidence(runDirectory)
@@ -325,7 +325,7 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
     run(
       resolve(options.runtime),
       resolve(options.cli),
-      ['plugin', '--profile', options.profile, 'remove', 'dsh-media-missher'],
+      ['plugin', '--profile', options.profile, 'remove', '@missher/dsh-media-missher'],
       environment,
       'native_smoke_remove_failed',
     )
@@ -337,7 +337,7 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
       environment,
       'native_smoke_post_remove_dump_failed',
     )
-    if (afterRemoval.includes('id: media-missher') || afterRemoval.includes('name: dsh-media-missher')) {
+    if (afterRemoval.includes('id: media-missher') || afterRemoval.includes('name: "@missher/dsh-media-missher"')) {
       throw new Error('native_smoke_remove_incomplete')
     }
     if (await readFile(adjacentPath, 'utf8') !== 'preserve\n' || await readFile(statePath, 'utf8') !== 'preserve\n') {
@@ -384,7 +384,7 @@ export async function nativeSmoke(argv = process.argv.slice(2)) {
       run(
         resolve(options.runtime),
         resolve(options.cli),
-        ['plugin', '--profile', options.profile, 'remove', 'dsh-media-missher'],
+        ['plugin', '--profile', options.profile, 'remove', '@missher/dsh-media-missher'],
         environment,
         'native_smoke_cleanup_failed',
       )

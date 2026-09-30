@@ -51,7 +51,7 @@ def test_complete_archive_is_repeatable_and_binds_every_source_file(tmp_path):
     (root / "examples/posts.sample.json").write_text('{"synthetic":true}\n')
     output = root / "dist/v17.0.0"
     output.mkdir(parents=True)
-    for name in ["missher-media-missher-17.0.0.tgz", "dsh-media-missher-17.0.0.tgz", "Media-Missher-Agent-Setup-v17.0.0.zip"]:
+    for name in ["missher-media-missher-17.0.0.tgz", "missher-dsh-media-missher-17.0.0.tgz", "Media-Missher-Agent-Setup-v17.0.0.zip"]:
         (output / name).write_bytes(b"synthetic component bytes")
     first = build(root, None)
     checksums = (output / "SHA256SUMS.txt").read_bytes()
