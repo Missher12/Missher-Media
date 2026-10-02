@@ -35,7 +35,7 @@ describe('embedded Media runtime payload', () => {
     await execute(process.execPath, [stageScript, '--output', payload])
 
     const files = await filesBelow(payload)
-    expect(await readFile(join(payload, 'VERSION'), 'utf8')).toBe('17.0.0\n')
+    expect(await readFile(join(payload, 'VERSION'), 'utf8')).toBe('17.0.2\n')
     expect(await readFile(join(payload, '.media-missher-source-tree'), 'utf8')).toBe(
       'media-missher-source-v1\n',
     )

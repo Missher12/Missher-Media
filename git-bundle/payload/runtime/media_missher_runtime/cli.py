@@ -267,6 +267,9 @@ class RuntimeDispatcher:
         self.browser: BrowserSession | None = None
         self._partial_records: dict[str, list[dict[str, Any]]] = {}
         self._progress_sink: Any = None
+        self._preflight_reservations: set[str] = set()
+        from .collection_pacing import CollectionPacing
+        self.pacing = CollectionPacing()
 
     async def __aenter__(self) -> "RuntimeDispatcher":
         self.browser = await BrowserSession.connect(
@@ -287,8 +290,18 @@ class RuntimeDispatcher:
     async def preflight(self, requests: Sequence[CollectionRequest]) -> None:
         if self.browser is None:
             raise RuntimeError("browser dispatcher is not connected")
-        for platform in dict.fromkeys(request.platform for request in requests):
+        platforms = tuple(dict.fromkeys(request.platform for request in requests))
+        # Check every selected platform before the first entry-page navigation.
+        # New invocations refuse cooldowns immediately; only an already-running
+        # bounded plan waits between its batches/targets.
+        for platform in platforms:
+            if platform != "xhs" and self.pacing.remaining(platform):
+                raise SharedSafetyError("platform-cooldown")
+        for platform in platforms:
             try:
+                if platform != "xhs":
+                    self.pacing.reserve(platform)
+                    self._preflight_reservations.add(platform)
                 await self.browser.require_authenticated_page(platform)
             except BrowserRiskError as error:
                 raise PlatformRiskPreflightError(platform, error.code) from error
@@ -303,6 +316,19 @@ class RuntimeDispatcher:
         self.browser.last_exhausted = False
         self.browser.last_stop_reason = None
         try:
+            if request.platform != "xhs":
+                if request.platform in self._preflight_reservations:
+                    self._preflight_reservations.remove(request.platform)
+                    self.pacing.mark_started(request.platform)
+                else:
+                    await self.pacing.wait_and_reserve(request.platform)
+            # Legacy CLI and plan invocations share the same finite batch cap.
+            from dataclasses import replace
+            from .batch_policy import DEFAULT_POLICIES
+            policy = DEFAULT_POLICIES[request.platform]
+            request = replace(request,
+                batch_limit=min(request.target_count or policy.batch_records, policy.batch_records),
+                page_cap=min(request.page_cap or policy.batch_pages, policy.batch_pages))
             return await _collect_with(request, self.browser)
         finally:
             self.last_pages = self.browser.last_pages
@@ -1134,6 +1160,8 @@ class PlanExecutor:
         self.plan = plan
         self.args = args
         self.progress = progress
+        if isinstance(dispatcher, RuntimeDispatcher):
+            dispatcher.pacing.interval = plan.batch_interval_seconds
 
     def _request_for(self, target: Target, context: Any) -> CollectionRequest:
         if target.mode == TASK_MODE_TOPIC:
@@ -1241,7 +1269,7 @@ class PlanExecutor:
                 backend=self.plan.backend,
                 count_mode=context.count_mode,
                 best_effort_budget=context.target_budget,
-                batch_limit=min(count, context.policy.batch_records) if context.count_mode != COUNT_MODE_FIXED else count,
+                batch_limit=min(count, context.policy.batch_records),
                 known_user_ids=context.known_user_ids,
                 continue_page=context.batch_index > 0,
                 page_cap=context.policy.batch_pages,
@@ -1319,13 +1347,27 @@ class PlanExecutor:
         from .exporting import record_kind
         posts = [record for record in records if record_kind(record) == "posts"]
         shortfall = _evidence_shortfall(request, posts)
+        from .observations import missing
+        from .contracts import default_field_groups
+        missing_fields = {field: sum(missing(record.get(field)) or
+                                    (field in {"complete", "text_complete"} and record.get(field) is not True)
+                                    for record in posts)
+                          for field in self.plan.required_fields}
+        missing_fields = {field: count for field, count in missing_fields.items() if count}
+        if missing_fields:
+            shortfall = shortfall or "required-fields-missing"
         if shortfall:
             # Enough IDs cannot satisfy a requested detail/screenshot contract.
             # Preserve verified fields but never turn incomplete evidence into
             # a successful target merely because its count was reached.
             stop_reason = stop_reason or "error"
         if context.checkpoint is not None:
-            context.checkpoint({"evidence_shortfall": shortfall} if shortfall else None, posts)
+            coverage = {group: {field: sum(not missing(record.get(field)) for record in posts)
+                               for field in default_field_groups(target.platform)[group]}
+                        for group in self.plan.field_groups}
+            context.checkpoint({"evidence_shortfall": shortfall,
+                                "missing_required_fields": missing_fields,
+                                "field_group_coverage": coverage}, posts)
         return TaskOutcome(
             records=[dict(record) for record in posts],
             users=[dict(record) for record in records if record_kind(record) != "posts"],
@@ -1460,6 +1502,8 @@ def _run_plan(
                     copy = dict(record)
                     prefix.append(copy); seen[key] = copy
                 elif key is not None:
+                    from .observations import merge_observation
+                    merge_observation(seen[key], record)
                     for source in target_identities(record):
                         add_target_identity(seen[key], source)
         states = {identity: value["state"] for identity, value in snapshots.items()}
@@ -1506,6 +1550,10 @@ def _run_plan(
     )
     try:
         async def execute_plan() -> Any:
+            if not injected and "xhs" in plan.platforms:
+                status = SharedXhsSafetyGate().status()
+                if status["blocked"]:
+                    raise SafetyBlocked(status["reason"], status["remaining_seconds"])
             async with dispatcher:
                 bind_store = getattr(dispatcher, "bind_store", None)
                 if callable(bind_store):
@@ -1580,7 +1628,7 @@ def _run_plan(
     for platform in plan.platforms:
         tasks = [task for task in summary.tasks if task["target"]["platform"] == platform]
         reasons = {task.get("stop_reason") for task in tasks}
-        shortfall = next((task.get("checkpoint", {}).get("evidence_shortfall") for task in tasks if task.get("checkpoint", {}).get("evidence_shortfall") in {"incomplete-record", "screenshot-shortfall"}), None)
+        shortfall = next((task.get("checkpoint", {}).get("evidence_shortfall") for task in tasks if task.get("checkpoint", {}).get("evidence_shortfall") in {"incomplete-record", "screenshot-shortfall", "required-fields-missing"}), None)
         if "risk-stopped" in reasons:
             statuses[platform] = "risk-stopped"
             diagnostics[platform] = {"kind": "risk-stop", "code": summary.risk_code or "risk-signal"}
@@ -1781,8 +1829,8 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
                 )
         except SharedSafetyError as error:
             code = (
-                "collection-busy"
-                if str(error) == "collection-busy"
+                str(error)
+                if str(error) in {"collection-busy", "platform-cooldown", "platform-risk-latched"}
                 else "shared-state-invalid"
             )
             return _diagnostic(diagnostic_platform, "precondition", code)
@@ -1845,7 +1893,7 @@ def main(argv: Sequence[str] | None = None, *, fixed_platform: str | None = None
                     gate.latch(error.code)
                 raise
     except SharedSafetyError as error:
-        code = "collection-busy" if str(error) == "collection-busy" else "shared-state-invalid"
+        code = str(error) if str(error) in {"collection-busy", "platform-cooldown", "platform-risk-latched"} else "shared-state-invalid"
         for platform in requested_platforms:
             print(f"media-missher-diagnostic platform={platform} kind=precondition code={code}", file=sys.stderr)
         return 78

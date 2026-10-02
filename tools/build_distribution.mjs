@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Copyright (c) 2026 Missher. All rights reserved. See LICENSE.
 import { spawnSync } from 'node:child_process'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyPackage } from '../harness-plugin/scripts/verify-package.mjs'
+import { verifyPackage, writeChecksumFile } from '../harness-plugin/scripts/verify-package.mjs'
 import { inspectArchive } from '../agent-plugin/scripts/archive.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -32,8 +33,18 @@ if (!assembleOnly) {
   run('node', ['agent-plugin/scripts/build-setup.mjs', '--output', distribution])
   run('npm', ['pack', '--ignore-scripts', '--pack-destination', distribution], join(root, 'harness-plugin'))
 }
-await verifyPackage(join(distribution, `missher-dsh-media-missher-${version}.tgz`))
+const harnessArchive = join(distribution, `missher-dsh-media-missher-${version}.tgz`)
+const verified = await verifyPackage(harnessArchive)
 inspectArchive(await readFile(join(distribution, `missher-media-missher-${version}.tgz`)))
-run('python3', ['-B', 'tools/distribution_archive.py', '--root', root, ...(validation ? ['--validation', validation] : [])])
+await writeChecksumFile(harnessArchive, verified.sha256)
+run('node', ['tools/sync-dsh-git.mjs', harnessArchive])
+const temporary = await mkdtemp(join(tmpdir(), 'media-distribution-'))
+try {
+  const bundleManifest = join(temporary, 'verified-bundle.json')
+  await writeFile(bundleManifest, JSON.stringify(verified.fileSha256))
+  run('python3', ['-B', 'tools/distribution_archive.py', '--root', root, '--bundle-manifest', bundleManifest, ...(validation ? ['--validation', validation] : [])])
+} finally {
+  await rm(temporary, { recursive: true, force: true })
+}
 run('node', ['tools/verify_distribution.mjs', distribution])
 console.log(`Private distribution ready: ${distribution}`)

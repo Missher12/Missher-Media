@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from ..browser import BrowserSession, PreconditionError, publish_accepted
+from ..extraction import DISPLAY_COUNT_JS, display_metric_fields
 from ..models import CollectionRequest
 from ..safety import classify_response
 
@@ -111,6 +112,8 @@ class WeiboCollector:
             await _raise_for_page_challenge(page)
             data = _creator_data(await _response_payload(response))
             since_id = data.get("since_id")
+            if _empty_cursor(since_id) and hasattr(self.browser, "last_exhausted"):
+                self.browser.last_exhausted = True
             # A repeated cursor means the browser has not advanced; do not count
             # a potentially replayed page toward the requested result.
             if prior_since is not _MISSING and since_id == prior_since:
@@ -134,6 +137,7 @@ class WeiboCollector:
                     page, self.request.uid, lambda: _scroll_and_check(page)
                 )
             except PlaywrightTimeoutError:
+                await _raise_for_page_challenge(page)
                 break
         return records
 
@@ -260,6 +264,8 @@ def _creator_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         raise SourceResponseError("Weibo creator payload data is not an object")
     if not isinstance(data.get("list"), Sequence) or isinstance(data.get("list"), (str, bytes, bytearray)):
         raise SourceResponseError("Weibo creator payload list is not an array")
+    if "since_id" not in data or (data["since_id"] is not None and type(data["since_id"]) not in (str, int)):
+        raise SourceResponseError("Weibo creator schema changed: invalid since_id")
     return data
 
 
@@ -294,10 +300,11 @@ def parse_search_item(item: Mapping[str, Any], keyword: str, *, observed_at: str
     text = clean_html(_text(item.get("text")) or _text(item.get("text_raw")))
     published = _text(item.get("date")) or _text(item.get("created_at"))
     raw_html = sanitize_raw_html(_text(item.get("raw_html")))
+    metrics = display_metric_fields(item)
     return {
         "platform": "weibo", "type": "post", "mblog_id": mblog_id, "title": text, "link": link, "date": published,
-        "liked": _metric(item.get("liked")), "comments": _metric(item.get("comments")), "shares": _metric(item.get("shares")),
-        "collected": _metric(item.get("collected")), "pic_ids": None, "pics": None, "pic_num": None,
+        "liked": metrics["liked"]["value"], "comments": metrics["comments"]["value"], "shares": metrics["shares"]["value"],
+        "collected": metrics["collected"]["value"], "metric_display": metrics, "pic_ids": None, "pics": None, "pic_num": None,
         "source": _text(item.get("source")), "raw_html": raw_html,
         "search_keyword": keyword, "id": mblog_id, "native_id": mblog_id, "url": link,
         "author": _text(item.get("author")), "published_at": published, "observed_at": observed_at or _observed_at(),
@@ -343,17 +350,18 @@ def _append_search_records(records: list[dict[str, Any]], seen: set[str], items:
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
     challenge = await _read_page_challenge(page)
     result = await page.evaluate(
-        """() => {
+        """() => {""" + DISPLAY_COUNT_JS + """
             const cards = Array.from(document.querySelectorAll('#pl_feedlist_index .card-wrap[mid]')).map((card) => {
                 const content = card.querySelector('.card-feed .content');
                 const full = content?.querySelector('[node-type="feed_list_content_full"]');
                 const short = content?.querySelector('[node-type="feed_list_content"]');
                 const from = card.querySelector('.from a');
                 const metric = (type) => {
-                    const text = card.querySelector(`[action-type="${type}"]`)?.textContent || '';
-                    const matched = text.replace(/,/g, '').match(/\\d+/);
-                    return matched ? Number(matched[0]) : null;
+                    const text = card.querySelector(`[action-type="${type}"]`)?.textContent ?? null;
+                    return mmDisplayCount(text);
                 };
+                const metrics = {shares: metric('feed_list_forward'), comments: metric('feed_list_comment'),
+                    collected: metric('feed_list_favorite'), liked: metric('feed_list_like')};
                 const href = from?.getAttribute('href') || null;
                 const authorDomain = href?.match(/^\\/([^\\/?#]+)\\//)?.[1] || null;
                 return {
@@ -361,16 +369,16 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
                     raw_html: full?.outerHTML || short?.outerHTML || content?.outerHTML || null,
                     date: from?.textContent || null, href, author_domain: authorDomain,
                     author: card.querySelector('.name')?.textContent || null,
-                    shares: metric('feed_list_forward'), comments: metric('feed_list_comment'),
-                    collected: metric('feed_list_favorite'), liked: metric('feed_list_like'),
+                    shares: metrics.shares.value, comments: metrics.comments.value,
+                    collected: metrics.collected.value, liked: metrics.liked.value, metric_display: metrics,
                     source: card.querySelector('.from')?.textContent || null,
                 };
             });
             return {cards, next: document.querySelector('.m-page a.next')?.href || null};
         }"""
     )
-    if not isinstance(result, Mapping):
-        return {"risk_text": challenge, "cards": [], "next": None}
+    if not isinstance(result, Mapping) or not isinstance(result.get("cards"), list):
+        raise SourceResponseError("Weibo search observation schema changed")
     observed_risk = challenge or result.get("risk_text")
     return {**result, "risk_text": observed_risk if isinstance(observed_risk, str) else ""}
 

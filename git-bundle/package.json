@@ -1,6 +1,6 @@
 {
   "name": "@missher/dsh-media-missher",
-  "version": "17.0.1",
+  "version": "17.0.2",
   "description": "Private Media@Missher collection Bundle for DeepSeek Harness",
   "private": true,
   "type": "module",

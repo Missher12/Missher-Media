@@ -1054,6 +1054,8 @@ def test_runtime_dispatcher_preflight_attaches_only_the_failing_platform() -> No
                 raise PreconditionError("private server detail")
             return object()
 
+    from runtime.media_missher_runtime.shared_safety import collection_lease, runtime_home
+
     dispatcher = RuntimeDispatcher("http://127.0.0.1:9222")
     dispatcher.browser = Session()
     requests = [
@@ -1061,7 +1063,7 @@ def test_runtime_dispatcher_preflight_attaches_only_the_failing_platform() -> No
         CollectionRequest(platform="xhs", count=1, uid="two"),
     ]
 
-    with pytest.raises(PlatformPreflightError) as failure:
+    with collection_lease(runtime_home()), pytest.raises(PlatformPreflightError) as failure:
         _run(dispatcher.preflight(requests))
 
     assert failure.value.platform == "xhs"
@@ -1357,6 +1359,8 @@ def test_runtime_dispatcher_preflight_requires_authenticated_pages_once_per_plat
             checked.append(platform)
             return object()
 
+    from runtime.media_missher_runtime.shared_safety import collection_lease, runtime_home
+
     dispatcher = RuntimeDispatcher("http://127.0.0.1:9222")
     dispatcher.browser = Session()
     requests = [
@@ -1365,6 +1369,7 @@ def test_runtime_dispatcher_preflight_requires_authenticated_pages_once_per_plat
         CollectionRequest(platform="xhs", count=1, uid="three"),
     ]
 
-    _run(dispatcher.preflight(requests))
+    with collection_lease(runtime_home()):
+        _run(dispatcher.preflight(requests))
 
     assert checked == ["weibo", "xhs"]

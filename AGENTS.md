@@ -1,6 +1,14 @@
 # Media@Missher 项目入口
 
-## 当前审查阶段（2026-09-28）
+## 当前优化交付（2026-10-03）
+
+- 用户已明确“你看着优化吧”，并要求直接完成成品。当前在原开发目录实现采集正确性、可见阻断识别、跨任务节奏、重复观测补全与字段验收；交付统一为 17.0.2。
+- 当前分支 `codex/media-v17-cdp-package`，本轮修改基线 `95961588634577fd0c0b92a1d7abed2576d9ac61`。旧 17.0.0/17.0.1 归档不覆盖；构建在隔离副本进行，不重建开发目录 lib/payload。
+- 新包、验证与安装限制见 [17.0.2 交付记录](docs/releases/v17.0.2.md) 和 `dist/v17.0.2/`。这是本地候选；Git 发布与日常安装按协调者精确交接执行，不能将本地实现说成已安装。
+- Media 源码与分发继续私有。保护用户配置、历史、凭据、浏览器会话、风险和冷却状态；本轮不访问真实平台、不写日常 profile、不安装或重启应用。
+- 以下带日期记录保留为历史；与本节冲突时以本节及用户最新要求为准。
+
+## 历史审查阶段（2026-09-28，执行限制已由后续授权覆盖）
 
 - 当前只做职责分类、状态核验、相关局部回归与文档纠偏；四项新功能尚未实施。详细结论见 [职责与状态复核](docs/RESPONSIBILITY_REVIEW_2026-09-28.md)。
 - 本轮不得沿用旧 Git 授权：不暂存、提交、推送、打标签、发布、合并 PR 或改变仓库可见性，等待用户新的明确命令。源码与分发继续保持私有。
@@ -12,8 +20,8 @@
 ## 目录与版本基准
 
 - 当前开发与审改目录：`/Users/missher/Documents/Projects/02-Media@Missher/开发版/Media@Missher`。`/Users/missher/Desktop/Media@Missher` 是指向同一目录的兼容链接，不是第二份源码。
-- 先读 `PROJECT_CONTEXT.md` 和 `docs/releases/v17.0.0.md`；旧 15.6.0 版本与安装快照见 `docs/CURRENT_BASELINE.md`；剩余事项见 `HANDOVER.md`。
-- 当前交付版本：runtime 17.0.0 / Agent CLI 17.0.0 / Harness Bundle 17.0.0。Git 交付分支为 `codex/media-v17-cdp-package`；后续仍须核验实际工作区、提交和包摘要，不能仅按版本号判断内容。
+- 先读 `PROJECT_CONTEXT.md` 和 `docs/releases/v17.0.2.md`；旧 15.6.0 版本与安装快照见 `docs/CURRENT_BASELINE.md`；剩余事项见 `HANDOVER.md`。
+- 当前本地交付版本：runtime 17.0.2 / Agent CLI 17.0.2 / Harness Bundle 17.0.2。Git 交付分支为 `codex/media-v17-cdp-package`；后续仍须核验实际工作区、提交和包摘要，不能仅按版本号判断内容。
 - 历史交付：2026-09-27 按用户要求完整打包、补齐能力文档、测试并提交私有 Git，统一为 V17（17.0.0）。该轮授权与验收仅对应当时交付，不延续到当前审查；原有安装和冻结包仍为旧版本。
 - `历史基线/Media@Missher` 及其 `.worktrees` 保持只读。其中 `media-official-compat-20260912` 的 Bundle 0.6.1 是独立 DSH 兼容修复来源，尚未合入当前开发版；版本号更大不代表它包含后续功能。不要覆盖或删除该分支，也不要移除现有路径兼容链接。
 - 旧 README、PROJECT_CONTEXT、HANDOVER 等原文已保存在 `docs/history/2026-09-26-before-baseline-cleanup/`。历史文档、旧提示词和旧测试报告只作证据，不作为当前状态或恢复执行指令。

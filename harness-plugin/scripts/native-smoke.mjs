@@ -20,7 +20,7 @@ import { installCurrentProfile, resolveHarnessLayout, harnessEnvironmentPath } f
 import { verifyPackage } from './verify-package.mjs'
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const defaultArchive = join(pluginRoot, 'dist', 'missher-dsh-media-missher-17.0.0.tgz')
+const defaultArchive = join(pluginRoot, 'dist', 'missher-dsh-media-missher-17.0.2.tgz')
 const platforms = ['bilibili', 'xhs', 'douyin', 'weibo']
 
 function help() {

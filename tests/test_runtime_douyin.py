@@ -316,8 +316,8 @@ def _creator(
     )
 
 
-def _search(*items: dict[str, Any], has_more: bool = False, cursor: int = 0) -> Response:
-    return Response({"status_code": 0, "data": [{"aweme_info": item} for item in items], "has_more": has_more, "cursor": cursor}, url="https://www.douyin.com/aweme/v1/web/general/search/single/")
+def _search(*items: dict[str, Any], has_more: bool = False, cursor: int = 0, keyword: str = "term") -> Response:
+    return Response({"status_code": 0, "data": [{"aweme_info": item} for item in items], "has_more": has_more, "cursor": cursor}, url=f"https://www.douyin.com/aweme/v1/web/general/search/single/?{urlencode({'keyword': keyword})}")
 
 
 def test_creator_captures_browser_generated_responses_and_emits_safe_compatibility_schema() -> None:
@@ -469,7 +469,7 @@ def test_empty_or_missing_cursor_exhausts_before_scrolling(source: str, cursor: 
         records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=2, uid="creator"), ProductionBrowser(page)))
     else:
         payload = {"status_code": 0, "data": [{"aweme_info": _aweme("one")}], "has_more": True, "cursor": cursor}
-        page = CapturePage(responses=[Response(payload, url="https://www.douyin.com/aweme/v1/web/general/search/single/"), _search(_aweme("never"), has_more=False)])
+        page = CapturePage(responses=[Response(payload, url="https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"), _search(_aweme("never"), has_more=False)])
         records = _run(search(CollectionRequest(platform="douyin", count=0, page_cap=2, keyword="term"), ProductionBrowser(page)))
 
     assert [record["native_id"] for record in records] == ["one"]
@@ -480,7 +480,7 @@ def test_empty_or_missing_cursor_exhausts_before_scrolling(source: str, cursor: 
 def test_search_uses_response_offset_when_cursor_is_absent() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
-    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"
     first = Response(
         {
             "status_code": 0,
@@ -516,7 +516,7 @@ def test_search_uses_response_offset_when_cursor_is_absent() -> None:
 def test_search_stops_after_a_repeated_response_offset() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
-    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"
     responses = [
         Response(
             {
@@ -563,7 +563,7 @@ def test_search_stops_after_a_repeated_response_offset() -> None:
 def test_search_does_not_guess_a_cursor_when_cursor_and_offset_are_absent() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
-    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"
     first = Response(
         {
             "status_code": 0,
@@ -590,7 +590,7 @@ def test_search_does_not_guess_a_cursor_when_cursor_and_offset_are_absent() -> N
 def test_search_prefers_an_explicit_cursor_over_response_offset() -> None:
     from runtime.media_missher_runtime.platforms.douyin import search
 
-    url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+    url = "https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"
     responses = [
         Response(
             {
@@ -649,7 +649,7 @@ def test_integer_has_more_one_collects_a_second_page_and_zero_does_not_scroll(so
         exhausted = CapturePage(responses=[Response({"status_code": 0, "aweme_list": [_aweme("one")], "has_more": 0, "max_cursor": 1}), _creator(_aweme("never"))])
         exhausted_records = _run(collect_creator(CollectionRequest(platform="douyin", count=0, page_cap=3, uid="creator"), ProductionBrowser(exhausted)))
     else:
-        url = "https://www.douyin.com/aweme/v1/web/general/search/single/"
+        url = "https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term"
         first = Response({"status_code": 0, "data": [{"aweme_info": _aweme("one")}], "has_more": 1, "cursor": 1}, url=url)
         second = Response({"status_code": 0, "data": [{"aweme_info": _aweme("two")}], "has_more": 0, "cursor": 2}, url=url)
         page = CapturePage(responses=[first, second])
@@ -668,8 +668,8 @@ def test_search_navigates_to_exact_host_and_uses_single_or_stream_responses() ->
     from runtime.media_missher_runtime.platforms.douyin import search
 
     stream = _search(_aweme("two"), has_more=False)
-    stream.url = "https://www.douyin.com/aweme/v1/web/general/search/stream/"
-    page = CapturePage(responses=[_search(_aweme("one"), has_more=True, cursor=1), stream])
+    stream.url = "https://www.douyin.com/aweme/v1/web/general/search/stream/?keyword=two+words"
+    page = CapturePage(responses=[_search(_aweme("one"), has_more=True, cursor=1, keyword="two words"), stream])
     records = _run(search(CollectionRequest(platform="douyin", count=2, keyword="two words"), ProductionBrowser(page)))
 
     assert [record["native_id"] for record in records] == ["one", "two"]
@@ -701,7 +701,7 @@ def test_search_unwraps_aweme_info_mix_and_direct_items() -> None:
         responses=[
             Response(
                 payload,
-                url="https://www.douyin.com/aweme/v1/web/general/search/single/",
+                url="https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term",
             )
         ]
     )
@@ -744,11 +744,11 @@ def test_search_ignores_malformed_items_and_crosses_advancing_duplicate_page() -
             "has_more": True,
             "cursor": 1,
         },
-        url="https://www.douyin.com/aweme/v1/web/general/search/single/",
+        url="https://www.douyin.com/aweme/v1/web/general/search/single/?keyword=term",
     )
     duplicate = _search(_aweme("one"), has_more=True, cursor=2)
     page = CapturePage(responses=[malformed, duplicate, _search(_aweme("never"), has_more=False)])
-    assert [record["native_id"] for record in _run(search(CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"), ProductionBrowser(page)))] == ["one", "never"]
+    assert [record["native_id"] for record in _run(search(CollectionRequest(platform="douyin", count=0, page_cap=4, keyword="term"), ProductionBrowser(page)))] == ["ignored-second", "one", "never"]
     assert len(page.responses) == 0
 
 
@@ -818,7 +818,7 @@ def test_navigation_disabled_normalizes_encoded_target_and_allows_matching_conte
         page = CapturePage(url=page_url, responses=[_creator(_aweme("open"), uid=uid)])
         records = _run(collect_creator(CollectionRequest(platform="douyin", count=1, uid=uid), ProductionBrowser(page, allow_navigation=False)))
     else:
-        page = CapturePage(url=page_url, responses=[_search(_aweme("open"))])
+        page = CapturePage(url=page_url, responses=[_search(_aweme("open"), keyword="中文 term")])
         records = _run(search(CollectionRequest(platform="douyin", count=1, keyword="中文 term"), ProductionBrowser(page, allow_navigation=False)))
 
     assert [record["native_id"] for record in records] == ["open"]

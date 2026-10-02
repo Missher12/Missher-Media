@@ -1,6 +1,6 @@
 {
   "name": "@missher/media-missher",
-  "version": "17.0.0",
+  "version": "17.0.2",
   "description": "Media@Missher CLI and shared Skill for shell-capable Agents",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",

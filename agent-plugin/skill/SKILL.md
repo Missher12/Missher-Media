@@ -19,7 +19,7 @@ Run `media-missher --version` and `media-missher --help`. If PATH does not resol
 {{MEDIA_MISSHER_COMMAND}} doctor
 ```
 
-Use that same command prefix for the examples below if PATH is unavailable. Agent package version 17.0.0 and required collection runtime 17.0.0 identify different components. `doctor` reports the installed runtime version and selected platforms without creating files, installing Python, checking CDP, opening Chrome or collecting. Python 3.11/3.12 is needed when provisioning the collection runtime; a reported executable has not been executed by doctor.
+Use that same command prefix for the examples below if PATH is unavailable. Agent package version 17.0.2 and required collection runtime 17.0.2 identify different components. `doctor` reports the installed runtime version and selected platforms without creating files, installing Python, checking CDP, opening Chrome or collecting. Python 3.11/3.12 is needed when provisioning the collection runtime; a reported executable has not been executed by doctor.
 
 All command results are JSON on stdout; collection phase/count/timing events use the fixed `media-missher-progress` prefix on stderr. A successful process exit is 0; partial/failure is 1, invalid arguments 2, needs-setup/preflight 3, risk stop 4, SIGINT 130 and SIGTERM 143. Preserve nonzero results and their current counts. Send cancellation to the CLI and await cleanup; do not kill the browser or retry the interrupted action automatically.
 

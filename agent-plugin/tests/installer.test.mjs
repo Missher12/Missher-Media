@@ -10,8 +10,8 @@ import { inspectArchive, REQUIRED_PAYLOAD } from '../scripts/archive.mjs'
 import { install, runInstallerProcess } from '../scripts/install.mjs'
 
 function archive(overrides = {}, extra = [], omit = []) {
-  const manifest = { name: '@missher/media-missher', version: '17.0.0', type: 'module', bin: { 'media-missher': 'bin/media-missher.mjs' }, license: 'SEE LICENSE IN LICENSE', dependencies: { exceljs: '4.4.0', saxes: '5.0.1' }, ...overrides }
-  const files = [['package.json', JSON.stringify(manifest)], ['bin/media-missher.mjs', 'console.log("17.0.0")'], ['src/skills.mjs', '// skill installer'], ['src/platform.mjs', '// platform'], ['src/targets.mjs', '// target contract'], ['lib/index.js', '// shared core'], ['skill/SKILL.md', 'Skill contract'], ['LICENSE', 'Missher'], ['THIRD_PARTY_NOTICES.md', 'Notices'], ['payload/VERSION', '17.0.0\n'], ['payload/tools/install_media_missher.py', '# payload'], ...extra]
+  const manifest = { name: '@missher/media-missher', version: '17.0.2', type: 'module', bin: { 'media-missher': 'bin/media-missher.mjs' }, license: 'SEE LICENSE IN LICENSE', dependencies: { exceljs: '4.4.0', saxes: '5.0.1' }, ...overrides }
+  const files = [['package.json', JSON.stringify(manifest)], ['bin/media-missher.mjs', 'console.log("17.0.2")'], ['src/skills.mjs', '// skill installer'], ['src/platform.mjs', '// platform'], ['src/targets.mjs', '// target contract'], ['lib/index.js', '// shared core'], ['skill/SKILL.md', 'Skill contract'], ['LICENSE', 'Missher'], ['THIRD_PARTY_NOTICES.md', 'Notices'], ['payload/VERSION', '17.0.2\n'], ['payload/tools/install_media_missher.py', '# payload'], ...extra]
   for (const name of REQUIRED_PAYLOAD) if (!files.some(([path]) => path === name)) files.push([name, name.endsWith('.media-missher-source-tree') ? 'media-missher-source-v1\n' : '# fixture'])
   files.push(['src/capabilities.mjs', '// host-neutral lifecycle'])
   const parts = []
@@ -37,7 +37,7 @@ async function fixture(t, bytes = archive()) {
 function fakeRunner(bytes) {
   const { files } = inspectArchive(bytes)
   return async (command, args, options) => {
-    if (command !== 'npm') return 'Media@Missher CLI 17.0.0\n'
+    if (command !== 'npm') return 'Media@Missher CLI 17.0.2\n'
     const root = join(options.cwd, 'node_modules/@missher/media-missher')
     for (const [name, body] of files) {
       const path = join(root, name.slice(8))
@@ -48,7 +48,7 @@ function fakeRunner(bytes) {
 }
 
 test('archive gate rejects paths, links, duplicate members, extra runtime hooks and malformed headers', () => {
-  assert.equal(inspectArchive(archive()).manifest.version, '17.0.0')
+  assert.equal(inspectArchive(archive()).manifest.version, '17.0.2')
   for (const bytes of [archive({}, [['../profile.json', 'private']]), archive({}, [['payload/runtime/../profile.json', 'private']]), archive({}, [['lib/index.js', 'changed']]), archive({}, [['payload/runtime/linked.py', 'target', '2']]), archive({ scripts: { preinstall: 'echo unexpected' } }), archive({ name: 'someone-else' }), Buffer.from('not gzip')]) assert.throws(() => inspectArchive(bytes))
 })
 

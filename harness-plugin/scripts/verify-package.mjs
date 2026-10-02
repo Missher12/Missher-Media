@@ -70,6 +70,7 @@ export async function verifyPackage(requestedArchive) {
 
   const temporary = await mkdtemp(join(tmpdir(), 'dsh-media-package-'))
   let entrySha256 = ''
+  const fileSha256 = {}
   try {
     await execute('/usr/bin/tar', ['-xzf', archive, '-C', temporary])
     const extractedRoot = join(temporary, 'package')
@@ -94,7 +95,7 @@ export async function verifyPackage(requestedArchive) {
     const manifest = JSON.parse(await readFile(join(extractedRoot, 'package.json'), 'utf8'))
     if (
       manifest.name !== '@missher/dsh-media-missher'
-      || manifest.version !== '17.0.1'
+      || manifest.version !== '17.0.2'
       || manifest.private !== true
       || manifest.author !== 'Missher'
       || manifest.license !== 'SEE LICENSE IN LICENSE'
@@ -110,7 +111,7 @@ export async function verifyPackage(requestedArchive) {
     if (!patch.includes('id: media-missher') || !patch.includes('name: "@missher/dsh-media-missher"')) {
       throw new Error('package_patch_invalid')
     }
-    if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '17.0.0\n') {
+    if (await readFile(join(extractedRoot, 'payload', 'VERSION'), 'utf8') !== '17.0.2\n') {
       throw new Error('package_payload_version_invalid')
     }
     if (
@@ -126,6 +127,10 @@ export async function verifyPackage(requestedArchive) {
         if (source.includes(marker)) throw new Error('package_build_path_leak')
       }
     }
+    for (const path of files) {
+      fileSha256[path.slice('package/'.length)] = createHash('sha256')
+        .update(await readFile(join(temporary, path))).digest('hex')
+    }
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
@@ -136,6 +141,7 @@ export async function verifyPackage(requestedArchive) {
     bytes: bytes.byteLength,
     sha256: createHash('sha256').update(bytes).digest('hex'),
     entrySha256,
+    fileSha256,
   }
 }
 

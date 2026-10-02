@@ -13,7 +13,7 @@ import {
 } from '../src/targets.mjs'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const RUNTIME_REQUIRED = '17.0.0'
+const RUNTIME_REQUIRED = '17.0.2'
 const MAX_COUNT = 500
 const MAX_RUN_DEADLINE_SECONDS = 86400
 const COMMON = ['profile', 'runtime-home', 'output-root']

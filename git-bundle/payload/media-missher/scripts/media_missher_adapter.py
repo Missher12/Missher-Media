@@ -83,7 +83,9 @@ _SAFE_PRECONDITION_CODES = frozenset(
         "plan-executor-missing",
         "plan-manifest-invalid",
         "exclude-file-plan-unsupported",
-        "xhs-cooldown",
+        "platform-cooldown",
+            "platform-risk-latched",
+            "xhs-cooldown",
         "xhs-risk-latched",
         "xhs-safety-busy",
         "xhs-safety-state-invalid",
@@ -99,7 +101,7 @@ RUNTIME_ENTRYPOINTS = (
     "scrape_weibo.py",
 )
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
-REQUIRED_RUNTIME_VERSION = "17.0.0"
+REQUIRED_RUNTIME_VERSION = "17.0.2"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_OWNER_MARKER = ".media-missher-owner.json"
 RUNTIME_OWNER_PAYLOAD = {"name": "media-missher-runtime-home", "schema": 1}
@@ -116,7 +118,7 @@ _MANIFEST_KEYS = frozenset(
 _DIAGNOSTIC_CODES = {
     "ok": frozenset({"ok"}),
     "result": frozenset(
-        {"count-shortfall", "incomplete-record", "screenshot-shortfall"}
+        {"count-shortfall", "incomplete-record", "screenshot-shortfall", "required-fields-missing"}
     ),
     "not-run": frozenset({"preflight-aborted", "prior-risk-stop"}),
     "dependency": frozenset({"module-not-found"}),
@@ -237,6 +239,7 @@ def _validated_manifest_diagnostics(manifest: object) -> dict[str, dict[str, str
         if platform_status == "incomplete" and (kind, code) not in {
             ("result", "incomplete-record"),
             ("result", "screenshot-shortfall"),
+            ("result", "required-fields-missing"),
         }:
             raise ConfigurationError("runtime manifest status and diagnostic differ")
         sanitized[platform] = {"kind": kind, "code": code}
@@ -702,7 +705,11 @@ def _collection_lease(layout: RuntimeLayout):
         raise _CollectionLeaseError("shared-state-invalid") from error
     except RuntimeError as error:
         if type(error).__name__ == "SharedSafetyError":
-            message = "another Media@Missher collection is already running" if str(error) == "collection-busy" else "shared-state-invalid"
+            message = (
+                "another Media@Missher collection is already running" if str(error) == "collection-busy"
+                else "platform-risk-latched" if str(error) == "platform-risk-latched"
+                else "shared-state-invalid"
+            )
             raise _CollectionLeaseError(message) from error
         raise
 
@@ -2197,6 +2204,7 @@ def _preflight_failure(error: str, *, checks: Mapping[str, bool]) -> dict:
     code = (
         "runtime-version-mismatch" if checks.get("runtime_version") is False
         else "collection-busy" if checks.get("collection_lease") is False and error == "another Media@Missher collection is already running"
+        else "platform-risk-latched" if checks.get("collection_lease") is False and error == "platform-risk-latched"
         else "shared-state-invalid" if checks.get("collection_lease") is False
         else None
     )

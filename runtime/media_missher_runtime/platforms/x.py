@@ -1053,13 +1053,19 @@ class XCollector:
 
     async def _capture_while(self, page: Any, predicate: Any, action: Any) -> Any:
         try:
+            await _raise_for_page_risk(page)
             async with page.expect_response(predicate, timeout=CAPTURE_TIMEOUT_MS) as info:
                 await action()
+            response = await info.value
         except Exception as error:  # noqa: BLE001 - a timeout is an empty batch, not a crash
             if type(error).__name__ in {"TimeoutError", "PlaywrightTimeoutError"}:
+                # A challenge can replace the expected response altogether.
+                # Persist it through the normal risk-stop path, not as timeout.
+                await _raise_for_page_risk(page)
                 return None
             raise
-        return await info.value
+        await _raise_for_page_risk(page)
+        return response
 
     # -- page route --------------------------------------------------------
 
@@ -1083,7 +1089,10 @@ class XCollector:
             else:
                 await self._scroll(page)
                 await self._settle(page)
+            await _raise_for_page_risk(page)
+            _require_open_target(page, url)
             payload = await page.evaluate(expression)
+            await _raise_for_page_risk(page)
             if not isinstance(payload, Mapping):
                 raise SourceResponseError("X page observation returned no object")
             page_records = normalize_page_payload(
@@ -1139,12 +1148,15 @@ class XCollector:
         waiter = getattr(page, "wait_for_timeout", None)
         if callable(waiter):
             await waiter(_SCROLL_SETTLE_MS)
+        await _raise_for_page_risk(page)
 
     @staticmethod
     async def _scroll(page: Any) -> None:
+        await _raise_for_page_risk(page)
         await page.evaluate(
             "() => { window.scrollTo(0, document.documentElement.scrollHeight); return true; }"
         )
+        await _raise_for_page_risk(page)
 
 
 def _append(
@@ -1177,11 +1189,11 @@ def _require_open_target(page: Any, url: str) -> None:
 
 
 async def _raise_for_page_risk(page: Any) -> None:
-    from ..extraction import risk_expression
+    from ..page_risk import risk_probe_expression
     probe = getattr(page, "evaluate", None)
     if not callable(probe):
         raise PreconditionError("risk observation unavailable")
-    observation = await probe(risk_expression())
+    observation = await probe(risk_probe_expression("x"))
     if isinstance(observation, Mapping) and observation.get("risk") is True:
         raise CollectionStopped("challenge")
 

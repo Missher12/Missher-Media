@@ -217,16 +217,22 @@ class BestEffortRunner:
         state.phase = "collecting"
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
+        indexed: dict[str, dict[str, Any]] = {}
         def _register(items: Sequence[Mapping[str, Any]]) -> int:
             added = 0
             for item in items:
                 key = identity_of(item, self.policy.platform)
-                if key is None or key in seen:
+                if key is None:
+                    continue
+                if key in seen:
+                    from .observations import merge_observation
+                    merge_observation(indexed[key], item)
                     continue
                 if self.total_budget is not None and len(records) >= self.total_budget:
-                    break
+                    continue
                 seen.add(key)
                 records.append(dict(item))
+                indexed[key] = records[-1]
                 added += 1
             return added
 

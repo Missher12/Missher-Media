@@ -3,7 +3,7 @@ name: media-missher
 description: Collect, validate, and selectively export private media data with Media@Missher. Use for collection requests, saved-run operations, setup, or runtime diagnostics.
 ---
 
-# Media@Missher V17.0.0
+# Media@Missher V17.0.2
 
 Operate the installed shared runtime through this skill's standard-library adapter. The runtime home comes from `MEDIA_MISSHER_HOME` and defaults to `~/.local/share/media-missher`.
 
@@ -116,10 +116,10 @@ Export is a separate, selection-driven, offline step: `media_missher_runs action
 
 解除风险暂停不属于自动修复步骤，只能由用户检查账号后明确执行本地 `xhs_safety.py --acknowledge-risk`。这不会清除批次间隔，不会启动采集，也不会允许继续风险旧运行。详情见仓库 `docs/XHS_RELIABILITY_15.3.0.md`。
 
-## 17.0.0 新设备名单
+## 17.0.2 新设备名单
 
 新设备先在 Harness 使用 media_missher_setup 生成 Excel/CSV 模板，导入平台、博主名称和完整官方主页，查看预览后选择行号。同平台每次可选多位；名称不是身份。名单导入和选择完全离线，不启动浏览器或采集。Git 维护入口为 harness-plugin/scripts/setup-device.mjs，构建后使用同一工具实现。profile 的 active_platforms 限定默认范围；旧 profile 无此字段时使用已配置平台。空目标在 runtime 安装和采集前停止。采集只使用 Chrome CDP，连接已有登录会话；旧 Computer Use 请求返回 backend-retired-computer-use，不自动改写。不添加开机启动项，不调用已退休的 BrowserSkill。选好名单后，用户明确要求打开浏览器时可使用 browser-open（confirm_open=true）启动独立 AI 采集浏览器及本地登录指引；用户手动登录后 browser-check 只核对连接和平台页面，登录状态仍待授权采集的前置检查。按已有授权继续首批采集并展示结果，不因连接成功而自动扩展数量、导航范围或切换后端。
 
-## 17.0.0 共享保护
+## 17.0.2 共享保护
 
-同一用户 HOME 下的新版入口共用 `~/.local/share/media-missher-shared` 的锁与小红书状态。当前、默认及已登记 runtime home 的旧状态保守合并、同步写回；旧客户端不会自动获得全部保护。换端口、后端、浏览器或 runtime home 不会重置新版冷却。不要删除状态或切换 HOME/用户规避暂停。预检与采集共用 17.0.0 版本门槛，版本错误在 CDP 请求前停止；使用配套安装器修正。安装激活后根据本技能或已注册工具说明工作，不依赖维护对话。
+同一用户 HOME 下的新版入口共用 `~/.local/share/media-missher-shared` 的锁与小红书状态。当前、默认及已登记 runtime home 的旧状态保守合并、同步写回；旧客户端不会自动获得全部保护。换端口、后端、浏览器或 runtime home 不会重置新版冷却。不要删除状态或切换 HOME/用户规避暂停。预检与采集共用 17.0.2 版本门槛，版本错误在 CDP 请求前停止；使用配套安装器修正。安装激活后根据本技能或已注册工具说明工作，不依赖维护对话。

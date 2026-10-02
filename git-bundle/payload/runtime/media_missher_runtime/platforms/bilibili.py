@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from ..browser import BrowserSession, PageJson, PreconditionError, publish_accepted
 from ..detail_open import missing_engagement_fields
 from ..models import CollectionRequest
+from ..page_risk import risk_probe_function
 from ..safety import classify_response
 from ..screenshots import ScreenshotError
 
@@ -44,6 +45,20 @@ _MAX_TITLE_CHARS = 100
 _MAX_DESC_CHARS = 20_000
 _SAFE_OBSERVED_API_PATH = re.compile(r"/x/[A-Za-z0-9_./-]{1,180}")
 _DYNAMIC_TARGET_TIMEOUT_MS = 5_000
+_SEARCH_ENDED_JS = """(() => {
+    const nodes = document.querySelectorAll('.search-end, .vui_pagenation--btn-next[disabled], .vui_pagenation--btn-next.vui_button--disabled');
+    return Array.from(nodes).some((node) => {
+        if (!node.isConnected) return false;
+        for (let parent = node; parent; parent = parent.parentElement) {
+            const style = window.getComputedStyle(parent);
+            if (parent.hidden || parent.getAttribute('aria-hidden') === 'true'
+                || style.display === 'none' || style.visibility === 'hidden'
+                || style.visibility === 'collapse' || Number(style.opacity || '1') === 0) return false;
+        }
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    });
+})()"""
 _SENSITIVE_URL_PART = re.compile(
     r"(?:token|secret|password|passwd|credential|cookie|session|authorization|xsec|auth|signature|sign|expires?|expiry)",
     re.IGNORECASE,
@@ -232,6 +247,8 @@ class BilibiliCollector:
             payload = await _response_payload(response)
             _require_feed_payload_binding(response, payload, self.request.uid)
             data = _feed_data(payload)
+            if not data["has_more"] and hasattr(self.browser, "last_exhausted"):
+                self.browser.last_exhausted = True
             added = _append_creator_records(records, native_ids, _items(data.get("items")), self.request.target_count)
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
@@ -248,6 +265,7 @@ class BilibiliCollector:
                     page, self.request.uid, lambda: _scroll(page)
                 )
             except PlaywrightTimeoutError:
+                _raise_for_risk_observation(await _read_dynamic_feed_risk(page))
                 break
         return records
 
@@ -257,33 +275,42 @@ class BilibiliCollector:
         if self.request.complete:
             raise ValueError("complete search is not supported")
         page = self.browser.require_page("bilibili")
-        if getattr(self.browser, "allow_navigation", False):
+        if getattr(self.browser, "allow_navigation", False) and not self.request.continue_page:
             await self._navigate(page, _search_page_url(self.request.keyword))
             try:
                 await _wait_for_search_change(page, [])
             except PlaywrightTimeoutError:
                 pass
-        elif urlparse(page.url).hostname != "search.bilibili.com":
-            raise PreconditionError("an open Bilibili search page is required when navigation is disabled")
+        _require_search_target(page, self.request.keyword)
 
         records: list[dict[str, Any]] = []
         native_ids: set[str] = set(self.request.exclude_ids)
+        previous_snapshot: tuple[str, ...] | None = None
         for page_number in range(self.request.page_cap):
             if hasattr(self.browser, "last_pages"):
                 self.browser.last_pages += 1
+            _require_search_target(page, self.request.keyword)
             observation = await _read_search_cards(page)
+            _require_search_target(page, self.request.keyword)
             _raise_for_risk_observation(observation)
             raw_records = [item for item in _items(observation.get("cards")) if isinstance(item, Mapping)]
-            added = _append_search_records(records, native_ids, raw_records, self.request.keyword, self.request.target_count)
+            snapshot = tuple(sorted({identifier for item in raw_records if (identifier := _text(item.get("bvid")) or _bvid_from_href(item.get("href") or item.get("arcurl")))}))
+            _append_search_records(records, native_ids, raw_records, self.request.keyword, self.request.target_count)
             publish_accepted(self.browser, "bilibili", records)
+            if observation.get("ended") is True and hasattr(self.browser, "last_exhausted"):
+                self.browser.last_exhausted = True
             if self.request.target_count is not None and len(records) >= self.request.target_count:
                 break
-            if added == 0 or page_number + 1 >= self.request.page_cap:
+            if observation.get("ended") is True:
                 break
+            if not snapshot or snapshot == previous_snapshot or page_number + 1 >= self.request.page_cap:
+                break
+            previous_snapshot = snapshot
             await _scroll(page)
             try:
-                await _wait_for_search_change(page, sorted(native_ids))
+                await _wait_for_search_change(page, list(snapshot))
             except PlaywrightTimeoutError:
+                _raise_for_risk_observation(await _read_dynamic_feed_risk(page))
                 break
         return records
 
@@ -499,6 +526,18 @@ def parse_creator_item(item: Mapping[str, Any], *, observed_at: str | None = Non
         "published_at": published, "detail_attempted": False, "detail_source": "list_api",
         "detail_completed": False, "observed_at": observed_at or _observed_at(),
     }
+    metric_keys = {"liked": "like", "comments": "comment", "shares": "forward", "collected": "favorite"}
+    dynamic_values = {field: _metric(module_stats, key, fallback=module_stats.get("reply") if field == "comments" else None) for field, key in metric_keys.items()}
+    video_values = {field: _metric(archive_stats, key) for field, key in {"liked": "like", "comments": "reply", "shares": "share", "collected": "favorite"}.items()}
+    observations = {}
+    if dynamic_id:
+        observations["dynamic"] = _engagement_observation(dynamic_id, "list_api", record["observed_at"], dynamic_values)
+    if bvid:
+        observations["video"] = _engagement_observation(bvid, "list_api", record["observed_at"], video_values)
+    record["engagement_observations"] = observations
+    uses_dynamic = any(value is not None for value in dynamic_values.values())
+    uses_video = any(dynamic_values[field] is None and value is not None for field, value in video_values.items())
+    record["engagement_scope"] = "mixed" if uses_video and (uses_dynamic or not bvid) else "video" if uses_video else "dynamic"
     record["quality_score"] = _quality_score(record)
     return record
 
@@ -898,23 +937,23 @@ async def _response_payload(response: Any) -> Mapping[str, Any]:
 
 
 def _feed_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    data = _mapping(payload.get("data"))
     if payload.get("code") not in (None, 0, "0"):
-        return {}
+        raise SourceResponseError("Bilibili source returned a nonzero payload code")
+    data = payload.get("data")
+    if not isinstance(data, Mapping) or not _is_sequence(data.get("items")):
+        raise SourceResponseError("Bilibili source feed schema changed: expected an items array")
+    if type(data.get("has_more")) not in (bool, int) or data["has_more"] not in (False, True, 0, 1):
+        raise SourceResponseError("Bilibili source feed schema changed: invalid has_more")
     return data
 
 
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
     result = await page.evaluate(
         """() => {
-            const bodyText = document.body?.innerText || '';
-            const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
-            );
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
-            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
+            const risk = (MM_RISK_PROBE)();
             return {
-            risk_text: challengeSelector ? 'challenge-selector' : phrase,
+            risk: risk.risk, risk_text: risk.reason || '',
+            ended: MM_SEARCH_ENDED,
             cards: Array.from(document.querySelectorAll('.bili-video-card, .bili-video-card__wrap'))
             .map((card) => {
                 const text = (...selectors) => {
@@ -954,27 +993,25 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
                 return {bvid, title, href, description, play, duration, tag, author, date};
             })
             };
-        }"""
+        }""".replace("MM_RISK_PROBE", risk_probe_function("bilibili"))
+        .replace("MM_SEARCH_ENDED", _SEARCH_ENDED_JS)
     )
-    if isinstance(result, Mapping):
+    if isinstance(result, Mapping) and isinstance(result.get("cards"), list):
         return result
-    return {"risk_text": "", "cards": result}
+    if isinstance(result, list):
+        return {"risk_text": "", "cards": result}
+    raise SourceResponseError("Bilibili search observation schema changed")
 
 
 async def _read_video_detail(page: Any) -> Mapping[str, Any]:
     observation = await page.evaluate(
         """() => {
-            const bodyText = document.body?.innerText || '';
-            const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
-            );
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
-            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
+            const risk = (MM_RISK_PROBE)();
             return {
             videoData: window.__INITIAL_STATE__?.videoData || null,
-            risk_text: challengeSelector ? 'challenge-selector' : phrase
+            risk: risk.risk, risk_text: risk.reason || ''
             };
-        }"""
+        }""".replace("MM_RISK_PROBE", risk_probe_function("bilibili"))
     )
     return _mapping(observation)
 
@@ -1021,14 +1058,9 @@ async def _wait_for_exact_dynamic_target(page: Any, dynamic_id: str) -> None:
 async def _read_dynamic_feed_risk(page: Any) -> Mapping[str, Any]:
     observation = await page.evaluate(
         """/* MEDIA_MISSHER_DYNAMIC_FEED_RISK */ () => {
-            const bodyText = document.body?.innerText || '';
-            const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
-            );
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控'];
-            const phrase = phrases.find((value) => bodyText.includes(value)) || '';
-            return {risk_text: challengeSelector ? 'challenge-selector' : phrase};
-        }"""
+            const risk = (MM_RISK_PROBE)();
+            return {risk: risk.risk, risk_text: risk.reason || ''};
+        }""".replace("MM_RISK_PROBE", risk_probe_function("bilibili"))
     )
     return _mapping(observation)
 
@@ -1149,19 +1181,8 @@ async def _read_dynamic_detail(
         raise PreconditionError("Bilibili detail identifier mismatch")
     observation = await page.evaluate(
         r"""/* MEDIA_MISSHER_DYNAMIC_DETAIL */ (expectedId) => {
-            const bodyText = document.body?.innerText || '';
-            const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], '
-                + 'iframe[src*="captcha"], [class*="captcha"], .challenge-page, .challenge-overlay'
-            );
-            const phrases = [
-                '请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控',
-                'risk', 'locked', 'blocked', 'cooldown', 'challenge'
-            ];
-            const phrase = phrases.find((value) =>
-                bodyText.toLocaleLowerCase().includes(value.toLocaleLowerCase())
-            ) || '';
-            const riskText = challengeSelector ? 'challenge-selector' : phrase;
+            const risk = (MM_RISK_PROBE)();
+            const riskText = risk.reason || '';
             const containers = Array.from(document.querySelectorAll(
                 'main article, .opus-detail, .opus-detail-container, .bili-dyn-item'
             )).filter((node) => {
@@ -1172,7 +1193,7 @@ async def _read_dynamic_detail(
             });
             const empty = {
                 dynamic_id: containers.length === 1 || riskText ? expectedId : null,
-                risk_text: riskText,
+                risk: risk.risk, risk_text: riskText,
                 liked: null,
                 comments: null,
                 shares: null,
@@ -1212,7 +1233,7 @@ async def _read_dynamic_detail(
                 shares: metric(['[aria-label*="转发"]', '.forward', '.share']),
                 collected: metric(['[aria-label*="收藏"]', '.favorite', '.collect']),
             };
-        }""",
+        }""".replace("MM_RISK_PROBE", risk_probe_function("bilibili")),
         expected_dynamic_id,
     )
     detail = _mapping(observation)
@@ -1220,6 +1241,7 @@ async def _read_dynamic_detail(
         raise PreconditionError("Bilibili detail identifier mismatch")
     return {
         "dynamic_id": detail.get("dynamic_id"),
+        **({"risk": True} if detail.get("risk") is True else {}),
         "risk_text": detail.get("risk_text"),
         "liked": detail.get("liked"),
         "comments": detail.get("comments"),
@@ -1232,6 +1254,7 @@ def _merge_dynamic_detail(
     record: dict[str, Any], detail: Mapping[str, Any]
 ) -> bool:
     merged = False
+    filled = []
     for field in ("liked", "comments", "shares", "collected"):
         if record.get(field) is not None:
             continue
@@ -1243,30 +1266,39 @@ def _merge_dynamic_detail(
                 valid = False
             if valid:
                 record[field] = value
+                filled.append(field)
                 merged = True
+    if filled and isinstance(record.get("dynamic_id"), str):
+        observations = dict(_mapping(record.get("engagement_observations")))
+        previous = dict(_mapping(observations.get("dynamic")))
+        if previous.get("entity_id") != record["dynamic_id"]:
+            previous = _engagement_observation(record["dynamic_id"], "detail_dom", _observed_at(), {})
+        values = dict(_mapping(previous.get("values")))
+        sources = dict(_mapping(previous.get("field_sources")))
+        times = dict(_mapping(previous.get("field_observed_at")))
+        observed_at = _observed_at()
+        for field in filled:
+            values[field], sources[field], times[field] = record[field], "detail_dom", observed_at
+        observations["dynamic"] = {**previous, "source": "detail_dom", "observed_at": observed_at,
+                                   "values": values, "field_sources": sources, "field_observed_at": times}
+        record["engagement_observations"] = observations
     return merged
 
 
 async def _wait_for_search_change(page: Any, previous_ids: list[str]) -> None:
     await page.wait_for_function(
         """(previousIds) => {
-            const bodyText = document.body?.innerText || '';
-            const challenge = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"]'
-            ) || ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控']
-                .some((phrase) => bodyText.includes(phrase));
-            if (challenge) return true;
+            if ((MM_RISK_PROBE)().risk) return true;
             const ids = Array.from(document.querySelectorAll('.bili-video-card a[href*="/video/"], .bili-video-card__wrap a[href*="/video/"]'))
                 .map((link) => link.getAttribute('href')?.match(/\\/video\\/(BV[^/?#]+)/)?.[1])
                 .filter(Boolean);
             const current = Array.from(new Set(ids)).sort();
             const previous = Array.from(new Set(previousIds)).sort();
             const changed = current.length !== previous.length || current.some((value, index) => value !== previous[index]);
-            const ended = Boolean(document.querySelector(
-                '.search-end, .vui_pagenation--btn-next[disabled], .vui_pagenation--btn-next.vui_button--disabled'
-            ));
+            const ended = MM_SEARCH_ENDED;
             return (current.length > 0 && changed) || ended;
-        }""",
+        }""".replace("MM_RISK_PROBE", risk_probe_function("bilibili"))
+        .replace("MM_SEARCH_ENDED", _SEARCH_ENDED_JS),
         arg=previous_ids,
         timeout=10_000,
     )
@@ -1316,6 +1348,17 @@ def _creator_page_url(uid: str) -> str:
 
 def _search_page_url(keyword: str) -> str:
     return f"https://search.bilibili.com/all?{urlencode({'keyword': keyword})}"
+
+
+def _require_search_target(page: Any, keyword: str) -> None:
+    parsed = urlparse(getattr(page, "url", ""))
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "search.bilibili.com"
+        or parsed.path not in {"/all", "/video"}
+        or parse_qs(parsed.query, keep_blank_values=True).get("keyword") != [keyword]
+    ):
+        raise PreconditionError("a matching Bilibili search page is required")
 
 
 def _video_page_url(bvid: str) -> str:
@@ -1594,6 +1637,8 @@ def _response_text(payload: object) -> str | None:
 
 def _raise_for_risk_observation(observation: Mapping[str, Any]) -> None:
     text = _response_text(observation)
+    if observation.get("risk") is True:
+        raise CollectionStopped(text or "challenge")
     if text in _CHALLENGE_REASONS or (text is not None and "captcha" in text.casefold()):
         raise CollectionStopped(text or "captcha")
     decision = classify_response(status=200, payload=observation, text=text)
@@ -1612,6 +1657,8 @@ def _valid_video_data(data: Mapping[str, Any], expected_bvid: str) -> bool:
 
 
 def _merge_video_detail(record: dict[str, Any], data: Mapping[str, Any]) -> None:
+    if data.get("bvid") is not None and record.get("bvid") != data["bvid"]:
+        raise PreconditionError("Bilibili detail identifier mismatch")
     stat = _mapping(data.get("stat"))
     record["title"] = _title_from_description(data.get("title"))
     record["desc"] = _description_text(data.get("desc"))
@@ -1625,10 +1672,37 @@ def _merge_video_detail(record: dict[str, Any], data: Mapping[str, Any]) -> None
     record["title_source"] = "detail_api"
     record["content_source"] = "detail_api"
     record["title_status"] = "placeholder" if _is_placeholder_title(record["title"]) else "source"
-    record["liked"] = _metric(stat, "like")
-    record["comments"] = _metric(stat, "reply")
-    record["shares"] = _metric(stat, "share")
-    record["collected"] = _metric(stat, "favorite")
+    bvid = _text(data.get("bvid")) or _text(record.get("bvid"))
+    observations = dict(_mapping(record.get("engagement_observations")))
+    previous = _mapping(observations.get("video"))
+    if previous.get("entity_id") != bvid:
+        previous = {}
+    previous_values = _mapping(previous.get("values"))
+    previous_sources = _mapping(previous.get("field_sources"))
+    previous_times = _mapping(previous.get("field_observed_at"))
+    observed_at = _observed_at()
+    values, sources, times = {}, {}, {}
+    for field, key in {"liked": "like", "comments": "reply", "shares": "share", "collected": "favorite"}.items():
+        current = _metric(stat, key)
+        # A video's missing metric may only use evidence for the same video.
+        # Dynamic engagement remains in its own observation and never fills it.
+        values[field] = current if current is not None else _metric(previous_values, field)
+        sources[field] = "detail_api" if current is not None else previous_sources.get(field)
+        times[field] = observed_at if current is not None else previous_times.get(field)
+        record[field] = values[field]
+    if bvid:
+        observations["video"] = {"entity_id": bvid, "source": "detail_api", "observed_at": observed_at,
+                                 "values": values, "field_sources": sources, "field_observed_at": times}
+    record["engagement_observations"] = observations
+    record["engagement_scope"] = "video"
+
+
+def _engagement_observation(entity_id: str, source: str, observed_at: str, values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "entity_id": entity_id, "source": source, "observed_at": observed_at, "values": values,
+        "field_sources": {field: source if value is not None else None for field, value in values.items()},
+        "field_observed_at": {field: observed_at if value is not None else None for field, value in values.items()},
+    }
 
 
 def _missing_completion_fields(

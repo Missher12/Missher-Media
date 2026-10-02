@@ -33,7 +33,7 @@ from ..contracts import (
     TOPIC_KIND_SUPER,
     Target,
 )
-from ..extraction import as_items, as_mapping
+from ..extraction import as_items, as_mapping, display_metric_fields
 
 
 WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "www.weibo.com", "m.weibo.cn", "s.weibo.com")
@@ -304,6 +304,7 @@ def normalize_topic_post(
         else f"https://weibo.com/{domain}/{mid}"
     )
     truncated = card.get("truncated") is True
+    metrics = display_metric_fields(card)
     return {
         "platform": "weibo",
         "type": "topic_post",
@@ -325,10 +326,11 @@ def normalize_topic_post(
         "author_id": uid,
         "author_uid": uid,
         "handle": card.get("author_domain"),
-        "liked": _metric_value(card.get("liked")),
-        "comments": _metric_value(card.get("comments")),
-        "shares": _metric_value(card.get("shares")),
-        "collected": _metric_value(card.get("collected")),
+        "liked": metrics["liked"]["value"],
+        "comments": metrics["comments"]["value"],
+        "shares": metrics["shares"]["value"],
+        "collected": metrics["collected"]["value"],
+        "metric_display": metrics,
         "source": card.get("source"),
         "inner_author_name": card.get("retweet_author_name"),
         "via_repost": bool(card.get("retweet_author_name")),
@@ -783,5 +785,4 @@ def _require_open_profile_target(page: Any, target: str) -> None:
 
 async def collect_topic(request: Any, browser: Any) -> list[dict[str, Any]]:
     return await TopicCollector.build(request, browser).collect()
-
 

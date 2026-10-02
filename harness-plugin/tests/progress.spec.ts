@@ -13,8 +13,14 @@ const timing = { schema: 1, phase: 'platform-collection', state: 'completed', pl
 it('projects only fixed controller timings and preflight codes, preserving old summaries', () => {
   const base = { status: 'preflight-failed', run_dir: null, evidence: [] }
   expect(parseControllerSummary(JSON.stringify(base)).phaseTimings).toBeUndefined()
-  expect(parseControllerSummary(JSON.stringify({ ...base, phase_timings: [timing], preflight: { code: 'runtime-version-mismatch', runtime_version: { current: '15.4.0', required: '17.0.0', matches: false }, errors: ['private'] } }))).toMatchObject({ phaseTimings: [timing], preflightCode: 'runtime-version-mismatch', runtimeVersion: { current: '15.4.0', required: '17.0.0' } })
+  expect(parseControllerSummary(JSON.stringify({ ...base, phase_timings: [timing], preflight: { code: 'runtime-version-mismatch', runtime_version: { current: '15.4.0', required: '17.0.2', matches: false }, errors: ['private'] } }))).toMatchObject({ phaseTimings: [timing], preflightCode: 'runtime-version-mismatch', runtimeVersion: { current: '15.4.0', required: '17.0.2' } })
   expect(() => parseControllerSummary(JSON.stringify({ ...base, phase_timings: [{ ...timing, uid: 'private' }] }))).toThrow('controller_progress_invalid')
+})
+
+it('preserves a platform risk latch as a safe preflight reason', () => {
+  const base = { status: 'preflight-failed', run_dir: null, evidence: [] }
+  expect(parseControllerSummary(JSON.stringify({ ...base, preflight: { code: 'platform-risk-latched' } }))).toMatchObject({ preflightCode: 'platform-risk-latched' })
+  expect(() => parseControllerSummary(JSON.stringify({ ...base, preflight: { code: 'unknown-private-reason' } }))).toThrow('controller_preflight_invalid')
 })
 
 it('lets any Agent inspect the latest private snapshot without launching Python', async () => {
@@ -56,7 +62,7 @@ it('accepts the unavailable sentinel produced by Python runtime_version_check', 
   const actualPythonShape = await readFile(new URL('./fixtures/preflight-version-unavailable.json', import.meta.url), 'utf8')
   expect(JSON.parse(actualPythonShape).preflight.runtime_version.current).toBe('unavailable')
   expect(parseControllerSummary(actualPythonShape)).toMatchObject({
-    preflightCode: 'runtime-version-mismatch', runtimeVersion: { current: null, required: '17.0.0' },
+    preflightCode: 'runtime-version-mismatch', runtimeVersion: { current: null, required: '17.0.2' },
   })
   expect(() => parseControllerSummary(actualPythonShape.replace('unavailable', 'private-path-or-secret'))).toThrow('controller_preflight_invalid')
 })

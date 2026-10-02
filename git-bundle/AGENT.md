@@ -4,15 +4,15 @@ description: Onboard the private Media@Missher Harness Bundle on a fresh macOS c
 contentType: How-to
 bundleId: media-missher
 packageName: dsh-media-missher
-bundleVersion: 17.0.0
-productVersion: 17.0.0
+bundleVersion: 17.0.2
+productVersion: 17.0.2
 supportedOS: macOS
 entryTool: media_missher_setup
 ---
 
 # 在新电脑接入 Media@Missher
 
-这份文件是给 Harness Agent 的首启契约。它只负责安装、检查和调用私有的 `dsh-media-missher` Bundle。Bundle 17.0.0 内置的采集主项目版本是 17.0.0，当前支持 macOS。
+这份文件是给 Harness Agent 的首启契约。它只负责安装、检查和调用私有的 `dsh-media-missher` Bundle。Bundle 17.0.2 内置的采集主项目版本是 17.0.2，当前支持 macOS。
 
 ## 先记住这条路径
 
@@ -42,14 +42,14 @@ Markdown 不会自行注册工具。真正的接入由安装包的 `package.json
 - 旧版 Harness 布局可以使用 App 内的 pnpm。不要根据版本号猜路径，交给安装器探测，或把真实路径作为参数传给安装器。
 - 只使用用户已经拿到的本地 Bundle 归档。不要凭空拼接下载 URL，不要从公开仓库或 npm 获取私有 Bundle。
 
-自包含 Setup ZIP 分发已退役；保留的交付方式是从当前源码构建的 Bundle 归档 `dsh-media-missher-17.0.0.tgz`。拿到归档后先用仓库中的保留验包器确认身份，再安装；无法确认归档来源或摘要时停在安装前。
+自包含 Setup ZIP 分发已退役；保留的交付方式是从当前源码构建的 Bundle 归档 `missher-dsh-media-missher-17.0.2.tgz`。拿到归档后先用仓库中的保留验包器确认身份，再安装；无法确认归档来源或摘要时停在安装前。
 
 ## 2. 校验并安装本地 Bundle
 
 先在归档所在目录用保留的验包器核对身份。下面的变量只表示本地文件路径，不要把 Cookie、UID 或其他用户数据写进命令行。
 
 ```bash
-ARCHIVE="/path/to/dsh-media-missher-17.0.0.tgz"
+ARCHIVE="/path/to/missher-dsh-media-missher-17.0.2.tgz"
 node harness-plugin/scripts/verify-package.mjs "$ARCHIVE"
 ```
 
@@ -61,7 +61,7 @@ export ELECTRON_RUN_AS_NODE=1 DSH_TELEMETRY_MODE=DISABLED
   harness-plugin/scripts/install-current-profile.mjs --archive "$ARCHIVE" --profile web
 ```
 
-安装器会在修改 `web` profile 前验证 `dsh-media-missher-17.0.0.tgz`，把精确字节放入当前 `DSH_HOME` 的私有 SHA 命名归档，备份已有 profile 清单，并确认入口可以实际导入、有效配置包含 `id: media-missher` 与 `name: dsh-media-missher`。安装失败时保留备份，不要自动删除或重置 profile。
+安装器会在修改 `web` profile 前验证 `missher-dsh-media-missher-17.0.2.tgz`，把精确字节放入当前 `DSH_HOME` 的私有 SHA 命名归档，备份已有 profile 清单，并确认入口可以实际导入、有效配置包含 `id: media-missher` 与 `name: @missher/dsh-media-missher`。安装失败时保留备份，不要自动删除或重置 profile。
 
 如果 Agent 需要 CLI 诊断，可以使用安装器探测到的同一 Harness CLI：
 
@@ -187,9 +187,9 @@ dsh plugin --profile web remove dsh-media-missher
 
 解除风险暂停不属于自动修复步骤，只能由用户检查账号后明确执行本地 `xhs_safety.py --acknowledge-risk`。这不会清除批次间隔，不会启动采集，也不会允许继续风险旧运行。详情见仓库 `docs/XHS_RELIABILITY_15.3.0.md`。
 
-## 17.0.0 共享保护与进度
+## 17.0.2 共享保护与进度
 
-同一用户 HOME 下的 15.5+ 入口共享采集锁、小红书冷却和风险暂停，换 runtime home、端口或浏览器会话不会获得新额度。默认、当前及已登记的旧状态保守合并并同步写回；未知旧客户端不保证被保护。不要通过删除状态、切换 HOME/用户/旧程序规避暂停。预检与采集均在本地先检查核心 17.0.0，版本不符时使用配套安装器升级，不要反复连接平台。
+同一用户 HOME 下的 15.5+ 入口共享采集锁、小红书冷却和风险暂停，换 runtime home、端口或浏览器会话不会获得新额度。默认、当前及已登记的旧状态保守合并并同步写回；未知旧客户端不保证被保护。不要通过删除状态、切换 HOME/用户/旧程序规避暂停。预检与采集均在本地先检查核心 17.0.2，版本不符时使用配套安装器升级，不要反复连接平台。
 
 运行中可用 media_missher_runs 的 progress 动作查看最近一次调用的本地阶段和计数；这是最后观测的快照，不证明进程仍然存活。当前宿主无实时进度回调，不因工具暂时无输出而重复采集。进度耗时与最终验收状态分别读取，进度不能代替 manifest/工作簿的数据验证。local-progress-unavailable 只代表可选进度存储不可用，应继续读取实际采集结果，不删除或修复未知目录。
 

@@ -7,7 +7,7 @@ export const REQUIRED_PAYLOAD = [
   'payload/.media-missher-source-tree', 'payload/VERSION',
   ...['manage_runs', 'media_missher_adapter', 'media_missher_history', 'media_missher_progress', 'preflight', 'run_collection', 'validate_run'].map(name => `payload/media-missher/scripts/${name}.py`),
   ...['LICENSE', 'THIRD_PARTY_NOTICES.md', '__init__.py', 'requirements.lock'].map(name => `payload/runtime/${name}`),
-  ...['__init__', 'browser', 'cli', 'continuation', 'detail_open', 'models', 'progress', 'safety', 'screenshots', 'shared_safety', 'storage', 'xhs_policy', 'backends', 'batch_policy', 'best_effort', 'capabilities', 'contracts', 'exporting', 'extraction', 'page_collection', 'plan_runner', 'batch_journal'].map(name => `payload/runtime/media_missher_runtime/${name}.py`),
+  ...['__init__', 'browser', 'cli', 'continuation', 'detail_open', 'models', 'progress', 'safety', 'screenshots', 'shared_safety', 'storage', 'xhs_policy', 'backends', 'batch_policy', 'best_effort', 'capabilities', 'contracts', 'exporting', 'extraction', 'page_collection', 'plan_runner', 'batch_journal', 'page_risk', 'collection_pacing', 'safety_control', 'observations'].map(name => `payload/runtime/media_missher_runtime/${name}.py`),
   ...['__init__', '_xhs_detail_enrichment', 'bilibili', 'douyin', 'weibo', 'xhs', 'weibo_topic', 'x'].map(name => `payload/runtime/media_missher_runtime/platforms/${name}.py`),
   ...['scrape_all', 'scrape_bilibili', 'scrape_douyin', 'scrape_weibo', 'scrape_xhs', 'xhs_safety'].map(name => `payload/runtime/scripts/${name}.py`),
   ...['install_media_missher', 'scan_active_residuals'].map(name => `payload/tools/${name}.py`),
@@ -55,7 +55,7 @@ export function inspectArchive(compressed) {
   for (const name of ['bin/media-missher.mjs', 'src/skills.mjs', 'src/platform.mjs', 'src/targets.mjs', 'src/capabilities.mjs', 'lib/index.js', 'skill/SKILL.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', ...REQUIRED_PAYLOAD]) {
     if (!files.has(`package/${name}`)) throw new Error('archive_incomplete')
   }
-  if (files.get('package/payload/VERSION').toString() !== '17.0.0\n'
+  if (files.get('package/payload/VERSION').toString() !== '17.0.2\n'
     || files.get('package/payload/.media-missher-source-tree').toString() !== 'media-missher-source-v1\n') throw new Error('archive_runtime_identity_invalid')
   return { manifest, files }
 }

@@ -19,7 +19,7 @@ _PNG_BASENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,191}\.png")
 DIAGNOSTIC_CODES = {
     "ok": frozenset({"ok"}),
     "result": frozenset(
-        {"count-shortfall", "incomplete-record", "screenshot-shortfall"}
+        {"count-shortfall", "incomplete-record", "screenshot-shortfall", "required-fields-missing"}
     ),
     "not-run": frozenset({"preflight-aborted", "prior-risk-stop"}),
     "dependency": frozenset({"module-not-found"}),
@@ -61,6 +61,8 @@ DIAGNOSTIC_CODES = {
             "plan-executor-missing",
             "plan-manifest-invalid",
             "exclude-file-plan-unsupported",
+            "platform-cooldown",
+            "platform-risk-latched",
             "xhs-cooldown",
             "xhs-risk-latched",
             "xhs-safety-busy",
@@ -128,6 +130,7 @@ def _validate_diagnostic(status: object, value: object) -> None:
     if status == "incomplete" and (kind, code) not in {
         ("result", "incomplete-record"),
         ("result", "screenshot-shortfall"),
+        ("result", "required-fields-missing"),
     }:
         raise ValueError("manifest status and diagnostic do not match")
 

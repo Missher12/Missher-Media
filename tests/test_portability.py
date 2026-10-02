@@ -32,7 +32,7 @@ def _run(
 def make_runtime_home(fake_engine_root):
     home = fake_engine_root.parent / "Runtime @ Home"
     shutil.copytree(fake_engine_root / "scripts", home / "current" / "scripts")
-    (home / "current" / "VERSION").write_text("17.0.0\n", encoding="ascii")
+    (home / "current" / "VERSION").write_text("17.0.2\n", encoding="ascii")
     interpreter = home / "venv" / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(

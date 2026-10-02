@@ -179,13 +179,11 @@ def record_platform_risk(platform: str, code: str) -> None:
     Lease release, expiry and backend switches never clear this marker.
     """
     import time
-    from .batch_journal import atomic_json, read_private_json
+    from .batch_journal import atomic_json
     if platform not in {"bilibili", "xhs", "douyin", "weibo", "x"}:
         raise SharedSafetyError("shared-state-invalid")
     path = shared_directory() / "platform-risk.json"
-    value = read_private_json(path, 65536) if os.path.lexists(path) else {"schema_version": 1, "platforms": {}}
-    if not isinstance(value, dict) or value.get("schema_version") != 1 or not isinstance(value.get("platforms"), dict):
-        raise SharedSafetyError("shared-state-invalid")
+    value = platform_risk_status()
     safe = code if code in {"challenge", "http-403", "http-429", "payload-461", "payload-471", "payload-999", "risk-signal"} else "risk-signal"
     value["platforms"].setdefault(platform, {"code": safe, "observed_at": time.time()})
     atomic_json(path, value)
@@ -206,17 +204,56 @@ def _read_marker(path):
 
 
 def _check_platform_risk():
+    if platform_risk_status()["platforms"]:
+        raise SharedSafetyError("platform-risk-latched")
+
+
+def platform_risk_status():
+    """Read validated state under collection_lease(state_only=True)."""
+    import math
     path = shared_directory() / "platform-risk.json"
     if not os.path.lexists(path):
-        return
+        return {"schema_version": 1, "platforms": {}}
     try:
         value = _read_marker(path)
-        if not isinstance(value, dict) or set(value) != {"schema_version", "platforms"} or value["schema_version"] != 1 or not isinstance(value["platforms"], dict):
+        if not isinstance(value, dict) or set(value) != {"schema_version", "platforms"} or type(value["schema_version"]) is not int or value["schema_version"] != 1 or not isinstance(value["platforms"], dict):
             raise ValueError("risk schema")
-        if value["platforms"]:
-            raise SharedSafetyError("platform-risk-latched")
+        for platform, risk in value["platforms"].items():
+            if platform not in {"bilibili", "xhs", "douyin", "weibo", "x"} or not isinstance(risk, dict) or set(risk) != {"code", "observed_at"}:
+                raise ValueError("risk entry")
+            if not isinstance(risk["code"], str) or risk["code"] not in {"challenge", "http-403", "http-429", "payload-461", "payload-471", "payload-999", "risk-signal"} or type(risk["observed_at"]) not in {int, float} or not math.isfinite(risk["observed_at"]) or risk["observed_at"] < 0:
+                raise ValueError("risk value")
+        return value
     except (ValueError, OSError) as error:
         raise SharedSafetyError("shared-state-invalid") from error
+
+
+def acknowledge_platform_risk(platform):
+    """Explicit operator action under the state-only collection lease.
+
+    Validate first, record the acknowledgement before removing the marker, and
+    never clear another platform or a normal collection cooldown. A failed
+    write conservatively leaves a pause. No collector calls this function.
+    """
+    import time
+    from .batch_journal import atomic_json
+    if platform not in {"bilibili", "xhs", "douyin", "weibo", "x"}:
+        raise SharedSafetyError("shared-state-invalid")
+    value = platform_risk_status()
+    result = None
+    if platform == "xhs":
+        from .xhs_policy import SharedXhsSafetyGate
+        result = SharedXhsSafetyGate().acknowledge()
+    prior = value["platforms"].get(platform)
+    if prior is not None:
+        # One bounded last-acknowledgement receipt per platform, no account data.
+        atomic_json(shared_directory() / f"{platform}-risk-ack.json", {
+            "schema_version": 1, "platform": platform,
+            "risk": prior, "acknowledged_at": time.time(),
+        })
+        del value["platforms"][platform]
+        atomic_json(shared_directory() / "platform-risk.json", value)
+    return result if result is not None else value
 
 
 def _check_legacy_host_lease():

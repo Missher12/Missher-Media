@@ -12,7 +12,7 @@ describe('Harness Bundle manifest', () => {
 
     expect(manifest).toMatchObject({
       name: '@missher/dsh-media-missher',
-      version: '17.0.1',
+      version: '17.0.2',
       type: 'module',
       license: 'SEE LICENSE IN LICENSE',
       author: 'Missher',

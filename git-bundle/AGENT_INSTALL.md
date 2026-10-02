@@ -4,7 +4,7 @@ Give an Agent this sentence with the supplied Setup folder:
 
 > Install Media@Missher following AGENT_INSTALL.md in this folder, add its Skill to your Agent, and guide me through creator import and platform login before the first collection.
 
-This guide belongs to **Agent CLI 17.0.0 / runtime 17.0.0**. It works without DeepSeek Harness. Repository access is unnecessary when using the packaged Setup. The repository remains private and the original software is proprietary, Copyright (c) 2026 Missher. The guide does not authorize a collection, browser launch or account login by itself.
+This guide belongs to **Agent CLI 17.0.2 / runtime 17.0.2**. It works without DeepSeek Harness. Repository access is unnecessary when using the packaged Setup. The repository remains private and the original software is proprietary, Copyright (c) 2026 Missher. The guide does not authorize a collection, browser launch or account login by itself.
 
 Use the host-selected model and reasoning settings, including GPT-6 Astra when the user selected it. This package has no model API client. Continue steps already authorized by the current request; ask only for missing choices that affect the result. Model selection, CLI installation, Skill discovery and a successful task are separate checks.
 
@@ -15,13 +15,13 @@ Use the supplied archive and its exact entry in `SHA256SUMS.txt`. Run from the e
 macOS or Linux:
 
 ```sh
-sh ./install.sh --archive "$PWD/missher-media-missher-17.0.0.tgz" --sha256 "<exact SHA-256 from SHA256SUMS.txt>"
+sh ./install.sh --archive "$PWD/missher-media-missher-17.0.2.tgz" --sha256 "<exact SHA-256 from SHA256SUMS.txt>"
 ```
 
 Windows PowerShell, using an existing WSL2 distribution (check its actual name with `wsl --list --verbose`):
 
 ```powershell
-.\install.ps1 -Archive .\missher-media-missher-17.0.0.tgz -Sha256 '<exact SHA-256 from SHA256SUMS.txt>' -Distribution Ubuntu
+.\install.ps1 -Archive .\missher-media-missher-17.0.2.tgz -Sha256 '<exact SHA-256 from SHA256SUMS.txt>' -Distribution Ubuntu
 ```
 
 Windows uses the **same Linux runtime in WSL2**, not a native Windows collector. Follow https://learn.microsoft.com/windows/wsl/install for WSL prerequisites and https://learn.microsoft.com/windows/wsl/tutorials/gui-apps for WSLg. Continue the commands below in that same distribution and Linux user. Its runtime, profile, results and dedicated browser stay in Linux HOME, never `/mnt/c`. A Windows Agent can execute commands with `wsl.exe --distribution <name> --exec <absolute Linux CLI> ...`; an Agent running inside WSL uses the normal Skill installer. Do not assume a Skill installed in Linux HOME is discoverable by a Windows-native Agent; pass this guide and the installed Skill to that Agent explicitly.
@@ -39,7 +39,7 @@ media-missher doctor
 
 Choose the actual current Agent from `--list`, or supply its documented skill root with `--skill-root /absolute/skills`. Do not install into every detected Agent. If PATH is missing, substitute the installer's absolute `executable` for `media-missher`. Skill installation is separate from activation: reload the host's skills or open a new task if required, and verify that the Agent can read the installed Skill and invoke `--help` in its actual shell. Unknown hosts can read the same Skill directly and use the CLI; no MCP or Cordis runtime is required for this path.
 
-An existing `media-missher` Skill may belong to the separate atomic runtime installer. Do not put a second copy under the same name or force the CLI installer to claim it. Inspect its ownership and version, retain a rollback copy, and use the authorized installer for that entry. A Skill requiring runtime 17.0.0 must not be paired with an installed 15.2.1 runtime; complete the verified upgrade before collection. Never bypass the version check.
+An existing `media-missher` Skill may belong to the separate atomic runtime installer. Do not put a second copy under the same name or force the CLI installer to claim it. Inspect its ownership and version, retain a rollback copy, and use the authorized installer for that entry. A Skill requiring runtime 17.0.2 must not be paired with an installed 15.2.1 runtime; complete the verified upgrade before collection. Never bypass the version check.
 
 `doctor` is offline. Report each unmet prerequisite and follow its next step. A blank device should report missing selected creators; it must not create a runtime, collect, probe CDP or launch a browser. If Python is needed, use `python3.12` or `python3.11`; `MEDIA_MISSHER_INSTALL_PYTHON` can identify the bootstrap interpreter. Installing the CLI is not a successful data collection.
 

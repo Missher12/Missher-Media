@@ -168,7 +168,7 @@ raise SystemExit(75 if mode == "manifest_risk" else 0)
 def make_runtime_layout(fake_engine_root):
     home = fake_engine_root.parent / "runtime-home"
     shutil.copytree(fake_engine_root / "scripts", home / "current" / "scripts")
-    (home / "current" / "VERSION").write_text("17.0.0\n", encoding="ascii")
+    (home / "current" / "VERSION").write_text("17.0.2\n", encoding="ascii")
     runtime_source = Path(__file__).resolve().parents[1] / "runtime"
     policy_package = home / "current" / "media_missher_runtime"
     policy_package.mkdir()
@@ -800,6 +800,35 @@ def test_run_collection_rejects_a_concurrent_collection_before_preflight_or_outp
     }
     assert preflight_called is False
     assert not list(tmp_path.glob("run-*"))
+
+
+@pytest.mark.parametrize("marker", ["latched", "invalid"])
+def test_collection_reports_risk_latch_without_reclassifying_valid_state(
+    fake_engine_root, tmp_path, marker
+):
+    from media_missher_runtime.shared_safety import collection_lease, record_platform_risk, shared_directory
+
+    layout = make_runtime_layout(fake_engine_root)
+    with collection_lease(layout.home, state_only=True):
+        record_platform_risk("xhs", "challenge")
+    path = shared_directory() / "platform-risk.json"
+    if marker == "invalid":
+        path.write_text("invalid json\n")
+    before = path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("risk state must stop before platform preflight or collection")
+
+    summary = run_collection_request(
+        CollectionRequest(platforms=("xhs",), count=1, platform_uids={"xhs": "synthetic"}),
+        layout=layout, data_root=tmp_path / "output", preflight_runner=unexpected,
+    )
+    assert summary["status"] == "preflight-failed"
+    assert summary["preflight"]["code"] == ("platform-risk-latched" if marker == "latched" else "shared-state-invalid")
+    assert summary["preflight"]["checks"]["collection_lease"] is False
+    assert summary["run_dir"] is None
+    assert not (tmp_path / "output").exists()
+    assert path.read_bytes() == before
 
 
 def test_collection_business_oserror_is_not_reclassified_as_lease_failure(

@@ -1,5 +1,7 @@
 /* Copyright (c) 2026 Missher. All rights reserved. See LICENSE. Third-party licenses remain in effect. */
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cosmokit/lib/types/types.d.ts
+import { FileAttachmentRef, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
+
+//#region node_modules/.pnpm/@deepseek-ai+cosmokit@1.8.5/node_modules/@deepseek-ai/cosmokit/lib/types/types.d.ts
 declare function isArrayBufferLike(value: any): value is ArrayBufferLike;
 declare function isArrayBufferSource(value: any): value is Binary.Source;
 /** Binary source detection and base64/hex conversion helpers. */
@@ -14,7 +16,7 @@ declare namespace Binary {
   function fromHex(source: string): ArrayBuffer;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cosmokit/lib/types/misc.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cosmokit@1.8.5/node_modules/@deepseek-ai/cosmokit/lib/types/misc.d.ts
 /** String/symbol keyed dictionary type. */
 type Dict<T = any, K extends string | symbol = string> = { [key in K]: T };
 /** Wrap a value in `Promise`, preserving the resolved type of existing promises. */
@@ -22,7 +24,7 @@ type Promisify<T> = Promise<T extends Promise<infer S> ? S : T>;
 /** Accept a value or promise unless the value type is already promise-like. */
 type Awaitable<T> = [T] extends [Promise<unknown>] ? T : T | Promise<T>;
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cosmokit/lib/types/volatile.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cosmokit@1.8.5/node_modules/@deepseek-ai/cosmokit/lib/types/volatile.d.ts
 /** Shared config references used by schema validators and plugin runtimes. */
 /** Recursively readonly data returned by a volatile config reference. */
 type VolatileSnapshot<T> = T extends object ? { readonly [K in keyof T]: VolatileSnapshot<T[K]> } : T;
@@ -32,7 +34,7 @@ interface Volatile<T> {
   get(): VolatileSnapshot<T>;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec/dist/index.d.ts
+//#region node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec/dist/index.d.ts
 /** The Standard Typed interface. This is a base type extended by other specs. */
 interface StandardTypedV1<Input = unknown, Output = Input> {
   /** The Standard properties. */
@@ -110,7 +112,7 @@ declare namespace StandardSchemaV1 {
 }
 /** The Standard JSON Schema interface. */
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/utils.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/utils.d.ts
 /** Ordered collection of disposable values with O(1) deletion by value. */
 declare class DisposableList<T extends WeakKey> {
   private sn;
@@ -143,7 +145,7 @@ declare const symbols: {
   resolveConfig: typeof Service.resolveConfig;
 };
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/registry.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/registry.d.ts
 /**
  * Service dependency declaration accepted by plugins and the `@Inject`
  * decorator.
@@ -335,7 +337,7 @@ declare class RegistryService {
   plugin(plugin: Plugin, config?: any, getOuterStack?: () => string[]): Fiber & PromiseLike<Fiber>;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/reflect.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/reflect.d.ts
 declare module './context.ts' {
   interface Context {
     /**
@@ -519,7 +521,7 @@ declare class ReflectService {
   bind<T extends Function>(callback: T): T;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/fiber.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/fiber.d.ts
 declare module './context.ts' {
   interface Context extends Pick<Fiber, 'effect'> {
     /** The fiber (plugin runtime instance) that owns this context. */
@@ -681,7 +683,7 @@ declare class Fiber {
   update(config: any, noSave?: boolean): void;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/events.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/events.d.ts
 /** Extract the parameter tuple from a function type. */
 type Parameters<F> = F extends ((...args: infer P) => any) ? P : never;
 /** Extract the return type from a function type. */
@@ -912,7 +914,7 @@ interface Events {
   'internal/dispatch'(mode: DispatchMode, name: string, args: any[], thisArg: any): void;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/logger.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/logger.d.ts
 declare module './context.ts' {
   interface Intercept {
     logger: LoggerService.Intercept;
@@ -1000,7 +1002,7 @@ declare class LoggerService {
   [symbols.invoke](name?: string): Logger;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/context.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/context.d.ts
 /**
  * Public shape of a Cordis context.
  *
@@ -1095,7 +1097,7 @@ declare class Context {
   intercept(name: string, config: any): this;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/cordis/lib/types/service.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/cordis/lib/types/service.d.ts
 /**
  * Base class for services that expose a named API on `ctx`.
  *
@@ -1149,7 +1151,7 @@ declare abstract class Service<out T = never> {
   static [Symbol.hasInstance](instance: any): boolean;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/vendor/schemastery/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+schemastery@3.18.4/node_modules/@deepseek-ai/schemastery/lib/types/index.d.ts
 declare const kSchema: unique symbol;
 declare global {
   namespace Schemastery {
@@ -1353,7 +1355,7 @@ type SetRequired<M extends SchemaMode, R extends boolean> = M extends 'volatile'
 type Schema<S = any, T = S, Mode extends SchemaMode = 'plain'> = Schemastery<S, T, Mode>;
 declare const Schema: Schemastery.Static;
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/scope/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-scope@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-invariants_0d6b19188928ab894325adc32e18b0b5/node_modules/@deepseek-ai/dsh-scope/lib/types/index.d.ts
 /** An opaque, identity-compared scope key. */
 type ScopeKey = object;
 declare const ScopedBrand: unique symbol;
@@ -1366,7 +1368,7 @@ type Scoped<T extends object> = object & {
   readonly [ScopedBrand]: T;
 };
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/util/brand/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-brand@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-brand/lib/types/index.d.ts
 /**
  * Duplicate-install-safe nominal primitive helpers.
  *
@@ -1390,7 +1392,7 @@ type BrandedNumber<B extends string> = number & {
   readonly [BRAND]: B;
 };
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/typert/protocol/lib/types/owned-value.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-typert-protocol@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-typert-protocol/lib/types/owned-value.d.ts
 /** Generic invocation-owned values returned by synchronous Client Context resolvers. */
 /** Shared identity across independently bundled Context providers and Gateway. */
 declare const TYPERT_OWNED_VALUE: unique symbol;
@@ -1400,7 +1402,7 @@ interface TypertOwnedValue<Value> extends Disposable {
   readonly value: Value;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/typert/protocol/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-typert-protocol@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-typert-protocol/lib/types/types.d.ts
 declare const LOOKUP_HOST: unique symbol;
 declare const LOOKUP_WIRE: unique symbol;
 declare const CONTEXT_WIRE: unique symbol;
@@ -1797,7 +1799,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/typert/protocol/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-typert-protocol@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-typert-protocol/lib/types/index.d.ts
 /** Options for an explicit Service-to-Gateway binding. */
 interface TypertGatewayBindingOptions {
   /** Wire namespace; defaults to the Cordis service key. */
@@ -1822,314 +1824,7 @@ declare abstract class TypertRemoteService<out T = never> extends Service<T> {
   protected constructor(ctx: Context, serviceKey: string, options?: TypertGatewayBindingOptions);
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/attachment/attachment/lib/types/error.d.ts
-declare const ATTACHMENT_ERROR_CODES: readonly ["TOO_MANY_IMAGES", "IMAGES_TOO_LARGE", "UNSUPPORTED_IMAGE_TYPE", "INVALID_IMAGE_BASE64", "INVALID_IMAGE", "IMAGE_TYPE_MISMATCH", "IMAGE_TOO_LARGE", "IMAGE_TOO_MANY_PIXELS", "IMAGE_DIMENSION_TOO_LARGE", "INVALID_FILE_BASE64", "INVALID_ATTACHMENT_REF", "ATTACHMENT_CORRUPT", "ATTACHMENT_WRITE_FAILED", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_READ_FAILED", "ATTACHMENT_PROJECTION_UNSUPPORTED", "ATTACHMENT_FILES_UNSUPPORTED"];
-/** Stable attachment failure codes used for protocol error routing. */
-type AttachmentErrorCode = typeof ATTACHMENT_ERROR_CODES[number];
-/**
- * Stable failures suitable for host RPC error mapping.
- *
- * Deliberately re-implements the `HarnessError` shape instead of extending it:
- * the base lives in `@deepseek-ai/dsh-llm`, which itself depends on this
- * package (`ImageBlock` references `ImageAttachmentRef`), so sharing the base
- * would create a dependency cycle. Consumers route on `code`, never on the
- * prototype chain, so the shapes stay interchangeable at the wire boundary.
- */
-declare class AttachmentError extends Error {
-  /** Stable machine-routing failure code. */
-  readonly code: AttachmentErrorCode;
-  /**
-   * @param message - human-readable failure description without raw bytes or host paths.
-   * @param code - stable machine-routing code.
-   * @param options - optional chained cause.
-   */
-  constructor(message: string, code: AttachmentErrorCode, options?: ErrorOptions);
-}
-//#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/attachment/attachment/lib/types/brand.d.ts
-/** Opaque content-addressed identifier for one immutable attachment object. */
-type AttachmentId = Branded<'AttachmentId'>;
-/**
- * Brand a validated storage identifier.
- * @param value - backend-produced opaque identifier.
- * @returns the branded identifier.
- */
-declare function AttachmentId(value: string): AttachmentId;
-/** Opaque deterministic identity for one request-image transformation. */
-type ImageVariantId = Branded<'ImageVariantId'>;
-/**
- * Brand a validated request-image transformation identifier.
- * @param value - attachment-provider-produced opaque identifier.
- * @returns the branded identifier.
- */
-declare function ImageVariantId(value: string): ImageVariantId;
-//#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/attachment/attachment/lib/types/types.d.ts
-/** Raster image formats accepted by the version-one attachment path. */
-type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
-/** Durable, serializable reference to one immutable normalized image. */
-interface ImageAttachmentRef {
-  /** Opaque storage identifier; never a filesystem path or bearer URL. */
-  attachmentId: AttachmentId;
-  /** Media type verified from the stored bytes. */
-  mediaType: ImageMediaType;
-  /** Exact encoded byte length. */
-  bytes: number;
-  /** Intrinsic encoded width in pixels. */
-  width: number;
-  /** Intrinsic encoded height in pixels. */
-  height: number;
-  /** Optional display name stripped of local path information. */
-  name?: string;
-  /**
-   * Input dimensions after applying EXIF orientation and before normalization
-   * scaling. Present only when normalization reduced the image.
-   */
-  originalDimensions?: {
-    width: number;
-    height: number;
-  };
-}
-/**
- * Durable, serializable reference to one verbatim stored file. Files are
- * stored byte-for-byte with no normalization; `attachmentId` is the sha256
- * digest of exactly those bytes.
- */
-interface FileAttachmentRef {
-  /** Opaque content-addressed storage identifier; never a filesystem path or bearer URL. */
-  attachmentId: AttachmentId;
-  /** Sanitized display filename, also the stored object's leaf name. */
-  name: string;
-  /** Exact byte length. */
-  bytes: number;
-}
-/** Base64-encoded file upload accompanying one wire request. */
-interface EncodedFileAttachment {
-  /** Canonical base64 encoding of the file bytes. */
-  data: string;
-  /** Optional display name; it is never interpreted as a path. */
-  name?: string;
-}
-/** Request to durably commit one file verbatim. */
-interface SaveFileAttachment {
-  data: Uint8Array;
-  /** Optional browser/provider display name; it is never interpreted as a path. */
-  name?: string;
-}
-/** Request to durably commit one file from bounded byte chunks. */
-interface SaveFileStreamAttachment {
-  /** Exact file bytes in order; providers must not retain the complete sequence in memory. */
-  data: AsyncIterable<Uint8Array>;
-  /** Optional cancellation for source reads and storage writes. */
-  signal?: AbortSignal;
-  /** Optional browser/provider display name; it is never interpreted as a path. */
-  name?: string;
-}
-/** Deployment-resolved limits used by upload admission and request buffering. */
-interface ImageAttachmentLimits {
-  maxImageBytes: number;
-  maxImagesPerMessage: number;
-  maxMessageImageBytes: number;
-  maxImagePixels: number;
-  /** Maximum intrinsic width and maximum intrinsic height in pixels for one image. */
-  maxImageDimension: number;
-  mediaTypes: readonly ImageMediaType[];
-}
-/**
- * Browser-submitted prompt content accepted by Host prompt endpoints; the
- * accepting Host promotes image parts to durable references through
- * `ctx.attachments.admitPromptContent()` before any message is created, so a wire caller can
- * never cite an attachment it did not upload.
- */
-type PromptContentPart = {
-  readonly type: 'text';
-  readonly text: string;
-} | {
-  readonly type: 'image';
-  readonly mediaType: ImageMediaType;
-  readonly data: string;
-  readonly name?: string;
-};
-/** Host prompt content whose file receipts are resolved and whose image bytes await admission. */
-type AttachmentAdmissionPart = PromptContentPart | {
-  readonly type: 'file';
-  readonly attachment: FileAttachmentRef;
-};
-/** Host-admitted prompt content with every attachment represented by its durable reference. */
-type AdmittedPromptContentPart = {
-  readonly type: 'text';
-  readonly text: string;
-} | {
-  readonly type: 'image';
-  readonly attachment: ImageAttachmentRef;
-} | {
-  readonly type: 'file';
-  readonly attachment: FileAttachmentRef;
-};
-/** Request to validate and durably commit one image. */
-interface SaveImageAttachment {
-  data: Uint8Array;
-  /** Caller-declared media type, checked against fully decoded bytes. */
-  mediaType: ImageMediaType;
-  /** Optional browser/provider display name; it is never interpreted as a path. */
-  name?: string;
-}
-/** Stored image bytes returned after reference and digest verification. */
-interface StoredImageAttachment {
-  ref: ImageAttachmentRef;
-  data: Uint8Array;
-}
-/** Deterministic request-image target selected by one exact model route for one attachment. */
-interface ImageRequestTarget {
-  /** Target width in pixels; a target above the source keeps the source width. */
-  width: number;
-  /** Target height in pixels; a target above the source keeps the source height. */
-  height: number;
-  /** Encoded-byte target before base64 expansion or Files API upload; the smallest quality-ladder output is kept when no quality fits. */
-  maxBytes: number;
-}
-/** Cached request version derived from one provider-independent normalized attachment. */
-interface RequestImageAttachment {
-  /** Cache and upload-index key over the attachment id, policy, and fixed encoder parameters. */
-  variantId: ImageVariantId;
-  /** Durable normalized attachment from which this request version was derived. */
-  attachment: ImageAttachmentRef;
-  /** Encoded request bytes. */
-  data: Uint8Array;
-  mediaType: ImageMediaType;
-  bytes: number;
-  width: number;
-  height: number;
-  /** Provider-compatible sample depth proven after request encoding. */
-  depth: 'uchar';
-  /** Provider-compatible color space proven after request encoding. */
-  space: 'srgb';
-  /** Whether the encoded request version retains an alpha channel. */
-  hasAlpha: boolean;
-}
-//#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/attachment/attachment/lib/types/index.d.ts
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    attachments: AttachmentStore;
-  }
-}
-/** Immutable binary attachment service. Implementations validate bytes before publishing a reference. */
-declare abstract class AttachmentStore extends Service {
-  constructor(ctx: Context);
-  /** Deployment-resolved image policy used by authoritative and fast-path validation. */
-  abstract readonly imageLimits: ImageAttachmentLimits;
-  /**
-   * Validate one image without persisting it.
-   * Batch callers validate every member before saving any member.
-   * @param input - encoded bytes, declared media type, and optional display name.
-   * @returns completion after the encoded raster has been fully decoded.
-   */
-  abstract validateImage(input: SaveImageAttachment): Promise<void>;
-  /**
-   * Validate one ordered image batch before committing any member.
-   * Validation failures start no writes; storage failures return no partial
-   * references, although already published content-addressed objects may stay
-   * unreachable until a future retention policy collects them.
-   * @param inputs - encoded images in their owning message order.
-   * @returns durable references in the exact input order.
-   */
-  protected validateImageBatch(inputs: readonly SaveImageAttachment[]): void;
-  /**
-   * Validate and durably commit one ordered image batch.
-   * @param inputs - encoded images in owning-message order.
-   * @returns durable normalized attachment references in the same order after every member succeeds.
-   */
-  saveImages(inputs: readonly SaveImageAttachment[]): Promise<readonly ImageAttachmentRef[]>;
-  /**
-   * Admit one Host prompt and replace each uploaded image with its durable reference.
-   * Text and durable file references pass through unchanged. A prompt without image parts performs no storage operation.
-   * @param content - prompt parts in message order after file receipt resolution.
-   * @returns admitted prompt parts in the same order as `content`.
-   * @throws AttachmentError when the image batch is refused.
-   */
-  admitPromptContent(content: readonly AttachmentAdmissionPart[]): Promise<AdmittedPromptContentPart[]>;
-  /**
-   * Decode and durably commit one canonical base64 file upload.
-   * @param input - canonical base64 bytes and optional display name.
-   * @returns the durable content-addressed file reference.
-   * @throws AttachmentError when the encoding or storage operation is refused.
-   */
-  admitEncodedFile(input: EncodedFileAttachment): Promise<FileAttachmentRef>;
-  /**
-   * Identify a failure emitted by this attachment capability by its stable code.
-   * @param error - value caught from an attachment operation.
-   * @returns whether the value is an attachment failure.
-   */
-  isAttachmentError(error: unknown): error is AttachmentError;
-  /**
-   * Validate and durably commit one image before its owning session event is appended.
-   * The returned reference describes the persisted normalized image. When
-   * normalization reduces the raster, its `originalDimensions` records the
-   * orientation-applied input dimensions.
-   * @param input - encoded bytes, declared media type, and optional display name.
-   * @returns the durable content-addressed normalized image reference.
-   */
-  abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>;
-  /**
-   * Read one image and verify that bytes still match the recorded reference.
-   * @param ref - durable reference from the session log.
-   * @param signal - optional cancellation for backend read and verification work.
-   * @returns the verified bytes and normalized attachment reference.
-   * @throws the signal reason when aborted, or a storage error when verification fails.
-   */
-  abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>;
-  /**
-   * Locate the provider-owned normalized object in the harness host filesystem.
-   * @param ref - durable normalized attachment reference.
-   * @returns an absolute host path, or undefined when this backend is not host-file-backed.
-   * @throws an AttachmentError when the durable reference is invalid.
-   */
-  imageHostPath(ref: ImageAttachmentRef): string | undefined;
-  /**
-   * Durably commit one file byte-for-byte before its owning session event is
-   * appended. Files carry no admission limits: any byte content and length is
-   * accepted, and the stored object is the exact submitted bytes. Backends
-   * without verbatim file storage keep this default rejection.
-   * @param input - exact bytes and optional display name.
-   * @returns the durable content-addressed file reference.
-   */
-  saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef>;
-  /**
-   * Durably commit one file byte-for-byte from bounded chunks. Providers must
-   * apply backpressure and must not collect the complete file in memory.
-   * Backends without streamed verbatim storage keep this default rejection.
-   * @param input - ordered exact bytes, optional cancellation, and display name.
-   * @returns the durable content-addressed file reference.
-   */
-  saveFileStream(input: SaveFileStreamAttachment): Promise<FileAttachmentRef>;
-  /**
-   * Read and verify one verbatim stored file as bounded chunks. Providers must
-   * not collect the complete file in memory. Backends without verbatim file
-   * reads keep this default rejection.
-   * @param ref - durable reference from the session log.
-   * @param signal - optional cancellation for backend reads and verification work.
-   * @returns exact file bytes in order; integrity failures reject the iteration.
-   */
-  readFileStream(ref: FileAttachmentRef, signal?: AbortSignal): AsyncIterable<Uint8Array>;
-  /**
-   * Locate the verbatim stored file object in the harness host filesystem.
-   * @param ref - durable file reference.
-   * @returns an absolute host path, or undefined when this backend is not host-file-backed.
-   * @throws an AttachmentError when the durable reference is invalid.
-   */
-  fileHostPath(ref: FileAttachmentRef): string | undefined;
-  /**
-   * Generate or read one deterministic model-request version from the stored normalized image.
-   * @param ref - durable provider-independent normalized attachment reference.
-   * @param target - route-chosen dimensions and byte target; an unmet byte target yields the smallest ladder output.
-   * @param signal - optional cancellation.
-   * @returns request bytes and the cache/upload identity covering every transform input.
-   */
-  readImageRequest(ref: ImageAttachmentRef, target: ImageRequestTarget, signal?: AbortSignal): Promise<RequestImageAttachment>;
-}
-//#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/brand.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/brand.d.ts
 /** Stable identity carried by one message across inbox, log, and model-request boundaries. */
 type MessageId = Branded<'MessageId'>;
 /**
@@ -2174,7 +1869,7 @@ type ReasoningEffortId = Branded<'ReasoningEffortId'>;
  */
 declare function ReasoningEffortId(id: string): ReasoningEffortId;
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/message.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/message.d.ts
 /** Provider/model identity and adapter-private replay data for an assistant message. */
 interface AssistantProviderMetadata {
   /** Provider route that produced the message. */
@@ -2304,7 +1999,7 @@ interface MessageRoleMap {
 /** Any persisted conversation message, discriminated by its `role`. */
 type Message = MessageRoleMap[keyof MessageRoleMap];
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/types.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /**
@@ -2800,7 +2495,7 @@ interface GenerateOptions {
   purpose?: 'compaction' | 'session-title';
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/retry-policy.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/retry-policy.d.ts
 /** Fully resolved backoff shared by both retry modes. */
 interface ResolvedRetryBackoff {
   readonly initialDelayMs: number;
@@ -2820,7 +2515,7 @@ interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {
 /** Immutable provider policy captured when its adapter route is registered. */
 type ResolvedRetryPolicy = ResolvedNormalRetryPolicy | ResolvedAlwaysRetryPolicy;
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/call-config.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/call-config.d.ts
 /**
  * Provider, model, reasoning effort, and sampling scalars of one conversation's
  * requests. Every field maps 1:1 onto the same-named `GenerateOptions` field;
@@ -2844,7 +2539,7 @@ interface LlmCallConfigAdapterDefaults {
   maxTokens?: true;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/assistant-stream.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/assistant-stream.d.ts
 /** Lossless compact records embedded in durable Assistant attempt events. */
 type AssistantStreamRecord = {
   readonly type: 'text-chunks';
@@ -2872,7 +2567,7 @@ type AssistantStreamRecord = {
   readonly chunk: StreamChunk;
 };
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/llm/llm/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-llm@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Context {
     llm: LlmRuntime;
@@ -3218,14 +2913,14 @@ declare class LlmRuntime extends TypertRemoteService {
   private streamWithRegistration;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/util/values/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-util-values@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4/node_modules/@deepseek-ai/dsh-util-values/lib/types/index.d.ts
 /** Duplicate-install-safe JSON and immutable-value helpers. @module @deepseek-ai/dsh-util-values */
 /** A value that round-trips through JSON without loss. */
 type JsonValue = null | boolean | number | string | JsonValue[] | {
   [key: string]: JsonValue;
 };
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/session/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-session@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-scope@0._c9dee8deba3bd498ce58eb9c566c157f/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts
 /** Identifies one session in the store (and its persistence artifacts). */
 type SessionId = Branded<'SessionId'>;
 /**
@@ -3731,7 +3426,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 } //# sourceMappingURL=types.d.ts.map
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/session/lib/types/surface.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-session@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-scope@0._c9dee8deba3bd498ce58eb9c566c157f/node_modules/@deepseek-ai/dsh-session/lib/types/surface.d.ts
 /** Readonly history immediately before a message-projection event. */
 interface SessionMessageProjectionContext {
   /** Current message-producing event sequences in model-visible order. */
@@ -3767,7 +3462,7 @@ interface SessionSurface {
   readonly contentGeneration: number;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/session/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-session@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-scope@0._c9dee8deba3bd498ce58eb9c566c157f/node_modules/@deepseek-ai/dsh-session/lib/types/index.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sessions: SessionStore;
@@ -4196,7 +3891,7 @@ declare class SessionStore extends Service {
   private _resolveForkSource;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/agent/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-agent@0.2.0-rc.2_b872d4d836bb263e5b3a50782f98c977/node_modules/@deepseek-ai/dsh-agent/lib/types/types.d.ts
 /** Public live-agent handle; the runtime face augments its live capabilities. */
 interface Agent {
   /** Session-backed Agent identity. */
@@ -4283,7 +3978,7 @@ declare module '@deepseek-ai/dsh-session/types' {
   }
 } //# sourceMappingURL=types.d.ts.map
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/agent/lib/types/runtime-types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-agent@0.2.0-rc.2_b872d4d836bb263e5b3a50782f98c977/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts
 declare module '@deepseek-ai/dsh-system-prompt' {
   interface AssembleContext {
     /** Agent for this assembly; absent on diagnostics. When present, `scope` must identify the same agent. */
@@ -4675,7 +4370,7 @@ declare module '@deepseek-ai/cordis' {
   }
 } //# sourceMappingURL=runtime-types.d.ts.map
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/agent/lib/types/projection.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-agent@0.2.0-rc.2_b872d4d836bb263e5b3a50782f98c977/node_modules/@deepseek-ai/dsh-agent/lib/types/projection.d.ts
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     /** The agent session's open/last turn and step boundary facts (whole value). */
@@ -4683,7 +4378,7 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   }
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/agent/lib/types/model-selection.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-agent@0.2.0-rc.2_b872d4d836bb263e5b3a50782f98c977/node_modules/@deepseek-ai/dsh-agent/lib/types/model-selection.d.ts
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'model-selection': {
@@ -4693,7 +4388,7 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 /** Complete provider, model, and optional reasoning effort selected for one live Agent. */
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/system-prompt/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-system-prompt@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-in_af0aba1f40fabd5fd7c0d5c00aaf1202/node_modules/@deepseek-ai/dsh-system-prompt/lib/types/index.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Context {
     systemPrompt: SystemPrompt;
@@ -4933,7 +4628,7 @@ declare class SystemPrompt extends Service {
   assemble(context?: AssembleContext): Promise<PromptAssembly>;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/agent/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-agent@0.2.0-rc.2_b872d4d836bb263e5b3a50782f98c977/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Context {
     agents: AgentRegistry;
@@ -5295,7 +4990,7 @@ declare class AgentRegistry extends Service {
   private releaseInitiatorRun;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/tools/lib/types/presentation.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-tools@0.2.0-rc.2_c6e351a6a6cfd1c2a664558bffcd410d/node_modules/@deepseek-ai/dsh-tools/lib/types/presentation.d.ts
 /**
  * Category of a tool call, used by a UI to pick an icon or treatment. The
  * provider-neutral vocabulary lets tools describe themselves without depending
@@ -5656,7 +5351,7 @@ interface WebFetchResultView {
   truncated: boolean;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/tools/lib/types/json-schema.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-tools@0.2.0-rc.2_c6e351a6a6cfd1c2a664558bffcd410d/node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.d.ts
 /** Scalar JSON values supported by `enum` and `const`. */
 type JsonSchemaScalar = string | number | boolean | null;
 /** Single-type keywords accepted by the enforced subset. */
@@ -5693,7 +5388,7 @@ interface JsonSchemaNode {
   examples?: JsonValue;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/tools/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-tools@0.2.0-rc.2_c6e351a6a6cfd1c2a664558bffcd410d/node_modules/@deepseek-ai/dsh-tools/lib/types/types.d.ts
 /** Payload recorded when one nested PTC mode Tool dispatch starts. */
 interface PtcDispatchStartEventData {
   rootCallId: ToolCallId;
@@ -5748,7 +5443,7 @@ declare module '@deepseek-ai/dsh-session/types' {
   }
 } //# sourceMappingURL=types.d.ts.map
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/sandbox/sandbox/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-sandbox@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-llm@0.2._2cc6ce11d95db65b014013a78bf96eaa/node_modules/@deepseek-ai/dsh-sandbox/lib/types/index.d.ts
 /**
  * File-effect policy for confined processes. `read-only` permits only required
  * sinks such as `/dev/null`; `workspace-write` also permits the workspace and a
@@ -5865,7 +5560,7 @@ declare abstract class SandboxProvider extends Service {
   abstract confine(argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv>;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/ptc-runtime/ptc-runtime/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-ptc-runtime@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-sand_4155676c2ed50d82ee5ca85b286479c1/node_modules/@deepseek-ai/dsh-ptc-runtime/lib/types/types.d.ts
 /**
  * One host-side function exposed to the program as an async callable. The
  * runtime bridges calls to it (possibly across a serialization boundary), so
@@ -6013,7 +5708,7 @@ interface PtcRunResult {
   error?: PtcRunFailure;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/ptc-runtime/ptc-runtime/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-ptc-runtime@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-sand_4155676c2ed50d82ee5ca85b286479c1/node_modules/@deepseek-ai/dsh-ptc-runtime/lib/types/index.d.ts
 declare module '@deepseek-ai/cordis' {
   interface Context {
     ptcRuntime: PtcRuntime;
@@ -6069,7 +5764,7 @@ declare abstract class PtcRuntime extends Service {
   abstract run(spec: PtcRunSpec): Promise<PtcRunResult>;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/interaction/user-approval/lib/types/types.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-user-approval@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-ag_59b6495f3d67c48b6302de68db6f8bcf/node_modules/@deepseek-ai/dsh-user-approval/lib/types/types.d.ts
 /**
  * Pairs one `approval/asked` audit event with its `approval/decided`.
  * Service-issued (one fresh id per {@link ApprovalService.request} call).
@@ -6144,7 +5839,7 @@ declare module '@deepseek-ai/cordis' {
   }
 } //# sourceMappingURL=types.d.ts.map
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/interaction/user-approval/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-user-approval@0.2.0-rc.2_@deepseek-ai+cordis@4.0.4_@deepseek-ai+dsh-ag_59b6495f3d67c48b6302de68db6f8bcf/node_modules/@deepseek-ai/dsh-user-approval/lib/types/index.d.ts
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'user-approval': {
@@ -6279,7 +5974,7 @@ declare class ApprovalService extends Service {
   private decide;
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/tools/lib/types/ptc.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-tools@0.2.0-rc.2_c6e351a6a6cfd1c2a664558bffcd410d/node_modules/@deepseek-ai/dsh-tools/lib/types/ptc.d.ts
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** Images deferred from a successful PTC subcall's final result. */
@@ -6289,7 +5984,7 @@ declare module '@deepseek-ai/dsh-llm' {
   }
 }
 //#endregion
-//#region ../../../../../../../Projects/03-DeepSeek-Harness/升级候选/cordis-0.2.0-rc.2-20260930/packages/core/tools/lib/types/index.d.ts
+//#region node_modules/.pnpm/@deepseek-ai+dsh-tools@0.2.0-rc.2_c6e351a6a6cfd1c2a664558bffcd410d/node_modules/@deepseek-ai/dsh-tools/lib/types/index.d.ts
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** Tool availability changes supplied by the tool registry. */
@@ -7254,7 +6949,7 @@ interface ProgressEvent {
 }
 //#endregion
 //#region src/runtime.d.ts
-declare const EMBEDDED_VERSION = "17.0.0";
+declare const EMBEDDED_VERSION = "17.0.2";
 interface RuntimeLayout {
   python: string;
   payloadRoot: string;

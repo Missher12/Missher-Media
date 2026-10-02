@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from ..browser import PreconditionError
 from ..detail_open import matches_exact_detail_page
+from ..page_risk import risk_probe_function
 
 
 COMMENT_SCROLL_LIMIT = 3
@@ -50,14 +51,8 @@ _VISIBLE_AND_RISK = r"""
             && Number(style.opacity || '1') !== 0
             && rect.width > 0 && rect.height > 0;
     };
-    const body = document.body?.innerText || '';
-    const challenge = document.querySelector(
-        '.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]'
-    );
-    const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-    const risk_text = challenge
-        ? 'challenge-selector'
-        : (phrases.find((word) => body.includes(word)) || '');
+""" + "const risk = (" + risk_probe_function("xhs") + ")();" + """
+    const risk_text = risk.risk ? (risk.reason || 'challenge-selector') : '';
 """
 
 _READ_COMMENTS_SCRIPT = (

@@ -4,7 +4,7 @@ This reference defines the shared runtime layout, configuration precedence, priv
 
 ## Resolve the runtime home
 
-The repository `VERSION` file is the authoritative product version. Media@Missher V17.0.0 uses `17.0.0`; its controller rejects an older installed core before live preflight. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
+The repository `VERSION` file is the authoritative product version. Media@Missher V17.0.2 uses `17.0.2`; its controller rejects an older installed core before live preflight. The installer reports this product version separately from its unique UTC timestamp-and-random-suffix deployment release. Do not replace the unique deployment release with a fixed product version because upgrades and recovery paths depend on release uniqueness.
 
 `MEDIA_MISSHER_HOME` selects the shared runtime home. When it is unset, the runtime and installed skills use `~/.local/share/media-missher`. OpenClaw is retired on the current machine; its source package and dual-skill installer mode remain only for backward compatibility with historical environments.
 
@@ -92,10 +92,10 @@ A plan may only tighten a platform's own limits: batch pages, batch records, and
 
 Mixing backends inside one run is not supported, because one run has exactly one browser owner. Use a separate authorized run for the other backend.
 
-## Creator list onboarding (17.0.0)
+## Creator list onboarding (17.0.2)
 
 Use the offline Harness `media_missher_setup` tool: template, import, preview, then activate explicit preview row numbers. The CSV/XLSX columns are platform, creator_name and homepage_url. Import strips URL query/fragment values and requires an official creator homepage; it never resolves names or short links online. Several accounts on one platform may be selected in one import; a display name stays a label and is never an identity. The private profile retains platform_uids for compatibility, creator_targets for display, and active_platforms for the current default selection. Unselected stored targets remain available only when explicitly selected. The Git controller respects active_platforms unless --platform is supplied; a legacy profile without that field defaults to configured targets. No setup action launches Chrome or installs the collection runtime.
 
-## Shared protection (17.0.0)
+## Shared protection (17.0.2)
 
 Runtime installation paths still follow MEDIA_MISSHER_HOME. Collection protection is separately shared under `~/.local/share/media-missher-shared`, using the same user HOME across entrypoints. Do not override HOME, delete shared state, switch browser/account/backend, or use an older client to evade a pause. Default/current/registered legacy homes are retained and their XHS states conservatively merged and synchronized under locks. Unknown legacy clients and another OS user/HOME are outside this coordination boundary.

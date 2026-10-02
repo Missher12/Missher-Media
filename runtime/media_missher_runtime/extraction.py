@@ -13,7 +13,12 @@ of them caps how many items it returns.
 from __future__ import annotations
 
 import json
+import math
+import re
+from numbers import Real
 from typing import Any, Mapping, Sequence
+
+from .page_risk import risk_probe_expression
 
 MAX_ITEMS = 200
 MAX_TEXT_CHARS = 8000
@@ -27,9 +32,76 @@ def _options(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def display_count(value: object) -> dict[str, Any]:
+    """Parse a rendered count without presenting abbreviated values as exact."""
+    raw = value.strip()[:128] if isinstance(value, str) else None
+    number: int | float | None = None
+    precision = "missing"
+    if isinstance(value, Real) and not isinstance(value, bool):
+        if 0 <= value <= 9_007_199_254_740_991 and math.isfinite(value):
+            number = value
+            precision = "exact"
+    elif isinstance(value, str) and len(value) <= 128:
+        compact = re.sub(r"[,，\s]", "", value)
+        match = re.fullmatch(
+            r"(?:点赞|评论|转发|收藏|播放|赞)?(\d+(?:\.\d+)?)([千万亿kKmMbB]?)(\+?)"
+            r"(?:次|人|赞|条回复|条转帖|likes?|comments?|repl(?:y|ies)|reposts?|retweets?|bookmarks?|views?|followers|following)?"
+            r"(?:\.(?:like|unlike|reply|repost|undorepost|bookmark|removebookmark))?",
+            compact, re.IGNORECASE,
+        )
+        if match:
+            amount, unit, plus = match.groups()
+            factor = {"千": 1_000, "万": 10_000, "亿": 100_000_000, "k": 1_000, "m": 1_000_000, "b": 1_000_000_000, "": 1}.get(unit.lower())
+            candidate = float(amount) * factor if factor is not None else math.inf
+            if math.isfinite(candidate) and candidate <= 9_007_199_254_740_991:
+                number = int(candidate) if candidate.is_integer() else candidate
+                precision = "approximate" if unit or plus else "exact"
+    return {"raw": raw, "value": number, "precision": precision}
+
+
+def display_metric_fields(item: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Retain raw display precision while accepting legacy numeric card fields."""
+    displayed = item.get("metric_display")
+    displayed = displayed if isinstance(displayed, Mapping) else {}
+    result = {}
+    for name in ("liked", "comments", "shares", "collected"):
+        detail = displayed.get(name)
+        detail = detail if isinstance(detail, Mapping) else {}
+        value = detail.get("raw")
+        if value is None:
+            value = item.get(name)
+            if value is None:
+                value = detail.get("value")
+        result[name] = display_count(value)
+        if result[name]["value"] is not None and detail.get("precision") == "approximate":
+            result[name]["precision"] = "approximate"
+    return result
+
+
+DISPLAY_COUNT_JS = r"""
+const mmDisplayCount = (value) => {
+  const raw = typeof value === 'string' ? value.trim().slice(0, 128) : null;
+  let number = null, precision = 'missing';
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER) {
+    number = value; precision = 'exact';
+  } else if (typeof value === 'string' && value.length <= 128) {
+    const matched = value.replace(/[,，\s]/g, '').match(/^(?:点赞|评论|转发|收藏|播放|赞)?(\d+(?:\.\d+)?)([千万亿kKmMbB]?)(\+?)(?:次|人|赞|条回复|条转帖|likes?|comments?|repl(?:y|ies)|reposts?|retweets?|bookmarks?|views?|followers|following)?(?:\.(?:like|unlike|reply|repost|undorepost|bookmark|removebookmark))?$/i);
+    if (matched) {
+      const factor = {'':1, '千':1000, '万':10000, '亿':100000000, k:1000, m:1000000, b:1000000000}[matched[2].toLowerCase()];
+      const candidate = Number(matched[1]) * factor;
+      if (Number.isFinite(candidate) && candidate <= Number.MAX_SAFE_INTEGER) {
+        number = candidate; precision = matched[2] || matched[3] ? 'approximate' : 'exact';
+      }
+    }
+  }
+  return {raw, value:number, precision};
+};
+"""
+
+
 #: Shared helpers injected into every extractor. They are deliberately small so
 #: the expression stays reviewable and never reaches outside the document.
-_HELPERS = """
+_HELPERS = DISPLAY_COUNT_JS + """
 const mmVisible = (element) => {
   if (!element || !element.isConnected) return false;
   for (let current = element; current; current = current.parentElement) {
@@ -61,11 +133,7 @@ const mmHref = (element) => {
   if (!value) return null;
   try { return new URL(value, document.location.origin).href; } catch (error) { return null; }
 };
-const mmInt = (value) => {
-  if (value === null || value === undefined) return null;
-  const matched = String(value).replace(/[,\\s]/g, '').match(/\\d+/);
-  return matched ? Number(matched[0]) : null;
-};
+const mmInt = (value) => mmDisplayCount(value).value;
 """
 
 
@@ -118,22 +186,7 @@ RISK_PHRASES: tuple[str, ...] = (
 
 def risk_expression() -> str:
     """Return a fixed risk probe that reads only the live document."""
-
-    return _expression(
-        """
-  for (const selector of mmOptions.selectors) {
-    for (const element of mmAll(document, selector)) {
-      if (mmVisible(element)) return { risk: true, reason: 'challenge-selector' };
-    }
-  }
-  const body = mmText(document.body) || '';
-  for (const phrase of mmOptions.phrases) {
-    if (body.includes(phrase)) return { risk: true, reason: phrase };
-  }
-  return { risk: false, reason: null };
-""",
-        {"selectors": list(RISK_SELECTORS), "phrases": list(RISK_PHRASES)},
-    )
+    return risk_probe_expression("weibo")
 
 
 LOGIN_REQUIRED_PHRASES: tuple[str, ...] = (
@@ -321,8 +374,10 @@ def weibo_topic_expression() -> str:
     const retweetAuthor = forwarded ? mmText(forwarded.querySelector('.name')) : null;
     const metric = (type) => {
       const node = card.querySelector('[action-type="' + type + '"]');
-      return node ? mmInt(node.textContent) : null;
+      return mmDisplayCount(node ? node.textContent : null);
     };
+    const metrics = {liked: metric('feed_list_like'), comments: metric('feed_list_comment'),
+      shares: metric('feed_list_forward'), collected: metric('feed_list_favorite')};
     posts.push({
       mid,
       text: mmText(full || short || card.querySelector('.card-feed .content')),
@@ -333,10 +388,11 @@ def weibo_topic_expression() -> str:
       author_uid: authorUid,
       author_href: authorHref,
       retweet_author_name: retweetAuthor,
-      liked: metric('feed_list_like'),
-      comments: metric('feed_list_comment'),
-      shares: metric('feed_list_forward'),
-      collected: metric('feed_list_favorite'),
+      liked: metrics.liked.value,
+      comments: metrics.comments.value,
+      shares: metrics.shares.value,
+      collected: metrics.collected.value,
+      metric_display: metrics,
       source: mmText(card.querySelector('.from')),
     });
   }
@@ -457,6 +513,8 @@ def probe_kind(expression: object) -> str | None:
 
     if not isinstance(expression, str):
         return None
+    if "MEDIA_MISSHER_VISIBLE_RISK" in expression:
+        return "risk"
     if "mmOptions" not in expression:
         return None
     for name, marker in PROBE_MARKERS.items():

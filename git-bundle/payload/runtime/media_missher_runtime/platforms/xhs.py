@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from ..browser import BrowserSession, PreconditionError
 from ..detail_open import matches_exact_detail_page, missing_engagement_fields
 from ..models import CollectionRequest
+from ..page_risk import risk_probe_function
 from ..safety import classify_response
 from ..screenshots import ScreenshotError
 from ..xhs_policy import PAGE_INTERVAL_MS
@@ -34,6 +35,9 @@ try:
 except ImportError:  # pragma: no cover - browser is optional during offline tests
     PlaywrightError = RuntimeError
     PlaywrightTimeoutError = TimeoutError
+
+
+_RISK_SCRIPT = "const risk = (" + risk_probe_function("xhs") + ")(); const risk_text = risk.risk ? (risk.reason || 'challenge-selector') : '';"
 
 
 _HOST = "www.xiaohongshu.com"
@@ -1307,10 +1311,7 @@ async def _read_creator_cards(page: Any) -> Mapping[str, Any]:
 async def _read_search_cards(page: Any) -> Mapping[str, Any]:
     value = await page.evaluate("""() => {
         /* search card business fields */
-        const body = document.body?.innerText || '';
-        const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        const risk_text = challenge ? 'challenge-selector' : (phrases.find((word) => body.includes(word)) || '');
+""" + _RISK_SCRIPT + """
         const isVisible = (element) => {
             if (!element || !element.isConnected) return false;
             const style = window.getComputedStyle(element);
@@ -1405,9 +1406,8 @@ async def _read_search_cards(page: Any) -> Mapping[str, Any]:
 
 async def _read_detail_html(page: Any) -> Mapping[str, Any]:
     value = await page.evaluate("""() => {
-        const body = document.body?.innerText || ''; const modal = document.querySelector('.note-container');
-        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        const risk_text = !modal ? '' : (phrases.find((word) => body.includes(word)) || '');
+""" + _RISK_SCRIPT + """
+        const modal = document.querySelector('.note-container');
         const count = (selector) => modal?.querySelector(selector)?.textContent || null;
         return {risk_text, metrics: {liked: count('.engage-bar .like-wrapper .count'), collected: count('.engage-bar .collect-wrapper .count'), comments: count('.engage-bar .chat-wrapper .count')}};
     }""")
@@ -1433,9 +1433,8 @@ async def _wait_for_detail_metrics(
 
 async def _raise_for_challenge(page: Any) -> None:
     value = await page.evaluate("""() => {
-        const body = document.body?.innerText || ''; const selector = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        return {risk_text: selector ? 'challenge-selector' : (phrases.find((word) => body.includes(word)) || '')};
+""" + _RISK_SCRIPT + """
+        return {risk_text};
     }""")
     _raise_for_observation(value if isinstance(value, Mapping) else {})
 
@@ -1469,10 +1468,7 @@ async def _wait_for_search_settled(page: Any) -> None:
 async def _read_search_settlement(page: Any) -> Mapping[str, Any]:
     value = await page.evaluate("""() => {
         /* search settlement observation */
-        const body = document.body?.innerText || '';
-        const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        const risk_text = challenge ? 'challenge-selector' : (phrases.find((word) => body.includes(word)) || '');
+""" + _RISK_SCRIPT + """
         const isVisible = (element) => {
             if (!element) return false;
             const style = window.getComputedStyle(element);
@@ -1499,10 +1495,8 @@ async def _read_search_settlement(page: Any) -> Mapping[str, Any]:
 async def _wait_for_card_change(page: Any, note_ids: list[str]) -> None:
     await page.wait_for_function("""(prior) => {
         /* unseen note card */
-        const body = document.body?.innerText || '';
-        const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-        const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-        if (challenge || phrases.some((word) => body.includes(word))) return true;
+""" + _RISK_SCRIPT + """
+        if (risk_text) return true;
         const priorSet = new Set(prior);
         const ids = Array.from(document.querySelectorAll('.feeds-page .search-layout__main .feeds-container .note-item[data-note-id]')).map((el) => el.getAttribute('data-note-id')).filter(Boolean);
         return ids.some((noteId) => !priorSet.has(noteId));
@@ -1515,10 +1509,8 @@ async def _wait_for_note_card(page: Any, note_id: str) -> bool:
         await page.wait_for_function("""(expected) => {
             /* exact note card rendered */
             /* challenge-selector */
-            const body = document.body?.innerText || '';
-            const challenge = document.querySelector('.geetest_panel, .geetest_holder, iframe[src*="captcha"], [class*="captcha"]');
-            const phrases = ['请完成验证','访问受限','请求过于频繁','账号异常','风控','安全验证','验证码'];
-            if (challenge || phrases.some((word) => body.includes(word))) return true;
+""" + _RISK_SCRIPT + """
+            if (risk_text) return true;
             return Array.from(document.querySelectorAll('#userPostedFeeds .note-item[data-note-id], .feeds-page .note-item[data-note-id]'))
                 .some((item) => item.getAttribute('data-note-id') === expected);
         }""", arg=note_id, timeout=10_000)

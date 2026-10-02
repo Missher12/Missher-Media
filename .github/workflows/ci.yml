@@ -66,7 +66,10 @@ jobs:
       - run: pnpm test
       - run: pnpm exec tsc --noEmit
       - run: pnpm run pack:bundle
-      - run: pnpm run verify:package -- --write-checksum dist/dsh-media-missher-17.0.0.tgz
+      - name: Verify the current Bundle archive
+        run: |
+          version=$(node -p "require('./package.json').version")
+          pnpm run verify:package -- --write-checksum "dist/missher-dsh-media-missher-${version}.tgz"
 
   agent-entry:
     strategy:

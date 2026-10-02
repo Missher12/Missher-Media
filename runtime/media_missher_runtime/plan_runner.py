@@ -694,6 +694,8 @@ def _remember(
         record = dict(item)
         key = _record_identity(record, target.platform)
         if key is not None and key in known:
+            from .observations import merge_observation
+            merge_observation(next(row for row in held if _record_identity(row, target.platform) == key), record)
             continue
         if key is not None:
             known.add(key)
@@ -712,6 +714,8 @@ def _with_held(
     for item in [*holder.get("records", ()), *holder.get("held", ())]:
         key = _record_identity(item, target.platform)
         if key is not None and key in seen:
+            from .observations import merge_observation
+            merge_observation(next(row for row in merged if _record_identity(row, target.platform) == key), item)
             continue
         if key is not None:
             seen.add(key)
@@ -733,6 +737,8 @@ def _absorb_records(
         key = _record_identity(record, target.platform)
         if key is not None and key in seen_records:
             existing = next(row for row in records if _record_identity(row, target.platform) == key)
+            from .observations import merge_observation
+            merge_observation(existing, record)
             if target.identity not in target_identities(existing):
                 add_target_identity(existing, target.identity)
                 added += 1

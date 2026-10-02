@@ -4,11 +4,14 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { inspectArchive } from '../agent-plugin/scripts/archive.mjs'
 import { verifyPackage } from '../harness-plugin/scripts/verify-package.mjs'
 
-const directory = resolve(process.argv[2] ?? 'dist/v17.0.0')
+const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const currentVersion = (await readFile(join(repository, 'VERSION'), 'utf8')).trim()
+const directory = process.argv[2] ? resolve(process.argv[2]) : join(repository, 'dist', `v${currentVersion}`)
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 const manifest = JSON.parse(await readFile(join(directory, 'PACKAGE.json'), 'utf8'))
 assert.equal(manifest.private, true)
@@ -22,10 +25,10 @@ assert.equal(agent.manifest.version, manifest.version)
 assert.equal(agent.files.get('package/payload/VERSION').toString().trim(), manifest.version)
 for (const name of ['DATA_CAPABILITIES.md', 'QUICKSTART.md', 'AGENT_INSTALL.md']) assert.ok(agent.files.has(`package/${name}`), name)
 for (const name of agent.files.keys()) assert.ok(!/(?:computer_use\.py|browser_skill\.py|computer-use\.mjs)$/.test(name), name)
-await verifyPackage(join(directory, manifest.harnessPackage))
+const harness = await verifyPackage(join(directory, manifest.harnessPackage))
 const check = spawnSync('python3', ['-B', '-c', `
 import hashlib,json,pathlib,sys,zipfile
-folder=pathlib.Path(sys.argv[1]); manifest=json.loads((folder/'PACKAGE.json').read_text())
+folder=pathlib.Path(sys.argv[1]); manifest=json.loads((folder/'PACKAGE.json').read_text()); bundle_files=json.loads(sys.argv[2])
 def sha(data):return hashlib.sha256(data).hexdigest()
 for key in ('sourcePackage','completePackage','setupFile'):
  with zipfile.ZipFile(folder/manifest[key]) as archive:
@@ -40,6 +43,14 @@ for key in ('sourcePackage','completePackage','setupFile'):
    assert receipt['sourceTreeSha256']==manifest['sourceTreeSha256']
    for name,expected in receipt['files'].items():assert sha(archive.read(prefix+name))==expected,name
    assert archive.read(prefix+'VERSION').decode().strip()==manifest['version']
+   root_package=json.loads(archive.read(prefix+'package.json'))
+   bundle_package=json.loads(archive.read(prefix+'git-bundle/package.json'))
+   assert root_package['version']==bundle_package['version']==manifest['version']
+   assert root_package['dsh']['bundle']['patch']=='./git-bundle/cordis.patch.yml'
+   assert archive.read(prefix+'git-bundle/payload/VERSION').decode().strip()==manifest['version']
+   assert prefix+root_package['main'] in names
+   frozen={name.removeprefix('git-bundle/'):digest for name,digest in receipt['files'].items() if name.startswith('git-bundle/')}
+   assert frozen==bundle_files,'source Git bundle differs from verified Harness package'
   elif key=='completePackage':
    for line in archive.read(prefix+'SHA256SUMS.txt').decode().splitlines():
     expected,name=line.split('  ',1);assert sha(archive.read(prefix+name))==expected,name
@@ -48,6 +59,6 @@ for key in ('sourcePackage','completePackage','setupFile'):
    for name in ('DATA_CAPABILITIES.md','QUICKSTART.md','AGENT_INSTALL.md','examples/posts.sample.json'):assert prefix+name in names
    assert sha(archive.read(prefix+manifest['agentPackage']))==manifest['packageSha256']
 print('All ZIP entries, source file hashes, embedded component hashes and guides verified.')
-`, directory], { encoding: 'utf8', shell: false })
+`, directory, JSON.stringify(harness.fileSha256)], { encoding: 'utf8', shell: false })
 if (check.error || check.status !== 0) throw new Error(`distribution_zip_verification_failed:${check.stderr}`)
 console.log(JSON.stringify({ status: 'passed', version: manifest.version, sourceFiles: manifest.sourceFileCount, sourceTreeSha256: manifest.sourceTreeSha256, packageSha256: manifest.packageSha256, setupSha256: manifest.setupSha256, archiveChecks: check.stdout.trim() }, null, 2))

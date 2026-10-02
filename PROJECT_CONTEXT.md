@@ -1,5 +1,15 @@
 # Media@Missher 当前项目摘要
 
+## 2026-10-03 当前交付
+
+运行时、Agent CLI、DSH Bundle 本轮统一为 **17.0.2**。实现范围与验证见 [本版记录](docs/releases/v17.0.2.md)，审查起点见 [优化审查](docs/COLLECTION_OPTIMIZATION_REVIEW_2026-10-03.md)。维护目录与唯一后端继续以 AGENTS.md 为准。
+
+已实现精确搜索绑定、B 站增量与继续页修复、抖音完整 mix 展开、展示数值/来源保护、共享可见阻断检测、X 等待超时风险检查、持久正常间隔与单批上限、重复观测补全及计划字段验收。人工维护入口同步解除指定平台风险，保留冷却和其他平台状态。
+
+当前为本地源码与隔离构建候选，日常安装、远端 Git、本地 CDP/真实平台各自单独报告；不能沿用下文历史安装状态当成现状。交付后由共享安装负责人核验新鲜日常基线、备份并安装。源码分支起点为 `95961588634577fd0c0b92a1d7abed2576d9ac61`；不包含任何真实账号或采集数据。
+
+## 以下为此前交付记录
+
 2026-09-29 追加 UI-REFINE：当前 DSH 包名统一为 `@missher/dsh-media-missher`，配置和存储标识保留。此处为源码候选；本轮安装与验收以协调目录 `coordination/2026-09-29/ui-refinements/` 的回执为准，下面的版本与透明空格等描述保留为历史。
 
 更新：2026-09-27。当前交付以 [17.0.0 记录](docs/releases/v17.0.0.md) 为准；[docs/CURRENT_BASELINE.md](docs/CURRENT_BASELINE.md) 保留此前冻结基准；后续工作见 [HANDOVER.md](HANDOVER.md)。原有按日期叠加的完整记录已[原样归档](docs/history/2026-09-26-before-baseline-cleanup/PROJECT_CONTEXT.md)。

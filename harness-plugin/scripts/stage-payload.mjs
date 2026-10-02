@@ -67,7 +67,7 @@ for (const name of ['DATA_CAPABILITIES.md', 'QUICKSTART.md', 'AGENT_INSTALL.md']
   await copyFile(resolve(repositoryRoot, name), resolve(pluginRoot, name))
 }
 
-if (await readFile(resolve(output, 'VERSION'), 'utf8') !== '17.0.0\n') {
+if (await readFile(resolve(output, 'VERSION'), 'utf8') !== '17.0.2\n') {
   await rm(output, { recursive: true, force: true })
   throw new Error('payload_version_mismatch')
 }

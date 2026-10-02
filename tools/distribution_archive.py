@@ -4,12 +4,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import tempfile
 import zipfile
 
-SOURCE_DIRECTORIES = (".github", "runtime", "media-missher", "openclaw-media-missher", "agent-plugin", "harness-plugin", "tools", "tests", "docs", "examples")
-SOURCE_FILES = (".gitignore", ".media-missher-source-tree", "VERSION", "LICENSE", "COPYRIGHT.md", "THIRD_PARTY_NOTICES.md", "README.md", "AGENT_INSTALL.md", "DATA_CAPABILITIES.md", "QUICKSTART.md", "PROJECT_CONTEXT.md", "HANDOVER.md", "AGENTS.md", "install.sh", "install.ps1", "Install-Media-Missher-from-GitHub.command")
+SOURCE_DIRECTORIES = (".github", "runtime", "media-missher", "openclaw-media-missher", "agent-plugin", "harness-plugin", "git-bundle", "tools", "tests", "docs", "examples")
+SOURCE_FILES = (".gitignore", ".media-missher-source-tree", "VERSION", "package.json", "LICENSE", "COPYRIGHT.md", "THIRD_PARTY_NOTICES.md", "README.md", "AGENT_INSTALL.md", "DATA_CAPABILITIES.md", "QUICKSTART.md", "PROJECT_CONTEXT.md", "HANDOVER.md", "AGENTS.md", "install.sh", "install.ps1", "Install-Media-Missher-from-GitHub.command")
 SKIP = frozenset({"node_modules", "lib", "payload", "dist", ".work", ".git", ".superpowers", ".pytest_cache", "__pycache__", ".DS_Store"})
 FORBIDDEN = frozenset({".env", "cookies", "cookies.json", "credentials", "credentials.json", "browser-profile", "chrome-profile", "screenshots", "recovery", "profile.json"})
 EPOCH = (2026, 9, 27, 0, 0, 0)
@@ -19,7 +20,40 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def source_members(root: Path) -> dict[str, tuple[bytes, int]]:
+def git_bundle_members(root: Path, file_hashes: dict[str, str] | None) -> dict[str, tuple[bytes, int]]:
+    """Copy only files bound to the already verified Bundle archive's manifest."""
+    if not isinstance(file_hashes, dict) or not file_hashes:
+        raise ValueError("source_bundle_manifest_missing")
+    for name, expected in file_hashes.items():
+        if (not isinstance(name, str) or not name or "\\" in name
+                or name != PurePosixPath(name).as_posix() or PurePosixPath(name).is_absolute()
+                or ".." in PurePosixPath(name).parts
+                or not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)):
+            raise ValueError("source_bundle_manifest_invalid")
+    bundle = root / "git-bundle"
+    if bundle.is_symlink() or not bundle.is_dir():
+        raise ValueError("source_bundle_directory_invalid")
+    members = {}
+    seen = set()
+    for path in sorted(bundle.rglob("*")):
+        relative = path.relative_to(bundle).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"source_symlink_forbidden:git-bundle/{relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file() or relative not in file_hashes:
+            raise ValueError(f"source_bundle_file_unexpected:{relative}")
+        data = path.read_bytes()
+        if digest(data) != file_hashes[relative]:
+            raise ValueError(f"source_bundle_file_mismatch:{relative}")
+        members[f"git-bundle/{relative}"] = (data, 0o755 if path.stat().st_mode & 0o111 else 0o644)
+        seen.add(relative)
+    if seen != set(file_hashes):
+        raise ValueError("source_bundle_file_missing")
+    return members
+
+
+def source_members(root: Path, bundle_files: dict[str, str] | None = None) -> dict[str, tuple[bytes, int]]:
     members: dict[str, tuple[bytes, int]] = {}
     for name in SOURCE_FILES:
         path = root / name
@@ -27,6 +61,8 @@ def source_members(root: Path) -> dict[str, tuple[bytes, int]]:
             raise ValueError(f"source_file_invalid:{name}")
         members[name] = (path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
     for name in SOURCE_DIRECTORIES:
+        if name == "git-bundle":
+            continue
         for path in sorted((root / name).rglob("*")):
             relative = path.relative_to(root)
             if SKIP.intersection(relative.parts) or path.suffix in {".pyc", ".pyo"}:
@@ -38,6 +74,7 @@ def source_members(root: Path) -> dict[str, tuple[bytes, int]]:
             if FORBIDDEN.intersection(relative.parts) or path.name.startswith(".env.") or path.name.endswith(".trace.json"):
                 raise ValueError(f"source_private_file_forbidden:{relative}")
             members[relative.as_posix()] = (path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
+    members.update(git_bundle_members(root, bundle_files))
     return members
 
 
@@ -56,7 +93,7 @@ def zip_members(path: Path, prefix: str, members: dict[str, tuple[bytes, int]]) 
         path.write_bytes(Path(temporary.name).read_bytes())
 
 
-def build(root: Path, validation_path: Path | None) -> dict:
+def build(root: Path, validation_path: Path | None, bundle_files: dict[str, str] | None = None) -> dict:
     version = (root / "VERSION").read_text().strip()
     output = root / "dist" / f"v{version}"
     output.mkdir(parents=True, exist_ok=True)
@@ -70,7 +107,7 @@ def build(root: Path, validation_path: Path | None) -> dict:
     for key in ("agent", "agent_setup", "harness"):
         if not (output / names[key]).is_file():
             raise ValueError(f"distribution_component_missing:{key}")
-    source = source_members(root)
+    source = source_members(root, bundle_files)
     source_hashes = {name: digest(data) for name, (data, _) in sorted(source.items())}
     source_digest = digest(json_bytes(source_hashes))
     source["SOURCE_MANIFEST.json"] = (json_bytes({"version": version, "files": source_hashes, "sourceTreeSha256": source_digest}), 0o644)
@@ -118,5 +155,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--validation", type=Path)
+    parser.add_argument("--bundle-manifest", type=Path, required=True)
     arguments = parser.parse_args()
-    print(json.dumps(build(arguments.root.resolve(), arguments.validation), ensure_ascii=False, indent=2))
+    bundle_files = json.loads(arguments.bundle_manifest.read_text())
+    print(json.dumps(build(arguments.root.resolve(), arguments.validation, bundle_files), ensure_ascii=False, indent=2))

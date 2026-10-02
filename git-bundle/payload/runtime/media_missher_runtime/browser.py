@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+from .page_risk import risk_probe_function
+
 
 try:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -54,20 +56,6 @@ _LOGGED_OUT_SELECTORS = {
 }
 _LOGIN_PATH_SEGMENTS = frozenset(
     {"login", "login.php", "signin", "signin.php", "passport"}
-)
-_CHALLENGE_SELECTORS = (
-    ".geetest_panel",
-    ".geetest_holder",
-    "#geetest-wrap",
-    'iframe[src*="geetest"]',
-    'iframe[src*="captcha"]',
-    '[class*="captcha"]',
-    ".challenge-page",
-    "#challenge-page",
-    '[data-testid="challenge-page"]',
-    ".challenge-overlay",
-    "#challenge-overlay",
-    '[data-testid="challenge-overlay"]',
 )
 _RISK_HTTP_STATUSES = frozenset({403, 429})
 _AUTH_SETTLE_ATTEMPTS = 5
@@ -342,27 +330,28 @@ async def _authentication_observation(
     value = await page.evaluate(
         """(options) => {
             const visible = (element) => {
-                const style = window.getComputedStyle(element);
+                if (!element || !element.isConnected) return false;
+                for (let node = element; node; node = node.parentElement) {
+                    const style = window.getComputedStyle(node);
+                    if (node.hidden || node.getAttribute('aria-hidden') === 'true'
+                        || style.display === 'none' || style.visibility === 'hidden'
+                        || style.visibility === 'collapse' || Number(style.opacity || '1') === 0) return false;
+                }
                 const rect = element.getBoundingClientRect();
-                return style.display !== 'none'
-                    && style.visibility !== 'hidden'
-                    && Number(style.opacity || '1') !== 0
-                    && rect.width > 0
-                    && rect.height > 0;
+                return rect.width > 0 && rect.height > 0;
             };
             const anyVisible = (selectors) => selectors.some((selector) =>
                 Array.from(document.querySelectorAll(selector)).some(visible)
             );
             return {
                 logged_out: anyVisible(options.logged_out_selectors),
-                challenge: anyVisible(options.challenge_selectors),
+                challenge: (""" + risk_probe_function(platform) + """)().risk,
                 ready: document.readyState === 'interactive'
                     || document.readyState === 'complete',
             };
         }""",
         {
             "logged_out_selectors": list(_LOGGED_OUT_SELECTORS[platform]),
-            "challenge_selectors": list(_CHALLENGE_SELECTORS),
         },
     )
     if not isinstance(value, Mapping) or any(

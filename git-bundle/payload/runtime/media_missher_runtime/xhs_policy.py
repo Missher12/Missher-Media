@@ -273,11 +273,22 @@ def main(argv: list[str] | None = None) -> int:
     actions.add_argument("--acknowledge-risk", action="store_true", help="Explicit operator acknowledgement after inspecting the account in the normal browser; does not prove platform safety or start collection")
     actions.add_argument("--record-risk", choices=sorted(RISK_CODES), help="Persist a controller-detected risk after collection has stopped; never clears state or collects")
     args = parser.parse_args(argv)
-    from .shared_safety import collection_lease, runtime_home, SharedSafetyError
+    from .shared_safety import (collection_lease, runtime_home, SharedSafetyError,
+                                platform_risk_status, acknowledge_platform_risk,
+                                record_platform_risk)
     try:
-        with collection_lease(runtime_home(), inherit=True):
+        with collection_lease(runtime_home(), inherit=True, state_only=True):
             gate = SharedXhsSafetyGate()
-            result = gate.acknowledge() if args.acknowledge_risk else gate.record_risk(args.record_risk) if args.record_risk else gate.status()
+            shared = platform_risk_status()
+            if args.acknowledge_risk:
+                result = acknowledge_platform_risk("xhs")
+            elif args.record_risk:
+                record_platform_risk("xhs", args.record_risk)
+                result = gate.record_risk(args.record_risk)
+            else:
+                result = gate.status()
+                if "xhs" in shared["platforms"]:
+                    result.update(blocked=True, reason="xhs-risk-latched", risk=shared["platforms"]["xhs"])
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     except SharedSafetyError as error:
@@ -285,4 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         return 78
     except SafetyBlocked as error:
         print(json.dumps({"blocked": True, "reason": error.code}))
+        return 78
+    except (ValueError, OSError):
+        print(json.dumps({"blocked": True, "reason": "xhs-safety-state-invalid"}))
         return 78

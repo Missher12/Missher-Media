@@ -37,14 +37,14 @@ async function fixture() {
   await mkdir(join(profilePath, '..'), { recursive: true })
   await writeFile(profilePath, '{"platform_uids":{"bilibili":"12345","xhs":"abcdef0123456789abcdef01","douyin":"MS4wLjAB_fixture","weibo":"12345"}}\n', { mode: 0o600 })
   await chmod(profilePath, 0o600)
-  await writeFile(join(payloadRoot, 'VERSION'), '17.0.0\n')
+  await writeFile(join(payloadRoot, 'VERSION'), '17.0.2\n')
   await writeFile(join(payloadRoot, 'tools', 'install_media_missher.py'), '# installer\n')
   await writeFile(join(payloadRoot, 'media-missher', 'scripts', 'run_collection.py'), '# controller\n')
   const config = normalizePluginConfig({ profilePath, runtimeHome, outputRoot }, dshHome, root)
   return { root, config, payloadRoot, runtimeHome, outputRoot, profilePath }
 }
 
-async function markRuntimeReady(runtimeHome: string, version = '17.0.0') {
+async function markRuntimeReady(runtimeHome: string, version = '17.0.2') {
   const python = join(runtimeHome, 'venv', 'bin', 'python')
   await writeFile(join(runtimeHome, 'current', 'VERSION'), `${version}\n`)
   await writeFile(python, '#!/bin/sh\n', { mode: 0o700 })
@@ -90,7 +90,7 @@ afterEach(async () => {
 })
 
 describe('runtime lifecycle', () => {
-  it.each(['darwin', 'linux'] as const)('reuses an exact executable 17.0.0 runtime on %s without installation', async platform => {
+  it.each(['darwin', 'linux'] as const)('reuses an exact executable 17.0.2 runtime on %s without installation', async platform => {
     const setup = await fixture()
     const python = await markRuntimeReady(setup.runtimeHome)
     const runner = vi.fn(() => Promise.reject(new Error('must_not_install')))
@@ -109,7 +109,7 @@ describe('runtime lifecycle', () => {
     const setup = await fixture()
     const target = join(setup.runtimeHome, 'venv', 'bin', 'python3.11')
     const python = join(setup.runtimeHome, 'venv', 'bin', 'python')
-    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '17.0.0\n')
+    await writeFile(join(setup.runtimeHome, 'current', 'VERSION'), '17.0.2\n')
     await writeFile(target, '#!/bin/sh\n', { mode: 0o700 })
     await chmod(target, 0o700)
     await symlink('python3.11', python)

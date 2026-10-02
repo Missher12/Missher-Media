@@ -372,6 +372,16 @@ class CollectionPlan:
             self.required_fields, tuple
         ):
             raise ContractError("field requirements must be tuples")
+        for values in (self.field_groups, self.required_fields):
+            if len(values) > 64 or any(not isinstance(value, str) or not value or len(value) > 64 for value in values) or len(set(values)) != len(values):
+                raise ContractError("invalid or duplicate field requirements")
+        for target in self.targets:
+            if any(group not in default_field_groups(target.platform) for group in self.field_groups):
+                raise ContractError("unsupported field group for target")
+        known_fields = {name for platform in PLATFORMS for fields in default_field_groups(platform).values() for name in fields}
+        known_fields.update({"dynamic_id", "bvid", "note_id", "aweme_id", "mblog_id", "uid", "description", "body", "complete", "comment_items", "screenshot", "screenshot_status", "engagement_scope", "engagement_observations", "metric_display", "field_sources"})
+        if any(name not in known_fields for name in self.required_fields):
+            raise ContractError("unsupported required field")
         if not isinstance(self.allow_navigation, bool):
             raise ContractError("navigation authorization must be explicit")
         if not isinstance(self.collect_active_platforms, bool):
@@ -484,8 +494,8 @@ class CollectionPlan:
             stall_limit=value.get("stall_limit", 2),
             field_groups=tuple(value.get("field_groups") or ()),
             required_fields=tuple(value.get("required_fields") or ()),
-            allow_navigation=bool(value.get("allow_navigation", False)),
-            collect_active_platforms=bool(value.get("collect_active_platforms", False)),
+            allow_navigation=value.get("allow_navigation", False),
+            collect_active_platforms=value.get("collect_active_platforms", False),
             bilibili_complete=value.get("bilibili_complete", False),
             xhs_comments=value.get("xhs_comments", 0),
             screenshot_mode=value.get("screenshot_mode", "off"),

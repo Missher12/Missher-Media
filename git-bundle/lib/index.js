@@ -934,7 +934,7 @@ async function exactRuntimePython(runtimeHome) {
 	try {
 		await regularFile(versionPath, "runtime_version_invalid");
 		await executableFile(python, "runtime_python_invalid");
-		if (await readFile(versionPath, "utf8") !== `17.0.0\n`) return void 0;
+		if (await readFile(versionPath, "utf8") !== `17.0.2\n`) return void 0;
 		return python;
 	} catch (error) {
 		if (error.code === "ENOENT") return void 0;
@@ -949,7 +949,7 @@ async function ensureRuntime(config, dependencies = {}) {
 	if (!["darwin", "linux"].includes(dependencies.platform ?? process.platform)) throw new Error("platform_unsupported");
 	const payloadRoot = resolve(dependencies.payloadRoot ?? payloadRootFromModule());
 	await regularFile(resolve(payloadRoot, "VERSION"), "payload_version_invalid");
-	if (await readFile(resolve(payloadRoot, "VERSION"), "utf8") !== `17.0.0\n`) throw new Error("payload_version_invalid");
+	if (await readFile(resolve(payloadRoot, "VERSION"), "utf8") !== `17.0.2\n`) throw new Error("payload_version_invalid");
 	await regularFile(resolve(payloadRoot, "tools", "install_media_missher.py"), "payload_installer_invalid");
 	await regularFile(resolve(payloadRoot, "media-missher", "scripts", "run_collection.py"), "payload_controller_invalid");
 	await privateProfile(config.profilePath);
@@ -1026,7 +1026,7 @@ function parseControllerSummary(stdout) {
 	}
 	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("controller_summary_invalid");
 	const record = value;
-	const statuses = new Set([
+	const statuses = /* @__PURE__ */ new Set([
 		"success",
 		"partial",
 		"failed",
@@ -1086,6 +1086,7 @@ function parseControllerSummary(stdout) {
 				"runtime-version-mismatch",
 				"collection-busy",
 				"shared-state-invalid",
+				"platform-risk-latched",
 				"progress-module-invalid"
 			].includes(preflight.code)) throw new Error("controller_preflight_invalid");
 			preflightCode = preflight.code;
@@ -1140,7 +1141,8 @@ const DIAGNOSTIC_CODES = {
 	"result": [
 		"count-shortfall",
 		"incomplete-record",
-		"screenshot-shortfall"
+		"screenshot-shortfall",
+		"required-fields-missing"
 	],
 	"not-run": ["preflight-aborted", "prior-risk-stop"],
 	"dependency": ["module-not-found"],
@@ -1183,6 +1185,8 @@ const DIAGNOSTIC_CODES = {
 		"plan-executor-missing",
 		"plan-manifest-invalid",
 		"exclude-file-plan-unsupported",
+		"platform-cooldown",
+		"platform-risk-latched",
 		"xhs-cooldown",
 		"xhs-risk-latched",
 		"xhs-safety-busy",
@@ -1317,7 +1321,11 @@ async function loadRunEvidence(summary, config, options = {}) {
 		const diagnostic = object(candidate, "manifest_diagnostic_invalid");
 		if (typeof diagnostic.kind !== "string" || typeof diagnostic.code !== "string") throw new Error("manifest_diagnostic_invalid");
 		if (!Object.hasOwn(DIAGNOSTIC_CODES, diagnostic.kind) || !DIAGNOSTIC_CODES[diagnostic.kind]?.includes(diagnostic.code) || !Object.hasOwn(STATUS_KINDS, platformStatuses[platform]) || !STATUS_KINDS[platformStatuses[platform]]?.includes(diagnostic.kind)) throw new Error("manifest_diagnostic_invalid");
-		if (platformStatuses[platform] === "shortfall" && diagnostic.code !== "count-shortfall" || platformStatuses[platform] === "incomplete" && !["incomplete-record", "screenshot-shortfall"].includes(diagnostic.code)) throw new Error("manifest_diagnostic_invalid");
+		if (platformStatuses[platform] === "shortfall" && diagnostic.code !== "count-shortfall" || platformStatuses[platform] === "incomplete" && ![
+			"incomplete-record",
+			"screenshot-shortfall",
+			"required-fields-missing"
+		].includes(diagnostic.code)) throw new Error("manifest_diagnostic_invalid");
 		return [platform, {
 			kind: diagnostic.kind,
 			code: diagnostic.code
@@ -1927,7 +1935,7 @@ const MAX_XML_TEXT = 64 * 1024;
 const MAX_WORKSHEET_COLUMNS = 64;
 const MAX_SHARED_STRINGS = 4096;
 const MAX_STYLE_RECORDS = 1024;
-const STYLE_COLLECTIONS = new Set([
+const STYLE_COLLECTIONS = /* @__PURE__ */ new Set([
 	"numFmts",
 	"fonts",
 	"fills",
@@ -1939,7 +1947,7 @@ const STYLE_COLLECTIONS = new Set([
 	"tableStyles",
 	"indexedColors"
 ]);
-const STYLE_RECORDS = new Set([
+const STYLE_RECORDS = /* @__PURE__ */ new Set([
 	"numFmt",
 	"font",
 	"fill",
@@ -1960,7 +1968,7 @@ const CHINESE_HEADERS = [
 	"博主名称",
 	"主页链接"
 ];
-const PLATFORM_NAMES = new Map([
+const PLATFORM_NAMES = /* @__PURE__ */ new Map([
 	["bilibili", "bilibili"],
 	["b站", "bilibili"],
 	["哔哩哔哩", "bilibili"],
@@ -2118,7 +2126,7 @@ function creatorsFromRows(rows) {
 	if (creators.length === 0) fail("empty");
 	return creators;
 }
-const XLSX_CORE_PARTS = new Map([
+const XLSX_CORE_PARTS = /* @__PURE__ */ new Map([
 	["[Content_Types].xml", "xml"],
 	["_rels/.rels", "xml"],
 	["xl/workbook.xml", "workbook"],
@@ -2128,7 +2136,7 @@ const XLSX_CORE_PARTS = new Map([
 	["docProps/app.xml", "xml"],
 	["docProps/core.xml", "xml"]
 ]);
-const XLSX_DIRECTORIES = new Set([
+const XLSX_DIRECTORIES = /* @__PURE__ */ new Set([
 	"_rels/",
 	"xl/",
 	"xl/_rels/",

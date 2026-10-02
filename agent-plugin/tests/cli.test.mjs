@@ -49,7 +49,7 @@ async function fixture(fake = false) {
     const packed = join(root, 'package')
     for (const dir of ['bin', 'src', 'skill', 'lib']) await mkdir(join(packed, dir), { recursive: true })
     for (const file of ['bin/media-missher.mjs', 'src/skills.mjs', 'src/platform.mjs', 'src/targets.mjs', 'src/capabilities.mjs', 'skill/SKILL.md']) await copyFile(join(packageRoot, file), join(packed, file))
-    await writeFile(join(packed, 'package.json'), JSON.stringify({ name: '@missher/media-missher', version: '17.0.0', type: 'module' }))
+    await writeFile(join(packed, 'package.json'), JSON.stringify({ name: '@missher/media-missher', version: '17.0.2', type: 'module' }))
     await writeFile(join(packed, 'lib/index.js'), fakeCore)
     cli = join(packed, 'bin/media-missher.mjs')
   }
@@ -86,7 +86,7 @@ test('help, version and agent discovery need no runtime and leave an empty HOME 
     assert.equal(result.status, 0, result.stderr)
     assert.equal(result.value.status, 'ok')
   }
-  assert.equal(f.run(['--version']).value.runtimeRequired, '17.0.0')
+  assert.equal(f.run(['--version']).value.runtimeRequired, '17.0.2')
   assert.deepEqual(f.run(['install-skill', '--list']).value.agents.map(agent => agent.name), ['codex', 'claude', 'cursor', 'openclaw', 'hermes'])
   assert.deepEqual(await readdir(f.home), [])
 })

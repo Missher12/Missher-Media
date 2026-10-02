@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from ..browser import BrowserSession, PreconditionError, publish_accepted
 from ..models import CollectionRequest
+from ..page_risk import risk_probe_function
 from ..safety import classify_response
 
 try:
@@ -144,10 +145,11 @@ class DouyinCollector:
         if not getattr(self.browser, "allow_navigation", False):
             _require_open_target(page, target, "matching Douyin search page")
         await _raise_for_page_challenge(page)
+        predicate = lambda response: _is_search_response(response, self.request.keyword)
         if getattr(self.browser, "allow_navigation", False):
-            response = await _capture_response_while(page, _is_search_response, lambda: _scroll_and_check(page) if self.request.continue_page and page.url == target else self._navigate_and_check(page, target))
+            response = await _capture_response_while(page, predicate, lambda: _scroll_and_check(page) if self.request.continue_page and page.url == target else self._navigate_and_check(page, target))
         else:
-            response = await _capture_response_while(page, _is_search_response, _noop)
+            response = await _capture_response_while(page, predicate, _noop)
         return await self._collect_pages(page, response, source="search")
 
     async def _collect_pages(self, page: Any, response: Any, *, source: str) -> list[dict[str, Any]]:
@@ -157,18 +159,24 @@ class DouyinCollector:
         predicate = (
             (lambda candidate: _is_creator_candidate_response(candidate, self.request.uid))
             if source == "creator"
-            else _is_search_response
+            else (lambda candidate: _is_search_response(candidate, self.request.keyword))
         )
         for page_number in range(self.request.page_cap):
             if hasattr(self.browser, "last_pages"):
                 self.browser.last_pages += 1
             await _raise_for_page_challenge(page)
             payload = await _response_payload(response)
+            if source == "search":
+                _require_open_target(page, _search_page_url(self.request.keyword), "matching Douyin search page")
+                if not _is_search_response(response, self.request.keyword):
+                    raise SourceResponseError("Douyin search response keyword mismatched")
             if source == "creator" and self.request.uid is not None:
                 _require_creator_payload_binding(
                     response, payload, self.request.uid
                 )
             items, has_more, cursor = _page_items(payload, source)
+            if not has_more and hasattr(self.browser, "last_exhausted"):
+                self.browser.last_exhausted = True
             added = _append_records(
                 records,
                 native_ids,
@@ -190,6 +198,7 @@ class DouyinCollector:
             try:
                 response = await _capture_response_while(page, predicate, lambda: _scroll_and_check(page))
             except PlaywrightTimeoutError:
+                await _raise_for_page_challenge(page)
                 break
         return records
 
@@ -315,11 +324,8 @@ async def _read_creator_dom(page: Any) -> Mapping[str, Any]:
                     && Number(style.opacity || '1') !== 0
                     && rect.width > 0 && rect.height > 0;
             };
-            const bodyText = document.body?.innerText || '';
-            const challengeSelector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]'
-            );
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
+            const risk = (MM_RISK_PROBE)();
+            const riskText = risk.reason || '';
             const selectors = [
                 '[data-e2e="user-post-list"]',
                 '[data-e2e="scroll-list"]',
@@ -333,7 +339,7 @@ async def _read_creator_dom(page: Any) -> Mapping[str, Any]:
             }
             if (containers.length !== 1) {
                 return {
-                    risk_text: challengeSelector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || ''),
+                    risk: risk.risk, risk_text: riskText,
                     list_unique: false,
                     cards: [],
                 };
@@ -368,11 +374,11 @@ async def _read_creator_dom(page: Any) -> Mapping[str, Any]:
                 });
             }
             return {
-                risk_text: challengeSelector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || ''),
+                risk: risk.risk, risk_text: riskText,
                 list_unique: true,
                 cards,
             };
-        }"""
+        }""".replace("MM_RISK_PROBE", risk_probe_function("douyin"))
     )
     return _mapping(result)
 
@@ -381,6 +387,8 @@ def _creator_dom_records(
     observation: Mapping[str, Any], target: int | None, exclude_ids: Sequence[str] = ()
 ) -> list[dict[str, Any]]:
     risk_text = _text(observation.get("risk_text"))
+    if observation.get("risk") is True:
+        raise CollectionStopped(risk_text or "challenge")
     if risk_text is not None and (
         risk_text in _CHALLENGE_REASONS or "captcha" in risk_text.casefold()
     ):
@@ -426,13 +434,20 @@ def _creator_dom_records(
     return records
 
 
-def _is_search_response(response: Any) -> bool:
+def _is_search_response(response: Any, expected_keyword: str | None = None) -> bool:
     parsed = urlparse(getattr(response, "url", ""))
-    return (
-        parsed.hostname == _DOUYIN_HOST
-        and parsed.path.startswith(_SEARCH_PATH)
-        and ("single" in parsed.path or "stream" in parsed.path)
-    )
+    if not (
+        parsed.scheme == "https" and parsed.netloc == _DOUYIN_HOST
+        and parsed.path in {_SEARCH_PATH + "single/", _SEARCH_PATH + "stream/"}
+    ):
+        return False
+    if expected_keyword is None:
+        return True
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    observed = query.get("keyword")
+    if observed is None:
+        return False
+    return observed == [expected_keyword] and query.get("q", [expected_keyword]) == [expected_keyword]
 
 
 async def _response_payload(response: Any) -> Mapping[str, Any]:
@@ -495,15 +510,13 @@ def _int_like(value: object) -> int | object:
 async def _raise_for_page_challenge(page: Any) -> None:
     observation = await page.evaluate(
         """() => {
-            const bodyText = document.body?.innerText || '';
-            const selector = document.querySelector(
-                '.geetest_panel, .geetest_holder, #geetest-wrap, iframe[src*="geetest"], [class*="captcha"], [class*="verify"]'
-            );
-            const phrases = ['请完成验证', '访问受限', '请求过于频繁', '账号异常', '风控', '安全验证', '验证码'];
-            return {risk_text: selector ? 'challenge-selector' : (phrases.find((phrase) => bodyText.includes(phrase)) || '')};
-        }"""
+            const risk = (MM_RISK_PROBE)();
+            return {risk: risk.risk, risk_text: risk.reason || ''};
+        }""".replace("MM_RISK_PROBE", risk_probe_function("douyin"))
     )
     text = _mapping(observation).get("risk_text")
+    if _mapping(observation).get("risk") is True:
+        raise CollectionStopped(text or "challenge")
     if isinstance(text, str) and (text in _CHALLENGE_REASONS or "captcha" in text.casefold()):
         raise CollectionStopped(text)
 
@@ -523,24 +536,28 @@ async def _scroll_and_check(page: Any) -> None:
 
 
 def _page_items(payload: Mapping[str, Any], source: str) -> tuple[list[Mapping[str, Any]], bool, object]:
+    field = "aweme_list" if source == "creator" else "data"
+    raw = payload.get(field)
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        raise SourceResponseError(f"Douyin source schema changed: {field} is not an array")
     if source == "creator":
-        raw_items = _items(payload.get("aweme_list"))
+        raw_items = list(raw)
         cursor = payload.get("max_cursor")
     else:
-        raw_items = [_unwrap_search_aweme(item) for item in _items(payload.get("data"))]
+        raw_items = [aweme for item in raw for aweme in _unwrap_search_awemes(item)]
         cursor = payload.get("cursor", payload.get("offset"))
     return [item for item in raw_items if isinstance(item, Mapping)], _has_more(payload.get("has_more")), cursor
 
 
-def _unwrap_search_aweme(value: object) -> Mapping[str, Any] | None:
+def _unwrap_search_awemes(value: object) -> list[Mapping[str, Any]]:
     item = _mapping(value)
     aweme = item.get("aweme_info")
     if isinstance(aweme, Mapping):
-        return aweme
+        return [aweme]
     mix_items = _items(_mapping(item.get("aweme_mix_info")).get("mix_items"))
-    if mix_items and isinstance(mix_items[0], Mapping):
-        return mix_items[0]
-    return item if _safe_aweme_id(item.get("aweme_id")) is not None else None
+    if mix_items:
+        return [entry for entry in mix_items if isinstance(entry, Mapping) and _safe_aweme_id(entry.get("aweme_id")) is not None]
+    return [item] if _safe_aweme_id(item.get("aweme_id")) is not None else []
 
 
 _MISSING = object()
@@ -551,9 +568,7 @@ def _has_more(value: object) -> bool:
         return value
     if isinstance(value, int) and value in (0, 1):
         return bool(value)
-    if value is None:
-        return False
-    raise SourceResponseError("Douyin source has invalid has_more signal")
+    raise SourceResponseError("Douyin source schema changed: invalid has_more signal")
 
 
 def _empty_cursor(value: object) -> bool:

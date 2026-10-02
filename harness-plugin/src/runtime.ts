@@ -16,7 +16,7 @@ import { readProfileSnapshot } from './private-config.js'
 import { parsePhaseTimings } from './progress.js'
 import type { ProgressEvent } from './process.js'
 
-export const EMBEDDED_VERSION = '17.0.0'
+export const EMBEDDED_VERSION = '17.0.2'
 
 export interface RuntimeLayout {
   python: string
@@ -310,7 +310,7 @@ export function parseControllerSummary(stdout: string): ControllerSummary {
   if (record.preflight !== undefined) {
     const preflight = object(record.preflight, 'controller_preflight_invalid')
     if (preflight.code !== undefined) {
-      if (!['runtime-version-mismatch', 'collection-busy', 'shared-state-invalid', 'progress-module-invalid'].includes(preflight.code as string)) throw new Error('controller_preflight_invalid')
+      if (!['runtime-version-mismatch', 'collection-busy', 'shared-state-invalid', 'platform-risk-latched', 'progress-module-invalid'].includes(preflight.code as string)) throw new Error('controller_preflight_invalid')
       preflightCode = preflight.code as string
     }
     if (preflight.runtime_version !== undefined) {
@@ -370,7 +370,8 @@ const DIAGNOSTIC_CODES: Record<string, string[]> = {
   "result": [
     "count-shortfall",
     "incomplete-record",
-    "screenshot-shortfall"
+    "screenshot-shortfall",
+    "required-fields-missing"
   ],
   "not-run": [
     "preflight-aborted",
@@ -418,6 +419,8 @@ const DIAGNOSTIC_CODES: Record<string, string[]> = {
     "plan-executor-missing",
     "plan-manifest-invalid",
     "exclude-file-plan-unsupported",
+    "platform-cooldown",
+    "platform-risk-latched",
     "xhs-cooldown",
     "xhs-risk-latched",
     "xhs-safety-busy",
@@ -577,7 +580,7 @@ export async function loadRunEvidence(
       throw new Error('manifest_diagnostic_invalid')
     }
     if ((platformStatuses[platform] === 'shortfall' && diagnostic.code !== 'count-shortfall')
-      || (platformStatuses[platform] === 'incomplete' && !['incomplete-record', 'screenshot-shortfall'].includes(diagnostic.code))) {
+      || (platformStatuses[platform] === 'incomplete' && !['incomplete-record', 'screenshot-shortfall', 'required-fields-missing'].includes(diagnostic.code))) {
       throw new Error('manifest_diagnostic_invalid')
     }
     return [platform, { kind: diagnostic.kind, code: diagnostic.code }]

@@ -584,7 +584,7 @@ def test_search_timeout_after_scroll_treats_unchanged_cards_as_exhausted() -> No
     from runtime.media_missher_runtime.platforms.bilibili import search
 
     page = DelayedSearchPage(
-        url="https://search.bilibili.com/all",
+        url="https://search.bilibili.com/all?keyword=synthetic",
         card_states=[[{"bvid": "BVonly", "title": "Only", "href": "/video/BVonly"}]],
         wait_outcomes=["timeout"],
     )
@@ -598,7 +598,7 @@ def test_search_timeout_after_scroll_treats_unchanged_cards_as_exhausted() -> No
 def test_search_uses_an_existing_search_page_without_navigation() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import search
 
-    page = CapturePage(url="https://search.bilibili.com/all", cards=[[{"bvid": "BVopen001", "title": "Open", "href": "/video/BVopen001"}]])
+    page = CapturePage(url="https://search.bilibili.com/all?keyword=synthetic", cards=[[{"bvid": "BVopen001", "title": "Open", "href": "/video/BVopen001"}]])
     browser = ProductionBrowser(page, allow_navigation=False)
 
     records = _run(search(CollectionRequest(platform="bilibili", count=1, keyword="synthetic"), browser))
@@ -617,7 +617,7 @@ def test_search_stops_immediately_when_open_page_reports_a_captcha_marker() -> N
                 return {"risk_text": "challenge-selector", "cards": [{"bvid": "BVnever", "title": "Never", "href": "/video/BVnever"}]}
             return None
 
-    page = RiskSearchPage(url="https://search.bilibili.com/all")
+    page = RiskSearchPage(url="https://search.bilibili.com/all?keyword=synthetic")
     with pytest.raises(CollectionStopped, match="challenge"):
         _run(search(CollectionRequest(platform="bilibili", count=0, page_cap=3, keyword="synthetic"), ProductionBrowser(page, allow_navigation=False)))
     assert len(page.evaluations) == 1
@@ -626,7 +626,7 @@ def test_search_stops_immediately_when_open_page_reports_a_captcha_marker() -> N
 def test_search_does_not_treat_ordinary_english_risk_text_as_a_challenge() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import search
 
-    page = CapturePage(url="https://search.bilibili.com/all", cards=[[
+    page = CapturePage(url="https://search.bilibili.com/all?keyword=risk", cards=[[
         {"bvid": "BVordinary", "title": "Risk analysis", "description": "A normal discussion of risk", "href": "/video/BVordinary"},
     ]])
     record = _run(search(CollectionRequest(platform="bilibili", count=1, keyword="risk"), ProductionBrowser(page, allow_navigation=False)))[0]
@@ -638,7 +638,7 @@ def test_search_does_not_treat_ordinary_english_risk_text_as_a_challenge() -> No
 def test_search_observer_whitelists_visible_legacy_business_metadata() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import search
 
-    page = CapturePage(url="https://search.bilibili.com/all", cards=[[{
+    page = CapturePage(url="https://search.bilibili.com/all?keyword=visible", cards=[[{
         "bvid": "BVvisible",
         "title": "Visible",
         "href": "/video/BVvisible?spm_id_from=must-not-return",
@@ -921,7 +921,7 @@ def test_exact_dynamic_target_wait_uses_one_css_selector_literal() -> None:
     ) in page.script
 
 
-def test_dynamic_feed_risk_uses_one_css_selector_literal() -> None:
+def test_dynamic_feed_risk_uses_visible_blocking_probe() -> None:
     from runtime.media_missher_runtime.platforms.bilibili import (
         _read_dynamic_feed_risk,
     )
@@ -936,10 +936,9 @@ def test_dynamic_feed_risk_uses_one_css_selector_literal() -> None:
     page = ScriptPage()
     _run(_read_dynamic_feed_risk(page))
 
-    assert (
-        "'.geetest_panel, .geetest_holder, #geetest-wrap, "
-        "iframe[src*=\"geetest\"], [class*=\"captcha\"]'"
-    ) in page.script
+    assert "MEDIA_MISSHER_VISIBLE_RISK" in page.script
+    assert "isConnected" in page.script
+    assert '[class*="captcha"]' not in page.script
 
 
 def test_creator_restores_feed_between_video_and_dynamic_records() -> None:
