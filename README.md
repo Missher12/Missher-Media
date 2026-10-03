@@ -1,5 +1,39 @@
 # Media@Missher 17.0.2
 
+[← 桌面端与安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop) · [全部插件](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/plugins/README.zh.md) · [通用安装指南](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/docs/cookbook/install-cordis-plugins.zh.md)
+
+## 新手上手：Media@Missher（私有）
+
+使用 Chrome CDP 采集支持的平台内容，保留私有证据，并按选择导出。
+
+| 你需要知道的事 | 说明 |
+| --- | --- |
+| 插件包名 | `@missher/dsh-media-missher` |
+| 当前源码版本 | `17.0.2` |
+| 装好后在哪里使用 | 本仓库 QUICKSTART.md；DSH Bundle 入口见 harness-plugin/README.md |
+| 下载 / 源码 | [查看当前源码与包信息](https://github.com/Missher12/Missher-Media)（当前源码版本没有对应的正式 Release，勿把旧 Release 当作最新版） |
+
+### 安装、启用与第一次使用
+
+1. 先从[桌面端主页](https://github.com/Missher12/Missher-DeepseekHarness-Desktop)下载适合电脑的应用，完成模型配置。这个仓库是可选插件，不是独立桌面应用。
+2. 阅读[通用安装指南](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/docs/cookbook/install-cordis-plugins.zh.md)及本页原有安装说明，核对宿主与插件版本。桌面版使用“插件 → 添加插件”；Web/CLI 使用自己的目标配置组，不混用两种安装位置。
+3. 安装后按宿主提示启用并重新加载，进入上表列出的入口。更新已有插件前保留配置和数据，不同时启用旧包名与新包名。
+4. 按照快速开始配置 Chrome，先检查状态，再对自己明确指定的公开或已获授权目标进行小范围采集。
+
+### 使用前了解这些边界
+
+需要本仓库访问权限和 Chrome 环境。登录态、采集记录与私有配置不属于公共桌面下载内容。
+
+如果页面或功能没出现，先检查当前应用版本、插件是否启用以及加载错误。反馈时附版本、复现步骤和已脱敏错误；不要上传 API Key、真实会话、账号 Cookie 或学习数据库。Git 中的代码更新不会自动替换电脑上已安装的插件。
+本仓库保持私有；没有权限时 GitHub 会显示 404，请由仓库所有者授予访问权限。
+
+
+### 继续阅读
+
+下文保留本插件的详细行为、配置、开发和验证说明。跨平台是否实际通过，以对应版本的验证记录为准；桌面安装包能启动，不代表全部插件和外部服务都已验收。
+
+---
+
 DSH 当前包名：`@missher/dsh-media-missher`。2026-09-29 统一命名；仓库与源码目录、配置键及数据目录保持原有值。旧包升级需替换旧依赖与 Bundle 引用，不应同时启用新旧包。
 
 为 Agent 提供媒体采集、私有证据保存和选择导出。**仅使用 Chrome CDP**，支持 Bilibili、小红书、抖音、微博和 X。通用 CLI、共享 Skill、DSH Bundle 共用同一采集核心。
