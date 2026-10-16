@@ -11,7 +11,7 @@
 | 插件包名 | `@missher/dsh-media-missher` |
 | 当前源码版本 | `17.0.2` |
 | 装好后在哪里使用 | 本仓库 QUICKSTART.md；DSH Bundle 入口见 harness-plugin/README.md |
-| 下载 / 源码 | [查看当前源码与包信息](https://github.com/Missher12/Missher-Media)（当前源码版本没有对应的正式 Release，勿把旧 Release 当作最新版） |
+| 下载 / 源码 | 当前下载见 [Releases](https://github.com/Missher12/Missher-Media/releases)；[查看源码与包信息](https://github.com/Missher12/Missher-Media)，按版本和校验值核对 |
 
 ### 安装、启用与第一次使用
 
@@ -56,7 +56,7 @@ DSH 当前包名：`@missher/dsh-media-missher`。2026-09-29 统一命名；仓�
 
 ![Media@Missher 17.0.2 流程示意（非产品界面）](docs/images/media-flow-17.0.2.png)
 
-图中不含真实采集数据；它说明使用流程，不代表实采或原生 UI 验收。[图片来源与复现方法](docs/images/README.md) · [双社区 Host 兼容核验与未测范围（2026-10-14）](docs/HOST_COMPATIBILITY_2026-10-14.md)
+图中不含真实采集数据；它说明使用流程，不代表实采或原生 UI 验收。[图片来源与复现方法](docs/images/README.md) · [官方 alpha.5 已验证范围（2026-10-17）](docs/HOST_COMPATIBILITY_2026-10-17.md) · [双社区 Host 历史核验（2026-10-14）](docs/HOST_COMPATIBILITY_2026-10-14.md)
 
 作品字段包括标题/正文、作者、时间、原文链接、平台原生 ID 和可取得的互动数；各平台另有图片、视频链接或其他字段。小红书可按需请求评论明细和截图。微博普通话题分开保存帖子、观察到的发帖者关系与公开主页资料。详情见字段说明，不把缺失值写成零。
 
