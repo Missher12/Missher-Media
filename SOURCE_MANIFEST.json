@@ -1,0 +1,495 @@
+{
+  "name": "Media CDP",
+  "runtimeVersion": "17.0.2",
+  "exportDate": "2026-10-27",
+  "license": "MIT",
+  "sourceFilesUnmodified": true,
+  "files": [
+    {
+      "path": "runtime/__init__.py",
+      "sha256": "04a44cc1d3fee6e1c1dd998d50b18ebe0c8735014d52cb5df10a0a4ef0f6c27e",
+      "bytes": 34,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/__init__.py",
+      "sha256": "7b56596996961adda48d87af30aed9df2397552976a0420cb6eb256b02d4e95d",
+      "bytes": 52,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/backends.py",
+      "sha256": "a826aa2fe59148eeaddc5bf010f784cc5e83481c2e4f4b227329187a8572c84a",
+      "bytes": 1423,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/batch_journal.py",
+      "sha256": "1a20c4f1bcd2aeafe740e455de10357510e9c9ea8540a3d750164e22de7dd913",
+      "bytes": 7885,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/batch_policy.py",
+      "sha256": "60ca0b1913c36c57de679557d0e05c0abaa75ce1d3f3f631dc9459a86ff051b7",
+      "bytes": 7756,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/best_effort.py",
+      "sha256": "c2424219ae3cdf00ebe6246828608a08a4d3c2dd6c5765775be41d4f14f3ac9f",
+      "bytes": 14988,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/browser.py",
+      "sha256": "20a41c1e82cdd7e32146629e24f15ccbd6adeb1981bbad1c2cdbe15300004ebe",
+      "bytes": 14252,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/capabilities.py",
+      "sha256": "7108099382503088fd6fab385e65b9ec079bca77ed4d568c506760d0bcb0fadf",
+      "bytes": 10744,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/cli.py",
+      "sha256": "6af467c18a49d4108da11022f89c6c8296baef136f23faf800c4414e6d198742",
+      "bytes": 84723,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/collection_pacing.py",
+      "sha256": "729dd5eeed6426bcb045dd970c95acc3f59831fb3269f1106ae7f81c0d212d28",
+      "bytes": 3483,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/continuation.py",
+      "sha256": "f706376c17fc11eda2e1d3f24ff7b5d0b51fc022e9f2d9d0b9bab7c2b8ed17af",
+      "bytes": 1791,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/contracts.py",
+      "sha256": "c2a18a6add30e89e6ff636ecc2d6a3a126fc2274b1339c533486138d2b68aa2a",
+      "bytes": 29003,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/detail_open.py",
+      "sha256": "d25881e5650e005e0ca734553a2bd4830bd896f6d451dd17bda55924b33f1df2",
+      "bytes": 8201,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/exporting.py",
+      "sha256": "be9d7f36563d2b79aaede8b13717b1b24d9c6edaea5ec5e3134ce4d510402a0d",
+      "bytes": 28167,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/extraction.py",
+      "sha256": "49ab59be25c73be40db5ba2128280887593472c939a1f82afbb05e2e23a0c105",
+      "bytes": 22274,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/models.py",
+      "sha256": "b2460b06c8d9197fadc0de14ce71005ddf56e60531e751250d40f2dccebf634d",
+      "bytes": 8237,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/observations.py",
+      "sha256": "e945a5081f8838c96a76e4a318157782c9ecb35948ff48f508176749a8454aea",
+      "bytes": 2952,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/page_collection.py",
+      "sha256": "6ba9b8725da10df6ec25017387c8db7862e98c640e64207cf5913b05c01a87b5",
+      "bytes": 5589,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/page_risk.py",
+      "sha256": "7a7ebbc68b578b36773b290ce6d30d74946097654a63713273c4dfaa634b8179",
+      "bytes": 5058,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/plan_runner.py",
+      "sha256": "5edbf0d711107777126497e1be3f6f366b372cf36b8400e70556581b0e9874c8",
+      "bytes": 33793,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/__init__.py",
+      "sha256": "68d21b2fb27fcc639a20c620a41548aee8e530cb1046375683ce817962ecdb4c",
+      "bytes": 236,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/_xhs_detail_enrichment.py",
+      "sha256": "30c22f31fbdbc8683b298135eb936b0b1400a3a94606aa887cbf145d4e7eeace",
+      "bytes": 7726,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/bilibili.py",
+      "sha256": "8ba30463e1a631c0f2719eda9238134df2ae605cbf06bdbf83d84755d988cea2",
+      "bytes": 72929,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/douyin.py",
+      "sha256": "a5c3c1887818fe6a1a04059311e61466d29f8a07c04ab96ec5cfae78084ba6b1",
+      "bytes": 31132,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/weibo.py",
+      "sha256": "ca68cbd79f8e288789d63ea67685bb0f10a84c255721058a38ebc9383eaafb00",
+      "bytes": 33019,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/weibo_topic.py",
+      "sha256": "5e40770bf09f2a9c9f19a3f682da9d30c3ec0153baec50b729eeeafbb3ef9749",
+      "bytes": 30237,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/x.py",
+      "sha256": "a9985bcab837f83388e72df285396010b5b956644195357ad2034d03abd08b73",
+      "bytes": 46341,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/platforms/xhs.py",
+      "sha256": "871e0a1677323b8e9beefa4c0a5884fa9e1c92caa198065e88dbfcd6dea47732",
+      "bytes": 78913,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/progress.py",
+      "sha256": "f65b00e11262c9d8260f8f00221268890da74ae877eadb602c7cdda2c80fa552",
+      "bytes": 7518,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/safety.py",
+      "sha256": "4454ebaca58cffedebe773a8394d45b912422744cd9fb3297171fddb800471a2",
+      "bytes": 2200,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/safety_control.py",
+      "sha256": "6433928e65a1ce27f1ecc2fed9a75a8b5d8e96f6cf2671b9f8a7a7189b1c0a81",
+      "bytes": 1604,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/screenshots.py",
+      "sha256": "82c345c80cd4315ab59f92c82f3fe859be2a2c56318bd5b37781e6da0de40c32",
+      "bytes": 7802,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/shared_safety.py",
+      "sha256": "77be229c5a766c0f53f76ca34117cf4894316516909788d0cd87ba8b7d44efab",
+      "bytes": 14676,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/storage.py",
+      "sha256": "9ce9c347148dcc632d37d59c334e5d614adbc679bbc04eb0922c4c416ac3cc68",
+      "bytes": 12736,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/media_missher_runtime/xhs_policy.py",
+      "sha256": "5b37f8c575b1bf7e608d2fef56e3d7bd90091feab8360e3e7043db84b731f01f",
+      "bytes": 13445,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/requirements.lock",
+      "sha256": "19bf83d6e5f0a3747036b69aa393e89fc3fc879b83d4067219a610dc8cadfb83",
+      "bytes": 35,
+      "mode": "100644"
+    },
+    {
+      "path": "runtime/scripts/scrape_all.py",
+      "sha256": "6444d4e71550d4ffaac29701d1ab636f50a92bb6b29df06dd5a447c600f63b7a",
+      "bytes": 256,
+      "mode": "100755"
+    },
+    {
+      "path": "runtime/scripts/scrape_bilibili.py",
+      "sha256": "f47e692e06bb2e64aad15f4ae15590a45a51762fbd3617b635b6ff38e99ebb94",
+      "bytes": 281,
+      "mode": "100755"
+    },
+    {
+      "path": "runtime/scripts/scrape_douyin.py",
+      "sha256": "041ee3898c33f99aa0fb60b8ef1e6fcc1ab4e92e1241526b78632aa208dd1a89",
+      "bytes": 279,
+      "mode": "100755"
+    },
+    {
+      "path": "runtime/scripts/scrape_weibo.py",
+      "sha256": "c6a1448098e0c0604508d30a476c0bb6bf2d00b31cd89c302492a633b95adeed",
+      "bytes": 278,
+      "mode": "100755"
+    },
+    {
+      "path": "runtime/scripts/scrape_xhs.py",
+      "sha256": "edf8ffceba6994b53bfdcfc36a232b781818bf90684bee8f32c57a4d880a083e",
+      "bytes": 276,
+      "mode": "100755"
+    },
+    {
+      "path": "runtime/scripts/xhs_safety.py",
+      "sha256": "8afc3eb828555b49bbdcd96c2941683fca961f29bd417d8ba223a1c5111045d9",
+      "bytes": 228,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "a214a89a88e5388ea1688c0048f710d551b02ee927c8c124541035162c199140",
+      "bytes": 1761,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fake_engine.py",
+      "sha256": "d6de0b376b722eca456cee5ca7cb087757842e0a076323fd29d7f4337ac9ff63",
+      "bytes": 4217,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/bilibili_creator.json",
+      "sha256": "67965b84a800a663c5d3d8d64172dae935b1a84a6188d2f4de8868805fa78c04",
+      "bytes": 457,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/bilibili_search.json",
+      "sha256": "14f5821d1be028a1a1177fd329a0fafe7e604c1232af4235130f3a6f6c5223ba",
+      "bytes": 391,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/douyin_creator.json",
+      "sha256": "64bc7e9580e87c76cbeba64924f7c5e9377828263a858a956c5c7f847be10d23",
+      "bytes": 349,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/douyin_search.json",
+      "sha256": "5e195f789d573cc9ba40d3d7ab5975765f006ae9d920ab331d7a7d8a537e1a9d",
+      "bytes": 395,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/weibo_creator.json",
+      "sha256": "48358133481531f8593e254dafd4e02ec12cf71cf4df25cba24bd179bc39d9c2",
+      "bytes": 349,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/weibo_search.json",
+      "sha256": "a350b61234dc6622ceb0e62ea2a2344fd3be3521d18b966b32bf9ea31db64444",
+      "bytes": 449,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/xhs_creator.json",
+      "sha256": "2c45d1e87c7617af166c7971f2dfd02e485243423571fd43b2d4c7a80365891b",
+      "bytes": 777,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/fixtures/xhs_search.json",
+      "sha256": "f534024e2580acbdb75262d6fbee8f556eef5e406b6097a9ffd7326175c68cae",
+      "bytes": 437,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/bilibili_complete.json",
+      "sha256": "802a388318c8769c1e73640e3d7d5b3fd3d80c10d7a0d08017c62381d01e4284",
+      "bytes": 483,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/bilibili_creator.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/bilibili_search.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/douyin_creator.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/douyin_search.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/weibo_creator.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/weibo_search.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/xhs_complete.json",
+      "sha256": "802a388318c8769c1e73640e3d7d5b3fd3d80c10d7a0d08017c62381d01e4284",
+      "bytes": 483,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/xhs_creator.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/runtime_fixtures/xhs_search.json",
+      "sha256": "8f84758fb5ab2b0932518f565b9e487b427842bb185cc1eefdfebb0405e64ca3",
+      "bytes": 341,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_bilibili.py",
+      "sha256": "8de78934c07fd75e7827c6566a2e24c07b3129640b943432f2b6ec74bc4db342",
+      "bytes": 18556,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_bilibili_production.py",
+      "sha256": "3a2d70bb9efff182e3f3d66e5ae452d015e453786e5bfa0fea80e8c8e98014d1",
+      "bytes": 59182,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_browser.py",
+      "sha256": "5875de1782b7dc1f96337289a0fc90241de6c8df6d4cbb01bee7187a4b3a1127",
+      "bytes": 28436,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_cli.py",
+      "sha256": "5265e802690c3895ea6225bb6f45f15c5e4b9c60fe83f72ecfe6eab64d123fbf",
+      "bytes": 42151,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_compatibility.py",
+      "sha256": "643133e08cdba0c3857779c13de3933a0063f259f3db2d6756420f80d28856ef",
+      "bytes": 12088,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_contracts.py",
+      "sha256": "49199a301a64c146b6d97ccac82a65f37a05a0cfd5f290104c3d5c632fed3dad",
+      "bytes": 37034,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_detail_open.py",
+      "sha256": "f49351ae550aced856df8f3345d1364c9cd4f67ca6eef8e5b35bc821b17f8236",
+      "bytes": 12991,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_douyin.py",
+      "sha256": "8fb2ea972e0832bbe3d6ae2f4b3a1e52eee8999f7058c5b0e4cb9a8bdfe5eecd",
+      "bytes": 46561,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_entrypoints.py",
+      "sha256": "463b976959f8ac66125f328274ad41c269b27fa8a81619e61377444b82c113a1",
+      "bytes": 1641,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_exporting.py",
+      "sha256": "6642ffaaa4bcedfdebd385789fbb369035924da9ca06f7ea6c19e104a9c18765",
+      "bytes": 12648,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_models.py",
+      "sha256": "d07127c2977e7d91aef13666790ef0cb6efcc97e8866c41681ae8404a14a25f2",
+      "bytes": 5073,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_plan_runner.py",
+      "sha256": "2839db40777be5de2e9ea1f40b40a34cba7e551967e99c638f921e80a6addc0f",
+      "bytes": 33642,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_safety.py",
+      "sha256": "2d56c85d4fa2758166cdba43a9695fdd90edf28256f9e1db020f1911a72c513d",
+      "bytes": 2808,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_screenshots.py",
+      "sha256": "1f50dfd3379730ec75f5a1c7d44ac04590b60eca887fe71c41927bf2069ae294",
+      "bytes": 10613,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_storage.py",
+      "sha256": "d883da50d9a64a761c9b29db30798d5f15106b51c8cedfbc521b39062f46062f",
+      "bytes": 11300,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_weibo.py",
+      "sha256": "a48406f3eb029f8d452ab0945c974aa02a3a72e9b04030149cd4d22cca6807dc",
+      "bytes": 31769,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_x_topic_collectors.py",
+      "sha256": "7d59259580e12f304016e6220bf87eddb3bcc0934439457c244b71ced2d55eed",
+      "bytes": 24116,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_xhs.py",
+      "sha256": "6c48f0b38bd50a64f7f669d2127272ddfc4e87ff198c8ceba6edcbb6122b2e43",
+      "bytes": 104350,
+      "mode": "100644"
+    },
+    {
+      "path": "tests/test_runtime_xhs_detail_enrichment.py",
+      "sha256": "69373c36a0e4414ffaae8aab148d78fcc26817880be63edc8d9856f1ff94720c",
+      "bytes": 10808,
+      "mode": "100644"
+    }
+  ]
+}

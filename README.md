@@ -1,98 +1,134 @@
-# Media@Missher 17.0.2
+# Media@Missher · CDP
 
-[← 桌面端与安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop) · [全部插件](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/plugins/README.zh.md) · [通用安装指南](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/docs/cookbook/install-cordis-plugins.zh.md)
+**供个人与 Agent 使用的本地媒体采集核心：通过 Chrome CDP 读取明确指定的平台内容，保留来源与质量信息，并按选择导出。**
 
-## 新手上手：Media@Missher（私有）
+Media@Missher CDP 将浏览器连接、平台解析、采集节奏、去重、字段校验和结果保存放在同一个 Python 运行时中。你准备 Chrome 和登录状态，指定作者或搜索词，程序按顺序收集当前页面能够提供的内容，保存到本地，再交给分析脚本或 Agent 继续处理。
 
-使用 Chrome CDP 采集支持的平台内容，保留私有证据，并按选择导出。
+当前代码基线为 **17.0.2**，采用 **[MIT 许可证](LICENSE)**。本仓提供独立的 Python CDP 核心、命令行入口、测试和文档，可以由支持本地进程调用的 Agent 使用；不依赖某个模型，也不要求安装 DeepSeek Harness。
 
-| 你需要知道的事 | 说明 |
-| --- | --- |
-| 插件包名 | `@missher/dsh-media-missher` |
-| 当前源码版本 | `17.0.2` |
-| 装好后在哪里使用 | 本仓库 QUICKSTART.md；DSH Bundle 入口见 harness-plugin/README.md |
-| 下载 / 源码 | 当前下载见 [Releases](https://github.com/Missher12/Missher-Media/releases)；[查看源码与包信息](https://github.com/Missher12/Missher-Media)，按版本和校验值核对 |
+适合整理指定作者的作品、追踪明确关键词、研究微博普通话题，以及把可取得的字段交给本地数据分析流程。每次采集都有目标、范围和停止条件；缺失字段、部分完成和风险停止会保留在结果中。
 
-### 安装、启用与第一次使用
+## 导航
 
-1. 先从[桌面端主页](https://github.com/Missher12/Missher-DeepseekHarness-Desktop)下载适合电脑的应用，完成模型配置。这个仓库是可选插件，不是独立桌面应用。
-2. 阅读[通用安装指南](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/blob/main/docs/cookbook/install-cordis-plugins.zh.md)及本页原有安装说明，核对宿主与插件版本。桌面版使用“插件 → 添加插件”；Web/CLI 使用自己的目标配置组，不混用两种安装位置。
-3. 安装后按宿主提示启用并重新加载，进入上表列出的入口。更新已有插件前保留配置和数据，不同时启用旧包名与新包名。
-4. 按照快速开始配置 Chrome，先检查状态，再对自己明确指定的公开或已获授权目标进行小范围采集。
+- [快速开始](docs/quickstart.md)：环境准备、Chrome 配置、采集命令和常见问题。
+- [数据能力](docs/data-capabilities.md)：各平台任务、字段、评论、截图及导出范围。
+- [Agent 接入](docs/agent-integration.md)：进程调用方式、参数约束与结果处理。
+- [架构说明](docs/architecture.md)：模块职责、数据流与维护入口。
+- [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [变更记录](CHANGELOG.md)。
 
-### 使用前了解这些边界
+## 能采集什么
 
-需要本仓库访问权限和 Chrome 环境。登录态、采集记录与私有配置不属于公共桌面下载内容。
+下表描述代码覆盖的任务与字段。实际结果取决于页面结构、登录权限及平台当时返回的内容，不代表每个平台都已通过当前环境的实采验证。
 
-如果页面或功能没出现，先检查当前应用版本、插件是否启用以及加载错误。反馈时附版本、复现步骤和已脱敏错误；不要上传 API Key、真实会话、账号 Cookie 或学习数据库。Git 中的代码更新不会自动替换电脑上已安装的插件。
-本仓库保持私有；没有权限时 GitHub 会显示 404，请由仓库所有者授予访问权限。
+| 平台 | 任务 | 主要内容 | 互动字段 |
+| --- | --- | --- | --- |
+| Bilibili | 指定 UP 主、关键词搜索 | 动态 ID / BV 号、标题、简介或动态正文、作者、时间、链接、封面 | 点赞、评论、转发、收藏；视频与动态指标分别保留来源 |
+| 小红书 | 指定博主、关键词搜索 | 笔记 ID、标题、正文、作者、时间、标签、图片、可取得的视频链接 | 点赞、收藏、评论数、分享数；评论正文需单独请求 |
+| 抖音 | 指定博主、关键词搜索 | 作品 ID、文案、作者、时间、封面、视频时长 | 点赞、评论、分享、收藏；播放数取决于响应 |
+| 微博 | 指定博主、关键词搜索、普通话题 | 微博 ID、正文、作者、时间、链接、图片；话题可另存参与关系与公开主页资料 | 点赞、评论、转发 |
+| X / Twitter | 指定账号、关键词搜索 | 推文 ID、正文、作者、时间、语言、媒体、回复/引用/转推关系 | 点赞、回复、转发、引用及可见的浏览、书签数 |
 
+评论计数不等于评论正文。截图支持也随平台和任务而异，详见[能力说明](docs/data-capabilities.md)。媒体字段主要保存链接与元数据；本项目没有通用视频下载、转码、OCR 或语音转文字功能。
 
-### 继续阅读
+## 主要特性
 
-下文保留本插件的详细行为、配置、开发和验证说明。跨平台是否实际通过，以对应版本的验证记录为准；桌面安装包能启动，不代表全部插件和外部服务都已验收。
+- **独立 CDP 运行时**：通过 Playwright 连接使用者准备的 Chrome，复用该专用浏览器会话。
+- **明确目标与顺序执行**：支持指定作者、关键词，以及显式多目标计划；校验页面、响应与请求目标之间的对应关系。
+- **可追溯数据**：保留原始 ID、原文链接、采集时间、字段来源与质量标记；未知数值与真实的零分开处理。
+- **增量与去重**：同一实体可补齐已观察到的缺失字段，保留已有值和来源；适用的计划支持精确续采。
+- **有界采集**：使用条数、分页、时间预算和平台间隔限制；风险状态与正常冷却可以跨运行保留。
+- **本地保存、按需导出**：采集 CLI 保存 JSON 和运行清单；Python 导出接口可生成 Excel、CSV、JSON、JSONL、SQLite。
+- **便于 Agent 调用**：Agent 负责理解请求和呈现结果，运行时负责执行与校验。模型供应商、API Key 和推理设置由调用方管理。
 
----
+## 五分钟了解入口
 
-DSH 当前包名：`@missher/dsh-media-missher`。2026-09-29 统一命名；仓库与源码目录、配置键及数据目录保持原有值。旧包升级需替换旧依赖与 Bundle 引用，不应同时启用新旧包。
+下载本仓源码并进入项目目录。推荐 Python 3.12，下面是 Linux / macOS 的虚拟环境示例：
 
-为 Agent 提供媒体采集、私有证据保存和选择导出。**仅使用 Chrome CDP**，支持 Bilibili、小红书、抖音、微博和 X。通用 CLI、共享 Skill、DSH Bundle 共用同一采集核心。
-
-运行时、Agent CLI 和 DSH Bundle 统一为 **17.0.2**。源码和分发保持私有；© 2026 Missher，原创软件采用[专有许可](LICENSE)，第三方依赖遵循[各自许可](THIRD_PARTY_NOTICES.md)。
-
-## 从这里开始
-
-| 目的 | 入口 |
-| --- | --- |
-| 看能抓什么、字段有哪些条件限制 | [数据能力与字段说明](DATA_CAPABILITIES.md) |
-| 安装、导入博主、准备 Chrome、采集和导出 | [中文快速开始](QUICKSTART.md) |
-| 让 Codex、Hermes 等 Agent 接入 | [Agent 安装指南](AGENT_INSTALL.md) |
-| 给 DeepSeek Harness 接入 | [DSH Bundle 说明](harness-plugin/README.md)、[Agent 操作说明](harness-plugin/AGENT.md) |
-| 看结果形态 | [JSON 示例](examples/posts.sample.json)、[CSV 示例](examples/posts.sample.csv)；全部为虚构数据 |
-| 查看本版交付及验证边界 | [17.0.2 交付记录](docs/releases/v17.0.2.md) |
-| 继续维护 | [项目摘要](PROJECT_CONTEXT.md)、[交接记录](HANDOVER.md) |
-
-## 能力概览
-
-![Media@Missher 17.0.2 流程示意（非产品界面）](docs/images/media-flow-17.0.2.png)
-
-图中不含真实采集数据；它说明使用流程，不代表实采或原生 UI 验收。[图片来源与复现方法](docs/images/README.md) · [官方 alpha.5 已验证范围（2026-10-17）](docs/HOST_COMPATIBILITY_2026-10-17.md) · [双社区 Host 历史核验（2026-10-14）](docs/HOST_COMPATIBILITY_2026-10-14.md)
-
-作品字段包括标题/正文、作者、时间、原文链接、平台原生 ID 和可取得的互动数；各平台另有图片、视频链接或其他字段。小红书可按需请求评论明细和截图。微博普通话题分开保存帖子、观察到的发帖者关系与公开主页资料。详情见字段说明，不把缺失值写成零。
-
-支持显式多目标，按顺序执行并精确绑定目标。先保存私有结果和运行清单；随后选择目标、记录类别、字段和格式，离线导出 Excel、CSV、JSON、JSONL 或 SQLite。
-
-保持单一浏览器所有者；遇到风险、挑战、登录墙或身份歧义立即停止。小红书每批最多 10 条/3 页、两批开始间隔至少 600 秒。其他平台每批最多 20 条/3 页，正常开始间隔为 B 站/抖音 60 秒、微博 90 秒、X 120 秒；同一用户下跨任务保存，固定条数请求也受单批预算约束。Computer Use 与 BrowserSkill 已退役，旧请求明确拒绝，历史结果仍可读取和导出。
-
-## 交付文件
-
-产物位于 [`dist/v17.0.2/`](dist/v17.0.2/)，统一校验文件为 `SHA256SUMS.txt`：
-
-- `Media-Missher-v17.0.2.zip`：完整交付包，含安装入口、DSH Bundle、源码、字段文档、示例和验证记录。
-- `Media-Missher-Agent-Setup-v17.0.2.zip`：通用 Agent 安装包。
-- `missher-media-missher-17.0.2.tgz`：通用 CLI 包。
-- `missher-dsh-media-missher-17.0.2.tgz`：macOS DSH Bundle。
-- `Media-Missher-Source-v17.0.2.zip`：源码与测试，解压后可重新构建。
-
-首次安装依赖需要可用的包源；本包不是全部依赖离线镜像。打包和上传 Git 不会修改本机已安装的 Skill、运行时或 Harness profile。
-
-DSH 按 Git 地址安装使用根目录 `package.json` 的组合包声明和 `git-bundle/` 冻结入口。17.0.2 本地候选与精确安装包保持一致；远端是否包含本版需核对发布回执。本地安装请选择上面的 DSH tgz。Git 安装问题的历史原因见 [修复记录](docs/GIT_INSTALL_2026-09-28.md)。
-
-## 环境与验证
-
-通用 CLI 要求 Node.js >=22.19、npm；采集运行时支持 Python 3.11/3.12。macOS/Linux 使用同一包，Windows 通过 WSL2/WSLg。浏览器、Agent 命令和私有文件须处于匹配环境。DSH Bundle 当前限定 macOS。模型和推理级别沿用宿主设置，本项目不包含模型 API 客户端。
-
-准确验证结果见交付包 `VALIDATION.json`。离线测试、本地 Chrome CDP、隔离安装、真实宿主注册及真实平台采集分别记录。本次交付没有执行真实平台采集；合成数据和安装成功不代表实采验收。历史 DSH 0.6.1 兼容分支仍保留；当前 Bundle 沿用 17.0.1 已完成的宿主适配。
-
-## 开发和打包
-
-```sh
-pnpm --dir harness-plugin install --frozen-lockfile
-npm install --prefix agent-plugin --ignore-scripts --no-audit --no-fund --no-package-lock
-node tools/build_distribution.mjs
-node tools/verify_distribution.mjs dist/v17.0.2
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r runtime/requirements.lock
+python runtime/scripts/scrape_all.py --help
 ```
 
-完整测试命令位于 `.github/workflows/ci.yml`。`runtime/` 为 Python 核心，`media-missher/` 为共享 Skill 与入口，`agent-plugin/` 为通用 CLI，`harness-plugin/` 为 DSH 适配。交付排除浏览器目录、凭据、真实采集结果、依赖缓存和本机证据目录。
+`--help` 只显示命令帮助。首次采集前，按照[快速开始](docs/quickstart.md#准备-chrome)用专用数据目录启动 Chrome，在浏览器内手动登录需要的平台，并确认本机 CDP 地址。
 
-旧 15.6.0 候选的版本、安装和归档摘要见[历史基准](docs/CURRENT_BASELINE.md)。根目录旧 GitHub bootstrap 只对应 v15.2.1，不用于本版安装。
+以下示例会实际访问平台；把占位符换成已确认的 Bilibili UP 主 UID：
+
+```bash
+python runtime/scripts/scrape_all.py creator \
+  --platforms bilibili \
+  --bilibili-uid YOUR_CONFIRMED_CREATOR_ID \
+  --count 1 \
+  --cdp-url http://127.0.0.1:9222 \
+  --allow-navigation \
+  --output-dir ./outputs
+```
+
+关键词搜索示例：
+
+```bash
+python runtime/scripts/scrape_all.py search \
+  --platform bilibili \
+  --keyword "城市漫步" \
+  --count 3 \
+  --cdp-url http://127.0.0.1:9222 \
+  --allow-navigation \
+  --output-dir ./outputs
+```
+
+`--allow-navigation` 允许本次任务按目标导航。更多参数用 `creator --help` 或 `search --help` 查看；示例不是无人值守的默认任务，也不会安装 Chrome 或代替你登录。
+
+## 输出与后续处理
+
+每次运行在所选输出目录下保存记录和运行清单。调用方应同时查看状态、实际条数、缺失字段和停止原因，不能仅凭生成了文件就判断完整成功。
+
+| 方式 | 用途 |
+| --- | --- |
+| 采集 CLI 的 JSON 输出 | 保存原始结果、供脚本或 Agent 读取 |
+| Python 导出接口的 Excel / CSV | 人工筛选、表格分析、工具导入 |
+| Python 导出接口的 JSON / JSONL / SQLite | 程序处理、流式读取、本地查询 |
+
+导出接口位于 [exporting.py](runtime/media_missher_runtime/exporting.py)，只读取已保存、已验证的记录，不会为了补齐字段再次抓取。采集 CLI 的 `--format` 目前仅支持 `json`；其他格式通过 Python 接口使用，详见[导出说明](docs/data-capabilities.md#导出接口)。
+
+[示例数据](examples/README.md)使用虚构作者和 `example.invalid` 链接，帮助理解字段含义；不作为真实采集结果或完整协议模板。
+
+## Agent 与宿主
+
+Codex、Hermes、DeepSeek Harness 或其他 Agent，只要具备受控的本地进程调用能力，就可以编写适配器调用这里的 Python 入口。是否能直接调用仍取决于具体宿主的文件权限、进程工具和配置。
+
+本仓没有预装的 DSH Bundle、npm Agent 包或 MCP 服务，不能直接把它填入 DSH 的“添加插件”当作组合包安装。原完整产品的安装器和宿主适配不属于本次 CDP 核心导出。[接入示例与约束](docs/agent-integration.md)。
+
+## 使用边界
+
+登录、验证码和权限问题由使用者在浏览器中处理；检测到相关阻断或目标歧义时，程序停止或返回明确诊断。没有验证码破解、账号轮换、代理池或自动解除风险状态的功能。
+
+当前默认平台开始间隔为 Bilibili / 抖音 60 秒、微博 90 秒、X 120 秒、小红书 600 秒。小红书单批最多 10 条 / 3 页，其他平台最多 20 条 / 3 页；这些是工程限制，不是平台承诺的安全阈值，也不能保证账号不会受到限制。完整行为以源码和任务参数为准。
+
+仅采集你有权访问、处理和保存的内容。CDP 端口、浏览器登录状态和输出数据都应留在本机受控范围内；不要将真实结果或凭据提交到仓库。
+
+## 目录
+
+```text
+runtime/
+  media_missher_runtime/   连接、平台解析、计划、校验、保存与导出
+  scripts/                scrape_all.py 与各平台入口
+  requirements.lock       固定版本的直接运行依赖
+tests/                    原有核心测试及合成夹具
+docs/                     使用、能力、接入与架构说明
+examples/                 虚构数据说明
+LICENSE                   MIT
+THIRD_PARTY_NOTICES.md     第三方组件说明
+SOURCE_MANIFEST.json      原样导出的源码与测试摘要
+SHA256SUMS.txt             公开文件校验清单
+```
+
+## 验证状态与贡献
+
+本次独立导出保留 17.0.2 核心源码及相应测试。当前完成了来源、文件摘要、文档链接和静态一致性检查；**独立导出的运行测试、真实 Chrome 和平台实采仍待验证**。原完整产品的历史测试、宿主加载或安装结果不作为本仓通过证明，见[验证记录](docs/validation.md)。
+
+欢迎通过问题报告和补丁改进解析可靠性、文档和测试。提交时请提供平台、任务类型、版本、复现步骤和脱敏诊断，优先使用合成夹具。[贡献指南](CONTRIBUTING.md)说明了测试方式和变更要求。
+
+## 许可证
+
+Copyright (c) 2026 Missher。本仓实际提供的原创源码和文档采用 [MIT](LICENSE)。第三方组件、平台内容和用户数据分别保留自身权利，参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
